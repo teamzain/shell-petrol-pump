@@ -8,9 +8,15 @@ import { format } from "date-fns"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Button } from "@/components/ui/button"
 import { createClient } from "@/lib/supabase/client"
-import { AlertCircle, CheckCircle2, RefreshCw, AlertTriangle, ShieldCheck } from "lucide-react"
+import { AlertCircle, CheckCircle2, RefreshCw, AlertTriangle, ShieldCheck, Trash2 } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { BrandLoader } from "../ui/brand-loader"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import { cancelPurchaseOrderItem } from "@/app/actions/purchase-orders"
 
 interface POHoldRecord {
   id: string
@@ -41,7 +47,7 @@ interface PurchaseOrder {
     contact_person?: string
     phone?: string
   }
-  purchases: {
+  purchases?: {
     id: string
     quantity: number
     purchase_price_per_unit: number
@@ -54,8 +60,18 @@ interface PurchaseOrder {
       notes?: string
     }
   }[]
-  po_hold_records: POHoldRecord[]
-  deliveries: any[]
+  items?: {
+    product_id: string
+    product_name: string
+    product_category: string
+    unit_type: string
+    ordered_quantity: number
+    rate_per_liter: number
+    total_amount: number
+    status: string
+  }[]
+  po_hold_records?: POHoldRecord[]
+  deliveries?: any[]
   rate_per_liter: number
 }
 
@@ -76,6 +92,8 @@ export function PurchaseDetailsDialog({
   const [resolvingHold, setResolvingHold] = useState(false)
   const [error, setError] = useState("")
   const [success, setSuccess] = useState("")
+  const [cancellingItem, setCancellingItem] = useState<string | null>(null)
+
   const supabase = createClient()
 
   if (!order) return null
@@ -87,6 +105,18 @@ export function PurchaseDetailsDialog({
   }
 
   const formatCurrency = (val: number) => `Rs. ${Number(val).toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
+  // To support both legacy 'purchases' relational array and new JSONB 'items' array.
+  const orderItems = order.items || order.purchases?.map(p => ({
+    product_id: p.products?.id,
+    product_name: p.products?.product_name || "Unknown Product",
+    product_category: p.products?.product_type || "Unknown",
+    ordered_quantity: p.quantity,
+    unit_type: p.products?.unit || order.unit_type,
+    rate_per_liter: p.purchase_price_per_unit || order.rate_per_liter,
+    total_amount: p.total_amount,
+    status: order.status
+  })) || [];
 
   const handleStatusUpdate = async (newStatus: string) => {
     if (newStatus === order.status) return
@@ -106,20 +136,22 @@ export function PurchaseDetailsDialog({
 
       // 2. If moving to 'received', update stock
       if (newStatus === "received" && order.status !== "received") {
-        for (const item of order.purchases) {
+        for (const item of orderItems) {
+          if (!item.product_id || item.status === 'cancelled') continue;
+
           const { data: product } = await supabase
             .from("products")
             .select("current_stock, purchase_price")
-            .eq("id", item.products.id) // Fix: item.products is an object in the interface, but item.product_id might be needed. Wait, the interface says 'products'.
+            .eq("id", item.product_id)
             .single()
 
           if (product) {
-            const newStock = Number(product.current_stock) + Number(item.quantity)
+            const newStock = Number(product.current_stock) + Number(item.ordered_quantity)
             await supabase.from("products").update({
               current_stock: newStock,
-              last_purchase_price: item.purchase_price_per_unit,
+              last_purchase_price: item.rate_per_liter,
               last_purchase_date: order.purchase_date
-            }).eq("id", item.products.id)
+            }).eq("id", item.product_id)
           }
         }
 
@@ -175,6 +207,24 @@ export function PurchaseDetailsDialog({
       setError(err instanceof Error ? err.message : "Failed to resolve hold")
     } finally {
       setResolvingHold(false)
+    }
+  }
+
+  const handleCancelItem = async (productId: string, productName: string) => {
+    if (!confirm(`Are you sure you want to cancel ${productName} from this order?`)) return;
+
+    setCancellingItem(productId);
+    setError("");
+    setSuccess("");
+
+    try {
+      const res = await cancelPurchaseOrderItem(order.id, productId);
+      setSuccess(`Successfully cancelled ${productName}. ${res.allCancelled ? "The entire order has been cancelled." : ""}`);
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to cancel item.");
+    } finally {
+      setCancellingItem(null);
     }
   }
 
@@ -245,20 +295,44 @@ export function PurchaseDetailsDialog({
                   <tr>
                     <th className="p-2 font-medium">Product</th>
                     <th className="p-2 font-medium text-right">Qty</th>
-                    <th className="p-2 font-medium text-right">Rate</th>
+                    <th className="p-2 font-medium text-right">Price/Rate</th>
                     <th className="p-2 font-medium text-right">Total</th>
+                    <th className="p-2 font-medium text-right w-12"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
-                  {order.purchases?.map((item) => (
-                    <tr key={item.id} className="hover:bg-muted/30">
+                  {orderItems.map((item, idx) => (
+                    <tr key={idx} className={`hover:bg-muted/30 ${item.status === 'cancelled' ? 'opacity-50 grayscale' : ''}`}>
                       <td className="p-2">
-                        <p className="font-medium">{item.products?.product_name}</p>
-                        <p className="text-xs text-muted-foreground capitalize">{item.products?.product_type.replace("_", " ")}</p>
+                        <div className="flex items-center gap-2">
+                          <p className={`font-medium ${item.status === 'cancelled' ? 'line-through' : ''}`}>{item.product_name}</p>
+                          {item.status === 'cancelled' && <Badge variant="destructive" className="text-[9px] h-4 px-1 pb-0 scale-90">Cancelled</Badge>}
+                        </div>
+                        <p className="text-xs text-muted-foreground capitalize">{item.product_category?.replace("_", " ")}</p>
                       </td>
-                      <td className="p-2 text-right">{item.quantity.toLocaleString()} {item.products?.unit}</td>
-                      <td className="p-2 text-right">{formatCurrency(item.purchase_price_per_unit)}</td>
+                      <td className="p-2 text-right">{item.ordered_quantity?.toLocaleString()} {item.unit_type}</td>
+                      <td className="p-2 text-right">{formatCurrency(item.rate_per_liter)}</td>
                       <td className="p-2 text-right font-medium">{formatCurrency(item.total_amount)}</td>
+                      <td className="p-2 text-right">
+                        {order.status === 'pending' && item.status !== 'cancelled' && item.status !== 'delivered' && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7 text-destructive hover:bg-destructive/10"
+                                onClick={() => handleCancelItem(item.product_id, item.product_name)}
+                                disabled={cancellingItem === item.product_id}
+                              >
+                                {cancellingItem === item.product_id ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>Cancel this Item</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -267,20 +341,19 @@ export function PurchaseDetailsDialog({
           </div>
 
           {/* Totals Section */}
-          <div className="bg-muted/30 p-4 rounded-lg space-y-2 ml-auto w-full sm:w-64">
+          <div className="bg-muted/30 p-4 rounded-lg space-y-2 ml-auto w-full sm:w-72">
             <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Order Total:</span>
-              <span className="font-bold">{formatCurrency(order.total_amount)}</span>
+              <span className="text-muted-foreground capitalize">Total Value</span>
+              <span className="font-bold">{formatCurrency(order.estimated_total || 0)}</span>
             </div>
-            <div className="flex justify-between text-sm text-green-600">
-              <span>Amount Paid:</span>
-              <span className="font-bold">-{formatCurrency(order.paid_amount)}</span>
+            <div className="flex justify-between text-sm text-green-600 border-b border-muted pb-2">
+              <span className="capitalize">- Paid Value / Debited Amount</span>
+              <span className="font-bold">-{formatCurrency(order.paid_amount || 0)}</span>
             </div>
-            <Separator />
-            <div className="flex justify-between font-bold text-lg pt-1">
-              <span>{order.status === 'closed' ? 'Final Total' : 'Estimated Total'}:</span>
-              <span className={order.status === 'closed' ? "text-primary" : "text-amber-600"}>
-                {formatCurrency(order.status === 'closed' ? (order.estimated_total || 0) - order.quantity_remaining * order.rate_per_liter : order.estimated_total || 0)}
+            <div className="flex justify-between font-black text-lg pt-1">
+              <span className="uppercase text-amber-700 tracking-tight text-sm self-center">= Amount On Hold</span>
+              <span className="text-amber-600">
+                {formatCurrency(Math.max(0, (order.estimated_total || 0) - (order.paid_amount || 0)))}
               </span>
             </div>
           </div>
@@ -308,15 +381,22 @@ export function PurchaseDetailsDialog({
                       </div>
                       {hold.status === 'on_hold' && (
                         <div className="flex-shrink-0">
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            className="bg-amber-600 hover:bg-amber-700 text-white font-bold h-8 text-xs w-full sm:w-auto"
-                            onClick={() => handleResolveHold(hold.id, hold.hold_amount)}
-                            disabled={resolvingHold}
-                          >
-                            {resolvingHold ? <BrandLoader size="sm" /> : "Resolve & Return Funds"}
-                          </Button>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                className="bg-amber-600 hover:bg-amber-700 text-white font-bold h-8 text-xs w-full sm:w-auto"
+                                onClick={() => handleResolveHold(hold.id, hold.hold_amount)}
+                                disabled={resolvingHold}
+                              >
+                                {resolvingHold ? <BrandLoader size="sm" /> : "Resolve Check"}
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>Resolve & Return Funds</p>
+                            </TooltipContent>
+                          </Tooltip>
                         </div>
                       )}
                       {hold.status === 'returned' && hold.actual_return_date && (

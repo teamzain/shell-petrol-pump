@@ -26,13 +26,15 @@ import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { toast } from "sonner"
 import { BrandLoader } from "@/components/ui/brand-loader"
+import { DeleteConfirmDialog } from "@/components/ui/delete-confirm-dialog"
 import { getSuppliers } from "@/app/actions/suppliers"
 import { getProducts } from "@/app/actions/products"
-import { createPurchaseOrder } from "@/app/actions/purchase-orders"
-import { AlertCircle, Plus, Trash2, ShoppingCart } from "lucide-react"
+import { createPurchaseOrder, getNextPONumber } from "@/app/actions/purchase-orders"
+import { AlertCircle, Plus, Trash2, ShoppingCart, RefreshCcw } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 
 const poSchema = z.object({
+    po_number: z.string().min(1, "PO Number is required"),
     supplier_id: z.string().min(1, "Supplier is required"),
     order_date: z.string().min(1, "Order date is required"),
     expected_delivery_date: z.string().min(1, "Expected delivery date is required"),
@@ -51,6 +53,7 @@ type POFormValues = z.infer<typeof poSchema>
 export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
     const [isInitialLoading, setIsInitialLoading] = useState(true)
     const [loading, setLoading] = useState(false)
+    const [itemToRemoveIndex, setItemToRemoveIndex] = useState<number | null>(null)
     const [suppliers, setSuppliers] = useState<any[]>([])
     const [inventoryProducts, setInventoryProducts] = useState<any[]>([])
     const [selectedSupplier, setSelectedSupplier] = useState<any>(null)
@@ -58,6 +61,7 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
     const form = useForm<POFormValues>({
         resolver: zodResolver(poSchema),
         defaultValues: {
+            po_number: "",
             supplier_id: "",
             order_date: new Date().toISOString().split('T')[0],
             expected_delivery_date: new Date().toISOString().split('T')[0],
@@ -77,15 +81,16 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
     useEffect(() => {
         const fetchData = async () => {
             try {
-                const [supps, prods] = await Promise.all([getSuppliers(), getProducts()])
+                const [supps, prods, nextPoNum] = await Promise.all([getSuppliers(), getProducts(), getNextPONumber()])
                 setSuppliers(supps.filter((s: any) => s.status === 'active'))
                 setInventoryProducts(prods)
+                form.setValue("po_number", nextPoNum)
             } finally {
                 setIsInitialLoading(false)
             }
         }
         fetchData()
-    }, [])
+    }, [form])
 
     const onSupplierChange = (id: string) => {
         const supplier = suppliers.find(s => s.id === id)
@@ -102,11 +107,23 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
     }
 
     async function onSubmit(values: POFormValues) {
+        if (balanceWarning) {
+            toast.error("Supplier's available balance is too low to process this purchase.")
+            return
+        }
+
         setLoading(true)
         try {
             await createPurchaseOrder(values)
             toast.success("Purchase Order created successfully!")
-            form.reset()
+
+            // Re-fetch next PO number for subsequent creations
+            const nextPoNum = await getNextPONumber()
+            form.reset({
+                ...form.getValues(),
+                po_number: nextPoNum,
+                products: [{ product_id: "", product_type: "fuel", unit_type: "liter", ordered_quantity: 0, rate_per_liter: 0 }]
+            })
             onSuccess()
         } catch (error: any) {
             toast.error(error.message || "Failed to create PO")
@@ -147,7 +164,36 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
                         ) : (
                             <Form {...form}>
                                 <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                        <FormField
+                                            control={form.control}
+                                            name="po_number"
+                                            render={({ field }) => (
+                                                <FormItem>
+                                                    <FormLabel className="font-bold">PO Number</FormLabel>
+                                                    <FormControl>
+                                                        <div className="relative">
+                                                            <Input className="h-12 font-mono font-bold pl-3 pr-10" {...field} />
+                                                            <Button
+                                                                type="button"
+                                                                variant="ghost"
+                                                                size="icon"
+                                                                className="absolute right-1 top-1.5 h-9 w-9 text-slate-400 hover:text-primary"
+                                                                onClick={async () => {
+                                                                    const num = await getNextPONumber();
+                                                                    form.setValue("po_number", num);
+                                                                    toast.success("Regenerated next PO number")
+                                                                }}
+                                                                title="Regenerate PO Number"
+                                                            >
+                                                                <RefreshCcw className="h-4 w-4" />
+                                                            </Button>
+                                                        </div>
+                                                    </FormControl>
+                                                    <FormMessage />
+                                                </FormItem>
+                                            )}
+                                        />
                                         <FormField
                                             control={form.control}
                                             name="supplier_id"
@@ -307,7 +353,7 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
                                                         variant="ghost"
                                                         size="icon"
                                                         className="text-red-500 hover:text-red-700 hover:bg-red-50"
-                                                        onClick={() => remove(index)}
+                                                        onClick={() => setItemToRemoveIndex(index)}
                                                         disabled={fields.length === 1}
                                                     >
                                                         <Trash2 className="h-4 w-4" />
@@ -364,7 +410,8 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
                         <AlertTitle className="font-bold text-xs uppercase tracking-wider">Low Account Balance</AlertTitle>
                         <AlertDescription className="text-xs mt-1">
                             Supplier account balance is Rs. {supplierBalance.toLocaleString()}.
-                            This order requires Rs. {totalAmount.toLocaleString()}. The delivery might not be auto-debited if funds are insufficient.
+                            This order requires Rs. {totalAmount.toLocaleString()}.
+                            <strong> Orders cannot be placed if the order total exceeds the account balance.</strong> Please recharge the supplier's account.
                         </AlertDescription>
                     </Alert>
                 )}
@@ -397,6 +444,19 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
                     </Card>
                 )}
             </div>
+
+            <DeleteConfirmDialog
+                open={itemToRemoveIndex !== null}
+                onOpenChange={(open) => !open && setItemToRemoveIndex(null)}
+                onConfirm={() => {
+                    if (itemToRemoveIndex !== null) {
+                        remove(itemToRemoveIndex);
+                        setItemToRemoveIndex(null);
+                    }
+                }}
+                title="Remove Product"
+                description="Are you sure you want to remove this product from the current purchase order?"
+            />
         </div>
     )
 }

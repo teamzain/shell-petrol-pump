@@ -188,11 +188,13 @@ export function POListTab({ onCreateDelivery }: POListTabProps) {
                         const displayItems = items.filter((item: any) => {
                             const isDelivered = item.status === 'delivered' || item.status === 'received';
                             if (statusFilter === 'delivered') return isDelivered;
-                            if (statusFilter === 'pending' || statusFilter === 'partial') return !isDelivered;
+                            // For pending/partial, we show all items in the PO to give context ("one delivered, one not")
+                            // But we only show the PO itself if it has at least one pending item if statusFilter is 'pending'
                             return true;
                         });
 
-                        if (displayItems.length === 0) return null;
+                        const hasPendingItems = items.some((i: any) => i.status !== 'delivered' && i.status !== 'received');
+                        if ((statusFilter === 'pending' || statusFilter === 'partial') && !hasPendingItems) return null;
 
                         return (
                             <Card key={po.id} className="overflow-hidden shadow-sm hover:shadow-md transition-shadow">
@@ -228,57 +230,60 @@ export function POListTab({ onCreateDelivery }: POListTabProps) {
                                                 </TableRow>
                                             </TableHeader>
                                             <TableBody>
-                                                {displayItems.map((item: any, idx: number) => (
-                                                    <TableRow key={idx} className="hover:bg-slate-50/50">
-                                                        <TableCell className="py-3 align-top">
-                                                            <div className="flex flex-col">
-                                                                <span className="font-bold text-sm text-slate-900 flex items-center">
-                                                                    {item.product_name} {item.is_legacy ? <Badge variant="secondary" className="ml-2 text-[8px] h-4">Legacy</Badge> : null}
+                                                {displayItems.map((item: any, idx: number) => {
+                                                    const isDelivered = item.status === 'delivered' || item.status === 'received';
+                                                    return (
+                                                        <TableRow key={idx} className={`hover:bg-slate-50/50 ${isDelivered ? 'opacity-50 grayscale-[0.5] bg-slate-50/30' : ''}`}>
+                                                            <TableCell className="py-3 align-top">
+                                                                <div className="flex flex-col">
+                                                                    <span className="font-bold text-sm text-slate-900 flex items-center">
+                                                                        {item.product_name} {item.is_legacy ? <Badge variant="secondary" className="ml-2 text-[8px] h-4">Legacy</Badge> : null}
+                                                                    </span>
+                                                                    <span className="text-xs text-muted-foreground font-medium mt-0.5">
+                                                                        {Number(item.ordered_quantity).toLocaleString()}{item.unit_type === 'liter' ? 'L' : (item.unit_type || 'U')} @ PKR {Number(item.rate_per_liter).toLocaleString()}
+                                                                    </span>
+                                                                </div>
+                                                            </TableCell>
+                                                            <TableCell className="text-right py-3 align-top">
+                                                                <span className="font-black text-sm text-primary py-1 px-2 rounded-md bg-primary/5 whitespace-nowrap">
+                                                                    PKR {Number(item.total_amount).toLocaleString()}
                                                                 </span>
-                                                                <span className="text-xs text-muted-foreground font-medium mt-0.5">
-                                                                    {Number(item.ordered_quantity).toLocaleString()}{item.unit_type === 'liter' ? 'L' : (item.unit_type || 'U')} @ PKR {Number(item.rate_per_liter).toLocaleString()}
-                                                                </span>
-                                                            </div>
-                                                        </TableCell>
-                                                        <TableCell className="text-right py-3 align-top">
-                                                            <span className="font-black text-sm text-primary py-1 px-2 rounded-md bg-primary/5 whitespace-nowrap">
-                                                                PKR {Number(item.total_amount).toLocaleString()}
-                                                            </span>
-                                                        </TableCell>
-                                                        <TableCell className="text-center py-3 align-top">
-                                                            {getStatusBadge(item.status || 'pending')}
-                                                        </TableCell>
-                                                        <TableCell className="text-right py-3 align-top">
-                                                            <div className="flex items-center justify-end gap-1">
-                                                                {item.status !== 'delivered' && item.status !== 'cancelled' && item.status !== 'received' && (
-                                                                    <Button
-                                                                        variant="default"
-                                                                        size="sm"
-                                                                        className="h-8 px-2 font-semibold bg-primary hover:bg-primary/90 rounded-md shrink-0 shadow-sm text-xs"
-                                                                        onClick={() => {
-                                                                            const poClone = { ...po, items: items }
-                                                                            poClone.items[item._idx].status = 'pending'
-                                                                            onCreateDelivery(poClone)
-                                                                        }}
-                                                                    >
-                                                                        <Truck className="h-3 w-3 mr-1" /> Deliver
-                                                                    </Button>
-                                                                )}
+                                                            </TableCell>
+                                                            <TableCell className="text-center py-3 align-top">
+                                                                {getStatusBadge(item.status || 'pending')}
+                                                            </TableCell>
+                                                            <TableCell className="text-right py-3 align-top">
+                                                                <div className="flex items-center justify-end gap-1">
+                                                                    {item.status !== 'delivered' && item.status !== 'cancelled' && item.status !== 'received' && (
+                                                                        <Button
+                                                                            variant="default"
+                                                                            size="sm"
+                                                                            className="h-8 px-2 font-semibold bg-primary hover:bg-primary/90 rounded-md shrink-0 shadow-sm text-xs"
+                                                                            onClick={() => {
+                                                                                const poClone = { ...po, items: items }
+                                                                                poClone.items[item._idx].status = 'pending'
+                                                                                onCreateDelivery(poClone)
+                                                                            }}
+                                                                        >
+                                                                            <Truck className="h-3 w-3 mr-1" /> Deliver
+                                                                        </Button>
+                                                                    )}
 
-                                                                <Button
-                                                                    variant="ghost"
-                                                                    size="icon"
-                                                                    className="h-8 w-8 rounded-full hover:bg-slate-200 text-slate-500 shrink-0"
-                                                                    title="Reschedule Item Delivery"
-                                                                    onClick={() => setRescheduleData({ poId: po.id, itemIdx: item._idx, poNum: po.po_number, date: item.expected_delivery_date || po.expected_delivery_date })}
-                                                                    disabled={item.status === 'delivered' || po.status === 'cancelled' || item.status === 'received'}
-                                                                >
-                                                                    <Calendar className="h-4 w-4" />
-                                                                </Button>
-                                                            </div>
-                                                        </TableCell>
-                                                    </TableRow>
-                                                ))}
+                                                                    <Button
+                                                                        variant="ghost"
+                                                                        size="icon"
+                                                                        className="h-8 w-8 rounded-full hover:bg-slate-200 text-slate-500 shrink-0"
+                                                                        title="Reschedule Item Delivery"
+                                                                        onClick={() => setRescheduleData({ poId: po.id, itemIdx: item._idx, poNum: po.po_number, date: item.expected_delivery_date || po.expected_delivery_date })}
+                                                                        disabled={item.status === 'delivered' || po.status === 'cancelled' || item.status === 'received'}
+                                                                    >
+                                                                        <Calendar className="h-4 w-4" />
+                                                                    </Button>
+                                                                </div>
+                                                            </TableCell>
+                                                        </TableRow>
+                                                    )
+                                                })}
                                                 {items.length === 0 && (
                                                     <TableRow>
                                                         <TableCell colSpan={4} className="p-4 text-center text-sm text-muted-foreground italic">

@@ -188,7 +188,7 @@ export default function TransactionDetailPage() {
                                         </div>
                                         <div className="col-span-2 space-y-1 border-t pt-2">
                                             <p className="text-[10px] font-bold uppercase text-muted-foreground">Product Name</p>
-                                            <p className="font-semibold">{po.products?.product_name || po.products?.name || "-"}</p>
+                                            <p className="font-semibold text-blue-700">{d?.product_name || po?.product_name_override || po?.products?.name || "-"}</p>
                                         </div>
                                     </div>
                                 </CardContent>
@@ -302,7 +302,7 @@ export default function TransactionDetailPage() {
                                         </div>
                                         <div className="space-y-1 text-right">
                                             <p className="text-[10px] font-bold uppercase text-muted-foreground">Product</p>
-                                            <p className="font-semibold">{hrPo?.products?.product_name || hrPo?.products?.name || "-"}</p>
+                                            <p className="font-semibold text-amber-700">{hr?.product_name || hrPo?.product_name_override || hrPo?.products?.name || "-"}</p>
                                         </div>
                                     </div>
                                     <div className="bg-white p-3 rounded border shadow-sm flex justify-between items-center">

@@ -30,6 +30,7 @@ export function DeliveryHistoryTab() {
     const [searchQuery, setSearchQuery] = useState("")
     const [supplierFilter, setSupplierFilter] = useState("all")
     const [selectedPO, setSelectedPO] = useState<string | null>(null)
+    const [selectedDelivery, setSelectedDelivery] = useState<string | null>(null)
 
     const fetchDeliveries = async () => {
         setLoading(true)
@@ -107,7 +108,9 @@ export function DeliveryHistoryTab() {
                                     <TableCell className="font-mono text-[10px] font-bold">{del.company_invoice_number}</TableCell>
                                     <TableCell className="font-mono text-[10px] text-muted-foreground">{del.purchase_orders?.po_number}</TableCell>
                                     <TableCell className="font-medium text-xs">{del.suppliers?.name}</TableCell>
-                                    <TableCell className="capitalize text-[10px]">{del.product_type}</TableCell>
+                                    <TableCell className="capitalize text-[10px] whitespace-nowrap overflow-hidden text-ellipsis max-w-[120px]" title={del.product_name || del.product_type}>
+                                        {del.product_name || del.product_type}
+                                    </TableCell>
                                     <TableCell className="text-right font-bold text-xs">{Number(del.delivered_quantity).toLocaleString()}</TableCell>
                                     <TableCell className="text-right font-black text-primary text-xs">Rs. {Number(del.total_amount).toLocaleString()}</TableCell>
                                     <TableCell className="text-center text-[10px] whitespace-nowrap">
@@ -118,7 +121,10 @@ export function DeliveryHistoryTab() {
                                             variant="ghost"
                                             size="icon"
                                             className="h-7 w-7 text-blue-600"
-                                            onClick={() => setSelectedPO(del.purchase_order_id)}
+                                            onClick={() => {
+                                                setSelectedPO(del.purchase_order_id)
+                                                setSelectedDelivery(del.id)
+                                            }}
                                         >
                                             <Eye className="h-3.5 w-3.5" />
                                         </Button>
@@ -132,8 +138,14 @@ export function DeliveryHistoryTab() {
 
             <PODetailModal
                 open={!!selectedPO}
-                onOpenChange={(open) => !open && setSelectedPO(null)}
+                onOpenChange={(open) => {
+                    if (!open) {
+                        setSelectedPO(null)
+                        setSelectedDelivery(null)
+                    }
+                }}
                 poId={selectedPO}
+                deliveryId={selectedDelivery || undefined}
             />
         </div>
     )

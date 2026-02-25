@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { useTheme } from "next-themes"
+import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -19,7 +20,9 @@ import {
 import {
     Moon, Sun, Laptop, User, Shield, Info, Check, Landmark, Plus, Edit2, Trash2, Power, RefreshCw,
     ArrowRightLeft,
-    PlusCircle
+    PlusCircle,
+    Fuel,
+    CreditCard
 } from "lucide-react"
 import { BrandLoader as Loader } from "@/components/ui/brand-loader"
 
@@ -265,6 +268,65 @@ export default function SettingsPage() {
                             </CardFooter>
                         </form>
                     </Card>
+                </TabsContent>
+                269:
+                270:                 {/* System Tab */}
+                <TabsContent value="system" className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <Card className="hover:border-primary/50 transition-colors">
+                            <CardHeader className="pb-2">
+                                <CardTitle className="text-lg flex items-center gap-2">
+                                    <Fuel className="w-5 h-5 text-primary" /> Dispensers & Nozzles
+                                </CardTitle>
+                                <CardDescription>Configure pumps, nozzles and fuel assignments.</CardDescription>
+                            </CardHeader>
+                            <CardFooter>
+                                <Link href="/dashboard/settings/dispensers" className="w-full">
+                                    <Button variant="outline" className="w-full">Manage Equipment</Button>
+                                </Link>
+                            </CardFooter>
+                        </Card>
+
+                        <Card className="hover:border-primary/50 transition-colors">
+                            <CardHeader className="pb-2">
+                                <CardTitle className="text-lg flex items-center gap-2">
+                                    <CreditCard className="w-5 h-5 text-primary" /> Payment Methods
+                                </CardTitle>
+                                <CardDescription>Manage cash, bank cards and credit terms.</CardDescription>
+                            </CardHeader>
+                            <CardFooter>
+                                <Link href="/dashboard/settings/payment-methods" className="w-full">
+                                    <Button variant="outline" className="w-full">Manage Payments</Button>
+                                </Link>
+                            </CardFooter>
+                        </Card>
+
+                        <Card>
+                            <CardHeader className="pb-2">
+                                <CardTitle className="text-lg flex items-center gap-2">
+                                    <Shield className="w-5 h-5 text-primary" /> Admin Security
+                                </CardTitle>
+                                <CardDescription>Update administrative PIN for overrides.</CardDescription>
+                            </CardHeader>
+                            <form onSubmit={handlePinUpdate}>
+                                <CardContent className="pt-2">
+                                    <div className="space-y-2">
+                                        <Label htmlFor="adminPin">Admin PIN</Label>
+                                        <Input
+                                            id="adminPin"
+                                            type="password"
+                                            maxLength={4}
+                                            value={systemConfig.adminPin}
+                                            onChange={(e) => setSystemConfig({ ...systemConfig, adminPin: e.target.value })}
+                                        />
+                                    </div>
+                                </CardContent>
+                                <CardFooter>
+                                    <Button type="submit" variant="secondary" className="w-full">Update PIN</Button>
+                                </CardFooter>
+                            </form>
+                        </Card>
+                    </div>
                 </TabsContent>
 
                 {/* Banks Tab */}

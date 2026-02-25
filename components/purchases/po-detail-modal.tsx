@@ -7,20 +7,41 @@ import { Separator } from "@/components/ui/separator"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { format } from "date-fns"
 import { BrandLoader } from "../ui/brand-loader"
-import { getPurchaseOrderDetail } from "@/app/actions/purchase-orders"
+import { getPurchaseOrderDetail, cancelPurchaseOrderItem } from "@/app/actions/purchase-orders"
+import { RefreshCw, Trash2 } from "lucide-react"
+import {
+    Tooltip,
+    TooltipContent,
+    TooltipTrigger,
+} from "@/components/ui/tooltip"
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import { toast } from "sonner"
 
 interface PODetailModalProps {
     open: boolean
     onOpenChange: (open: boolean) => void
     poId: string | null
+    deliveryId?: string // Optional focus on a specific delivery
 }
 
 export function PODetailModal({
     open,
     onOpenChange,
-    poId
+    poId,
+    deliveryId
 }: PODetailModalProps) {
     const [loading, setLoading] = useState(false)
+    const [cancellingItem, setCancellingItem] = useState<string | null>(null)
+    const [itemToDelete, setItemToDelete] = useState<{ id: string, name: string } | null>(null)
     const [po, setPo] = useState<any>(null)
 
     useEffect(() => {
@@ -40,6 +61,26 @@ export function PODetailModal({
             console.error("Failed to fetch PO details:", error)
         } finally {
             setLoading(false)
+        }
+    }
+
+    const handleConfirmCancel = async () => {
+        if (!itemToDelete || !poId) return;
+
+        setCancellingItem(itemToDelete.id);
+        try {
+            const res = await cancelPurchaseOrderItem(poId, itemToDelete.id);
+            toast.success(`Successfully cancelled ${itemToDelete.name}.`);
+            if (res.allCancelled) {
+                onOpenChange(false);
+            } else {
+                fetchDetail();
+            }
+        } catch (err) {
+            toast.error(err instanceof Error ? err.message : "Failed to cancel item.");
+        } finally {
+            setCancellingItem(null);
+            setItemToDelete(null);
         }
     }
 
@@ -69,12 +110,49 @@ export function PODetailModal({
         ? po.po_hold_records?.reduce((acc: number, hold: any) => acc + Number(hold.hold_amount), 0) || Number(po?.hold_amount || 0)
         : Number(po?.hold_amount || 0)
 
+    // Apply Focused View Logic if deliveryId is provided
+    let displayItems = hasItems ? po.items : [];
+    let displayDeliveries = po?.deliveries || [];
+    let displayHolds = po?.po_hold_records || [];
+    let focusedTitle = "Purchase Order Details";
+    let displayEstimatedTotal = po?.estimated_total || 0;
+    let displayDeliveredValue = totalDeliveredAmount;
+
+    if (deliveryId && po) {
+        focusedTitle = "Delivery Transaction Details";
+        const focusedDel = po.deliveries?.find((d: any) => d.id === deliveryId);
+
+        if (focusedDel) {
+            displayDeliveries = [focusedDel];
+
+            // Scope items to what was actually in this delivery
+            if (hasItems) {
+                const itemIdx = focusedDel.item_index;
+                const specificItem = po.items[itemIdx];
+                if (specificItem) {
+                    displayItems = [{
+                        ...specificItem,
+                        // For focused view, we show the quantity delivered in THIS delivery as "Received"
+                        delivered_quantity: focusedDel.delivered_quantity,
+                        // And the "Total Amount" for this specific delivery transaction
+                        total_amount: Number(focusedDel.delivered_quantity) * Number(specificItem.rate_per_liter)
+                    }];
+                    displayEstimatedTotal = displayItems[0].total_amount;
+                    displayDeliveredValue = displayItems[0].total_amount;
+                }
+            }
+
+            // Scope holds to this specific delivery
+            displayHolds = po.po_hold_records?.filter((h: any) => h.delivery_id === deliveryId) || [];
+        }
+    }
+
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent className="sm:max-w-[700px] max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
                     <DialogTitle className="flex items-center justify-between font-black uppercase tracking-wider text-xl">
-                        Purchase Order Details
+                        {focusedTitle}
                     </DialogTitle>
                 </DialogHeader>
 
@@ -116,16 +194,21 @@ export function PODetailModal({
                                             <TableHead className="w-[300px] text-xs font-bold text-slate-500 uppercase h-8 py-1">Product</TableHead>
                                             <TableHead className="text-right text-xs font-bold text-slate-500 uppercase h-8 py-1 whitespace-nowrap">Ordered</TableHead>
                                             <TableHead className="text-right text-xs font-bold text-slate-500 uppercase h-8 py-1 whitespace-nowrap">Received</TableHead>
+                                            <TableHead className="text-right text-xs font-bold text-slate-500 uppercase h-8 py-1 whitespace-nowrap">Price / Rate</TableHead>
                                             <TableHead className="text-right text-xs font-bold text-slate-500 uppercase h-8 py-1 whitespace-nowrap">Total Value</TableHead>
+                                            <TableHead className="w-12"></TableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
-                                        {hasItems ? po.items.map((item: any, idx: number) => (
-                                            <TableRow key={idx}>
+                                        {hasItems ? displayItems.map((item: any, idx: number) => (
+                                            <TableRow key={idx} className={item.status === 'cancelled' ? 'opacity-50 grayscale' : ''}>
                                                 <TableCell className="py-2">
                                                     <div className="flex flex-col">
-                                                        <span className="font-bold text-sm">{item.product_name}</span>
-                                                        <span className="text-xs text-muted-foreground">Rate: {formatCurrency(item.rate_per_liter)}</span>
+                                                        <div className="flex gap-2 items-center">
+                                                            <span className={`font-bold text-sm ${item.status === 'cancelled' ? 'line-through text-muted-foreground' : ''}`}>{item.product_name || "Unknown Product"}</span>
+                                                            {item.status === 'cancelled' && <Badge variant="destructive" className="h-4 px-1 pb-0 scale-90">Cancelled</Badge>}
+                                                        </div>
+                                                        <span className="text-xs text-muted-foreground capitalize">{item.product_category?.replace("_", " ")}</span>
                                                     </div>
                                                 </TableCell>
                                                 <TableCell className="text-right py-2 font-medium">
@@ -134,8 +217,27 @@ export function PODetailModal({
                                                 <TableCell className="text-right py-2 font-bold text-green-600">
                                                     {Number(item.delivered_quantity || 0).toLocaleString()} {item.unit_type === 'liter' ? 'L' : 'U'}
                                                 </TableCell>
-                                                <TableCell className="text-right py-2 font-mono font-bold text-primary">
+                                                <TableCell className="text-right py-2 font-medium text-slate-600">
+                                                    {formatCurrency(item.rate_per_liter)}
+                                                </TableCell>
+                                                <TableCell className="text-right py-2 font-mono font-bold text-slate-800">
                                                     {formatCurrency(item.total_amount)}
+                                                </TableCell>
+                                                <TableCell className="py-2 text-right">
+                                                    {po.status === 'pending' && item.status !== 'cancelled' && (
+                                                        <Tooltip>
+                                                            <TooltipTrigger asChild>
+                                                                <button
+                                                                    disabled={cancellingItem === item.product_id}
+                                                                    onClick={() => setItemToDelete({ id: item.product_id, name: item.product_name })}
+                                                                    className="text-destructive hover:bg-destructive/10 p-1 rounded-md transition-colors"
+                                                                >
+                                                                    {cancellingItem === item.product_id ? <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" /> : <Trash2 className="h-4 w-4" />}
+                                                                </button>
+                                                            </TooltipTrigger>
+                                                            <TooltipContent>Cancel this Item</TooltipContent>
+                                                        </Tooltip>
+                                                    )}
                                                 </TableCell>
                                             </TableRow>
                                         )) : (
@@ -150,16 +252,21 @@ export function PODetailModal({
                                                 <TableCell className="text-right py-2 font-bold text-green-600">
                                                     {Number(po.delivered_quantity || 0).toLocaleString()} {po.unit_type === 'liter' ? 'L' : 'U'}
                                                 </TableCell>
-                                                <TableCell className="text-right py-2 font-mono font-bold text-primary">
+                                                <TableCell className="text-right py-2 font-medium text-slate-600">
+                                                    -
+                                                </TableCell>
+                                                <TableCell className="text-right py-2 font-mono font-bold text-slate-800">
                                                     {formatCurrency(po.estimated_total)}
                                                 </TableCell>
+                                                <TableCell></TableCell>
                                             </TableRow>
                                         )}
                                         <TableRow className="bg-slate-50 hover:bg-slate-50">
-                                            <TableCell colSpan={3} className="text-right font-bold text-xs uppercase py-2">Total Estimated Order Value</TableCell>
+                                            <TableCell colSpan={4} className="text-right font-bold text-xs uppercase py-2">Total Estimated Order Value</TableCell>
                                             <TableCell className="text-right py-2 font-mono font-black text-primary border-l text-base">
-                                                {formatCurrency(po.estimated_total)}
+                                                {formatCurrency(displayEstimatedTotal)}
                                             </TableCell>
+                                            <TableCell></TableCell>
                                         </TableRow>
                                     </TableBody>
                                 </Table>
@@ -167,13 +274,13 @@ export function PODetailModal({
                         </div>
 
                         {/* Section 3: Delivery Details (if deliveries exist) */}
-                        {po.deliveries && po.deliveries.length > 0 && (
+                        {displayDeliveries && displayDeliveries.length > 0 && (
                             <div className="space-y-2">
                                 <h4 className="font-bold text-[10px] uppercase tracking-wider text-muted-foreground flex items-center gap-2">
-                                    Delivery Records
+                                    {deliveryId ? "Transaction Record" : "Delivery Records"}
                                 </h4>
                                 <div className="space-y-2">
-                                    {po.deliveries.map((del: any) => (
+                                    {displayDeliveries.map((del: any) => (
                                         <div key={del.id} className="bg-white border rounded-lg p-3 text-xs grid grid-cols-2 md:grid-cols-6 gap-3">
                                             <div>
                                                 <p className="text-[9px] text-muted-foreground uppercase font-bold">Delivery #</p>
@@ -206,13 +313,13 @@ export function PODetailModal({
                         )}
 
                         {/* Section 4: Hold Information */}
-                        {po.po_hold_records && po.po_hold_records.length > 0 && (
+                        {displayHolds && displayHolds.length > 0 && (
                             <div className="space-y-2">
                                 <h4 className="font-bold text-[10px] uppercase tracking-wider text-amber-600 flex items-center gap-2">
                                     Hold Information
                                 </h4>
                                 <div className="space-y-2">
-                                    {po.po_hold_records.map((hold: any) => (
+                                    {displayHolds.map((hold: any) => (
                                         <div key={hold.id} className="bg-amber-50/50 border border-amber-200 rounded-lg p-3 text-xs grid grid-cols-2 md:grid-cols-4 gap-3">
                                             <div>
                                                 <p className="text-[10px] text-amber-700 uppercase font-bold">Hold Amount</p>
@@ -246,30 +353,62 @@ export function PODetailModal({
                         )}
 
                         {/* Section 5: Payment Summary */}
-                        <div className="bg-slate-900 text-white p-3 rounded-lg space-y-1">
-                            <h4 className="font-bold text-[10px] uppercase tracking-widest text-slate-400 mb-2">Payment Summary</h4>
-                            <div className="flex justify-between text-xs items-center py-1">
-                                <span className="text-slate-300 flex items-center gap-1">Company Account Debited</span>
-                                <span className="font-mono font-bold text-green-400">-{formatCurrency(totalDeliveredAmount)}</span>
+                        <div className="bg-slate-900 text-white p-4 rounded-lg space-y-2 mt-4 ml-auto w-full md:w-80">
+                            <h4 className="font-bold text-[10px] uppercase tracking-widest text-slate-400 mb-2">Financial Summary</h4>
+                            <div className="flex justify-between items-center text-sm">
+                                <span className="text-slate-300">Total Value</span>
+                                <span className="font-mono font-bold">{formatCurrency(displayEstimatedTotal)}</span>
                             </div>
-                            {totalHoldAmount > 0 && (
-                                <div className="flex justify-between text-xs items-center py-1">
-                                    <span className="text-slate-300 flex items-center gap-1">Hold Amount <span className="text-[9px] text-slate-500">(Not debited)</span></span>
-                                    <span className="font-mono font-bold text-amber-400">{formatCurrency(totalHoldAmount)}</span>
-                                </div>
-                            )}
+                            <div className="flex justify-between items-center text-sm border-b border-slate-700 pb-2">
+                                <span className="text-green-400">- Paid Value / Debited Amount</span>
+                                <span className="font-mono font-bold text-green-400">-{formatCurrency(displayDeliveredValue)}</span>
+                            </div>
+                            <div className="flex justify-between items-center text-lg mt-2 pt-2">
+                                <span className="uppercase text-amber-500 text-xs font-bold tracking-tight self-center">= Amount On Hold</span>
+                                <span className="font-mono font-black text-amber-500">{formatCurrency(Math.max(0, displayEstimatedTotal - displayDeliveredValue))}</span>
+                            </div>
+
                             {po.po_hold_records?.some((h: any) => h.status === 'released') && (
-                                <div className="mt-1 pt-2 border-t border-slate-700 flex justify-between text-xs items-center">
-                                    <span className="text-slate-300 flex items-center gap-1">Total Hold Released <span className="text-[9px] text-slate-500">(Credited back)</span></span>
-                                    <span className="font-mono font-bold text-blue-400">+{formatCurrency(
+                                <div className="mt-2 pt-2 border-t border-slate-700/50 flex justify-between text-[10px] items-center text-blue-400 opacity-80">
+                                    <span className="flex items-center gap-1 uppercase tracking-wider font-bold">Total Hold Released</span>
+                                    <span className="font-mono font-bold">+{formatCurrency(
                                         po.po_hold_records.filter((h: any) => h.status === 'released').reduce((acc: number, h: any) => acc + Number(h.hold_amount), 0)
                                     )}</span>
                                 </div>
                             )}
                         </div>
                     </div>
-                )}
-            </DialogContent>
-        </Dialog>
+                )
+                }
+            </DialogContent >
+
+            {/* Delete Confirmation Modal */}
+            <AlertDialog open={!!itemToDelete} onOpenChange={(open) => !open && setItemToDelete(null)}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            This will cancel <strong>{itemToDelete?.name}</strong> from this purchase order. This action cannot be undone.
+                            If this is the only remaining item, the entire Purchase Order will be marked as cancelled.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel disabled={!!cancellingItem}>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                            onClick={(e) => {
+                                e.preventDefault();
+                                handleConfirmCancel();
+                            }}
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                            disabled={!!cancellingItem}
+                        >
+                            {cancellingItem ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                            Cancel Item
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+
+        </Dialog >
     )
 }

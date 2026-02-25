@@ -421,6 +421,25 @@ export async function getTransactionDetail(transactionId: string) {
             .single()
 
         if (delivery) {
+            // Map specific item details if it's a multi-item PO
+            if (delivery.purchase_orders?.items && Array.isArray(delivery.purchase_orders.items)) {
+                const itemIdx = delivery.item_index;
+                const specificItem = delivery.purchase_orders.items[itemIdx];
+
+                if (specificItem) {
+                    delivery.purchase_orders = {
+                        ...delivery.purchase_orders,
+                        ordered_quantity: specificItem.ordered_quantity,
+                        quantity_remaining: specificItem.quantity_remaining,
+                        rate_per_liter: specificItem.rate_per_liter,
+                        product_type: specificItem.product_type,
+                        unit_type: specificItem.unit_type,
+                        estimated_total: specificItem.total_amount,
+                        // Priority for product name
+                        product_name_override: specificItem.product_name || (delivery.purchase_orders.products?.name)
+                    };
+                }
+            }
             resultTx.deliveries = delivery
         }
     }
@@ -447,6 +466,25 @@ export async function getTransactionDetail(transactionId: string) {
             .single()
 
         if (hold) {
+            // Map specific item details for hold release
+            if (hold.purchase_orders?.items && Array.isArray(hold.purchase_orders.items)) {
+                // Find by item_index if exists, otherwise by product_id
+                const specificItem = hold.item_index !== undefined ?
+                    hold.purchase_orders.items[hold.item_index] :
+                    hold.purchase_orders.items.find((i: any) => i.product_id === hold.product_id);
+
+                if (specificItem) {
+                    hold.purchase_orders = {
+                        ...hold.purchase_orders,
+                        ordered_quantity: specificItem.ordered_quantity,
+                        quantity_remaining: specificItem.quantity_remaining,
+                        rate_per_liter: specificItem.rate_per_liter,
+                        product_type: specificItem.product_type,
+                        unit_type: specificItem.unit_type,
+                        estimated_total: specificItem.total_amount
+                    };
+                }
+            }
             resultTx.po_hold_records = hold
         }
     }

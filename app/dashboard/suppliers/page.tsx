@@ -22,6 +22,11 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import {
   Plus,
   Search,
   ExternalLink,
@@ -257,33 +262,63 @@ export default function SuppliersPage() {
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex items-center justify-end gap-2">
-                            <Link href={`/dashboard/suppliers/${supplier.id}`}>
-                              <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-500">
-                                <ExternalLink className="h-4 w-4" />
-                              </Button>
-                            </Link>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Link href={`/dashboard/suppliers/${supplier.id}`}>
+                                  <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-500">
+                                    <ExternalLink className="h-4 w-4" />
+                                  </Button>
+                                </Link>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>View Details</p>
+                              </TooltipContent>
+                            </Tooltip>
+
                             {hasAccount ? (
-                              <Link href={`/dashboard/suppliers/${supplier.id}/transactions`}>
-                                <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-500">
-                                  <History className="h-4 w-4" />
-                                </Button>
-                              </Link>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Link href={`/dashboard/suppliers/${supplier.id}/transactions`}>
+                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-500">
+                                      <History className="h-4 w-4" />
+                                    </Button>
+                                  </Link>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>Transaction History</p>
+                                </TooltipContent>
+                              </Tooltip>
                             ) : (
-                              <Button variant="ghost" size="icon" className="h-8 w-8 text-orange-500" title="Create Account">
-                                <UserPlus className="h-4 w-4" />
-                              </Button>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button variant="ghost" size="icon" className="h-8 w-8 text-orange-500">
+                                    <UserPlus className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>Create Account</p>
+                                </TooltipContent>
+                              </Tooltip>
                             )}
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 text-primary"
-                              onClick={() => {
-                                setSelectedSupplier(supplier)
-                                setEditDialogOpen(true)
-                              }}
-                            >
-                              <Edit className="h-4 w-4" />
-                            </Button>
+
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-primary"
+                                  onClick={() => {
+                                    setSelectedSupplier(supplier)
+                                    setEditDialogOpen(true)
+                                  }}
+                                >
+                                  <Edit className="h-4 w-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>Edit Supplier</p>
+                              </TooltipContent>
+                            </Tooltip>
                           </div>
                         </TableCell>
                       </TableRow>

@@ -7,6 +7,7 @@ export async function createPurchaseOrder(formData: {
     supplier_id: string;
     order_date: string;
     expected_delivery_date: string;
+    po_number: string;
     notes?: string;
     products: {
         product_id: string;
@@ -18,31 +19,7 @@ export async function createPurchaseOrder(formData: {
 }) {
     const supabase = await createClient()
 
-    // 1. Generate PO Number (PO-YYYY-XXXX)
-    const year = new Date().getFullYear()
-
-    // Get the latest PO for this year to determine the next sequence number safely
-    const { data: latestPo } = await supabase
-        .from("purchase_orders")
-        .select("po_number")
-        .gte("created_at", `${year}-01-01`)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .single()
-
-    let nextNum = 1
-    if (latestPo && latestPo.po_number) {
-        // Extract the number part from PO-YYYY-XXXX or PO-YYYY-XXXX-1
-        const parts = latestPo.po_number.split('-')
-        if (parts.length >= 3) {
-            const parsedNum = parseInt(parts[2], 10)
-            if (!isNaN(parsedNum)) {
-                nextNum = parsedNum + 1
-            }
-        }
-    }
-
-    const basePoNumber = `PO-${year}-${nextNum.toString().padStart(4, '0')}`
+    const poNumber = formData.po_number || `PO-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`
 
     let estimatedTotal = 0
     let totalOrderedQuantity = 0
@@ -67,7 +44,7 @@ export async function createPurchaseOrder(formData: {
     const { data: po, error: poError } = await supabase
         .from("purchase_orders")
         .insert({
-            po_number: basePoNumber,
+            po_number: poNumber,
             supplier_id: formData.supplier_id,
             ordered_quantity: totalOrderedQuantity,
             quantity_remaining: totalOrderedQuantity,
@@ -87,6 +64,9 @@ export async function createPurchaseOrder(formData: {
 
     if (poError) {
         console.error("PO Insert Error:", poError)
+        if (poError.code === '23505') {
+            throw new Error(`The Purchase Order Number "${poNumber}" already exists. Please use a different PO number.`);
+        }
         throw poError
     }
 
@@ -102,6 +82,34 @@ export async function createPurchaseOrder(formData: {
 
     revalidatePath("/dashboard/purchases")
     return { success: true, count: 1 }
+}
+
+export async function getNextPONumber() {
+    const supabase = await createClient()
+    const year = new Date().getFullYear()
+
+    const { data, error } = await supabase
+        .from("purchase_orders")
+        .select("po_number")
+        .like("po_number", `PO-${year}-%`)
+
+    if (error) {
+        console.error("Failed to fetch next PO number", error)
+        return `PO-${year}-${String(Date.now()).slice(-6)}`
+    }
+
+    let maxNum = 0
+    data?.forEach(po => {
+        const parts = po.po_number.split('-')
+        if (parts.length >= 3) {
+            const parsedNum = parseInt(parts[2], 10)
+            if (!isNaN(parsedNum) && parsedNum > maxNum) {
+                maxNum = parsedNum
+            }
+        }
+    })
+
+    return `PO-${year}-${(maxNum + 1).toString().padStart(4, '0')}`
 }
 
 export async function getPurchaseOrders(filters?: {
@@ -129,15 +137,60 @@ export async function getPurchaseOrders(filters?: {
         `)
         .order("created_at", { ascending: false })
 
-    if (filters?.status && filters.status !== 'all') query = query.eq("status", filters.status)
+    if (filters?.status && filters.status !== 'all') {
+        if (filters.status === 'pending') {
+            query = query.in("status", ['pending', 'partially_delivered'])
+        } else if (filters.status === 'partial') {
+            query = query.eq("status", 'partially_delivered')
+        } else {
+            query = query.eq("status", filters.status)
+        }
+    }
     if (filters?.supplier_id && filters.supplier_id !== 'all') query = query.eq("supplier_id", filters.supplier_id)
     if (filters?.product_type && filters.product_type !== 'all') query = query.eq("product_type", filters.product_type)
     if (filters?.date_from) query = query.gte("expected_delivery_date", filters.date_from)
     if (filters?.date_to) query = query.lte("expected_delivery_date", filters.date_to)
 
-    const { data, error } = await query
+    const { data: pos, error } = await query
     if (error) throw error
-    return data
+
+    // Map product names for JSONB items 
+    if (pos) {
+        // Collect all distinct product IDs from all POs
+        const productIds = new Set<string>();
+        pos.forEach((po: any) => {
+            if (po.items && Array.isArray(po.items)) {
+                po.items.forEach((item: any) => {
+                    if (item.product_id) productIds.add(item.product_id);
+                });
+            }
+        });
+
+        if (productIds.size > 0) {
+            const { data: products } = await supabase
+                .from("products")
+                .select("id, name, category")
+                .in("id", Array.from(productIds));
+
+            if (products) {
+                const productMap = new Map(products.map((p: any) => [p.id, p]));
+                pos.forEach((po: any) => {
+                    if (po.items && Array.isArray(po.items)) {
+                        po.items = po.items.map((item: any) => {
+                            const product = productMap.get(item.product_id);
+                            return {
+                                ...item,
+                                product_name: product ? product.name : "Unknown Product",
+                                product_category: product ? product.category : item.product_type
+                            };
+                        });
+                    }
+                });
+            }
+        }
+    }
+
+    return pos
 }
 
 export async function cancelPurchaseOrder(poId: string) {
@@ -174,6 +227,54 @@ export async function cancelPurchaseOrder(poId: string) {
 
     revalidatePath("/dashboard/purchases")
     return { success: true }
+}
+
+export async function cancelPurchaseOrderItem(poId: string, itemId: string) {
+    const supabase = await createClient()
+
+    // 1. Fetch current PO
+    const { data: po, error: fetchErr } = await supabase
+        .from("purchase_orders")
+        .select("items, expected_delivery_date, po_number")
+        .eq("id", poId)
+        .single()
+
+    if (fetchErr) throw fetchErr
+    if (!po || !po.items) throw new Error("Purchase order items not found")
+
+    // 2. Map and update the specific item status to cancelled
+    let itemFound = false
+    const items = po.items.map((item: any) => {
+        // Handle matches by product_id since "items" is a jsonb array of {product_id, ...}
+        if (item.product_id === itemId && item.status !== 'cancelled' && item.status !== 'delivered') {
+            itemFound = true
+            return { ...item, status: 'cancelled' }
+        }
+        return item
+    })
+
+    if (!itemFound) {
+        throw new Error("Item not found or cannot be cancelled.")
+    }
+
+    // 3. Determine if ALL items are now cancelled
+    const allCancelled = items.every((i: any) => i.status === 'cancelled')
+
+    // 4. Update the DB
+    const updatePayload: any = { items }
+    if (allCancelled) {
+        updatePayload.status = 'cancelled'
+    }
+
+    const { error: updateErr } = await supabase
+        .from("purchase_orders")
+        .update(updatePayload)
+        .eq("id", poId)
+
+    if (updateErr) throw updateErr
+
+    revalidatePath("/dashboard/purchases")
+    return { success: true, allCancelled }
 }
 
 export async function getPurchaseSummary() {
@@ -247,6 +348,30 @@ export async function getPurchaseOrderDetail(poId: string) {
         .single()
 
     if (error) throw error
+
+    // Map product names for JSONB items 
+    if (data && data.items && Array.isArray(data.items)) {
+        const productIds = Array.from(new Set(data.items.filter((i: any) => i.product_id).map((i: any) => i.product_id)));
+        if (productIds.length > 0) {
+            const { data: products } = await supabase
+                .from("products")
+                .select("id, name, category")
+                .in("id", productIds);
+
+            if (products) {
+                const productMap = new Map(products.map((p: any) => [p.id, p]));
+                data.items = data.items.map((item: any) => {
+                    const product = productMap.get(item.product_id);
+                    return {
+                        ...item,
+                        product_name: product ? product.name : "Unknown Product",
+                        product_category: product ? product.category : item.product_type
+                    };
+                });
+            }
+        }
+    }
+
     return data
 }
 
@@ -272,9 +397,34 @@ export async function setPOHoldExpectedDate(holdRecordId: string, poId: string, 
         })
 
     if (notifError) throw notifError
-
     revalidatePath("/dashboard/purchases")
     return { success: true }
+}
+
+export async function getAllHolds() {
+    const supabase = await createClient()
+
+    const { data, error } = await supabase
+        .from("po_hold_records")
+        .select(`
+            id,
+            hold_amount,
+            hold_quantity,
+            expected_return_date,
+            actual_return_date,
+            product_id,
+            product_name,
+            status,
+            purchase_orders (
+                id,
+                po_number,
+                suppliers ( name )
+            )
+        `)
+        .order("created_at", { ascending: false })
+
+    if (error) throw error
+    return data
 }
 
 export async function updatePurchaseOrderDate(poId: string, newDate: string, itemIdx?: number) {
