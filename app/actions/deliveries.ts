@@ -65,12 +65,9 @@ export async function getDeliveries(filters?: {
         .from("deliveries")
         .select(`
             *,
-            purchase_orders (
-                po_number
-            ),
-            suppliers (
-                name
-            )
+            purchase_orders (*),
+            suppliers (name),
+            po_hold_records (*)
         `)
         .order("delivery_date", { ascending: false })
 

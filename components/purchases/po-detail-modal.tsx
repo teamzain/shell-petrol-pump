@@ -123,28 +123,66 @@ export function PODetailModal({
         const focusedDel = po.deliveries?.find((d: any) => d.id === deliveryId);
 
         if (focusedDel) {
-            displayDeliveries = [focusedDel];
+            const invoiceNum = focusedDel.company_invoice_number;
+            displayDeliveries = invoiceNum
+                ? po.deliveries.filter((d: any) => d.company_invoice_number === invoiceNum)
+                : [focusedDel];
 
-            // Scope items to what was actually in this delivery
+            // Scope items to what was actually in these deliveries
             if (hasItems) {
-                const itemIdx = focusedDel.item_index;
-                const specificItem = po.items[itemIdx];
-                if (specificItem) {
-                    displayItems = [{
-                        ...specificItem,
-                        // For focused view, we show the quantity delivered in THIS delivery as "Received"
-                        delivered_quantity: focusedDel.delivered_quantity,
-                        // And the "Total Amount" for this specific delivery transaction
-                        total_amount: Number(focusedDel.delivered_quantity) * Number(specificItem.rate_per_liter)
-                    }];
-                    displayEstimatedTotal = displayItems[0].total_amount;
-                    displayDeliveredValue = displayItems[0].total_amount;
-                }
+                displayItems = po.items.map((item: any, idx: number) => {
+                    // Find if any of our focused deliveries recorded this item
+                    const recordedInThisTrans = displayDeliveries.find((d: any) => d.po_item_index === idx);
+                    if (recordedInThisTrans) {
+                        return {
+                            ...item,
+                            original_index: idx,
+                            delivered_quantity: recordedInThisTrans.delivered_quantity,
+                            total_amount: Number(recordedInThisTrans.delivered_quantity) * Number(item.rate_per_liter)
+                        };
+                    }
+                    return {
+                        ...item,
+                        original_index: idx,
+                        delivered_quantity: 0,
+                        total_amount: 0
+                    };
+                });
+
+                displayDeliveredValue = displayItems.reduce((acc: number, item: any) => acc + (Number(item.total_amount || 0)), 0);
+                // For focused transaction, we might want to show the transaction total as "Total Value" or stick to PO total.
+                // The user's screenshot showed PO total (5500), so we keep displayEstimatedTotal as po.estimated_total.
+            } else {
+                // Legacy single-item PO logic
+                const totalDeliveredInTrans = displayDeliveries.reduce((acc: number, d: any) => acc + Number(d.delivered_quantity || 0), 0);
+                const totalAmountInTrans = displayDeliveries.reduce((acc: number, d: any) => acc + Number(d.delivered_amount || 0), 0);
+
+                displayItems = [{
+                    product_id: po.product_id,
+                    product_name: po.products?.name || "Product",
+                    product_category: po.product_type,
+                    ordered_quantity: po.ordered_quantity,
+                    delivered_quantity: totalDeliveredInTrans,
+                    rate_per_liter: po.rate_per_liter || (po.ordered_quantity > 0 ? po.estimated_total / po.ordered_quantity : 0),
+                    total_amount: totalAmountInTrans,
+                    unit_type: po.unit_type,
+                    original_index: -1 // special index for legacy
+                }];
+                displayDeliveredValue = totalAmountInTrans;
             }
 
-            // Scope holds to this specific delivery
-            displayHolds = po.po_hold_records?.filter((h: any) => h.delivery_id === deliveryId) || [];
+            // Scope holds to all deliveries in this transition
+            const delIds = displayDeliveries.map((d: any) => d.id);
+            displayHolds = po.po_hold_records?.filter((h: any) => delIds.includes(h.delivery_id)) || [];
         }
+    }
+
+    // Final Items to Display
+    let mappedItems = displayItems;
+    if (deliveryId) {
+        mappedItems = displayItems.filter((item: any) =>
+            Number(item.delivered_quantity || 0) > 0 || item.status === 'cancelled'
+        );
     }
 
     return (
@@ -194,71 +232,66 @@ export function PODetailModal({
                                             <TableHead className="w-[300px] text-xs font-bold text-slate-500 uppercase h-8 py-1">Product</TableHead>
                                             <TableHead className="text-right text-xs font-bold text-slate-500 uppercase h-8 py-1 whitespace-nowrap">Ordered</TableHead>
                                             <TableHead className="text-right text-xs font-bold text-slate-500 uppercase h-8 py-1 whitespace-nowrap">Received</TableHead>
+                                            <TableHead className="text-right text-xs font-bold text-slate-500 uppercase h-8 py-1 whitespace-nowrap">Date</TableHead>
                                             <TableHead className="text-right text-xs font-bold text-slate-500 uppercase h-8 py-1 whitespace-nowrap">Price / Rate</TableHead>
                                             <TableHead className="text-right text-xs font-bold text-slate-500 uppercase h-8 py-1 whitespace-nowrap">Total Value</TableHead>
                                             <TableHead className="w-12"></TableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
-                                        {hasItems ? displayItems.map((item: any, idx: number) => (
-                                            <TableRow key={idx} className={item.status === 'cancelled' ? 'opacity-50 grayscale' : ''}>
-                                                <TableCell className="py-2">
-                                                    <div className="flex flex-col">
-                                                        <div className="flex gap-2 items-center">
-                                                            <span className={`font-bold text-sm ${item.status === 'cancelled' ? 'line-through text-muted-foreground' : ''}`}>{item.product_name || "Unknown Product"}</span>
-                                                            {item.status === 'cancelled' && <Badge variant="destructive" className="h-4 px-1 pb-0 scale-90">Cancelled</Badge>}
+                                        {mappedItems.length > 0 ? mappedItems.map((item: any, idx: number) => {
+                                            const originalIdx = item.original_index ?? idx;
+                                            const itemDelivery = po.deliveries?.find((d: any) => d.po_item_index === originalIdx) ||
+                                                (originalIdx === -1 && displayDeliveries?.[0] ? displayDeliveries[0] : null);
+                                            return (
+                                                <TableRow key={idx} className={item.status === 'cancelled' ? 'opacity-50 grayscale' : ''}>
+                                                    <TableCell className="py-2">
+                                                        <div className="flex flex-col">
+                                                            <div className="flex gap-2 items-center">
+                                                                <span className={`font-bold text-sm ${item.status === 'cancelled' ? 'line-through text-muted-foreground' : ''}`}>{item.product_name || "Unknown Product"}</span>
+                                                                {item.status === 'cancelled' && <Badge variant="destructive" className="h-4 px-1 pb-0 scale-90">Cancelled</Badge>}
+                                                            </div>
+                                                            <span className="text-xs text-muted-foreground capitalize">{item.product_category?.replace("_", " ")}</span>
                                                         </div>
-                                                        <span className="text-xs text-muted-foreground capitalize">{item.product_category?.replace("_", " ")}</span>
-                                                    </div>
-                                                </TableCell>
-                                                <TableCell className="text-right py-2 font-medium">
-                                                    {Number(item.ordered_quantity).toLocaleString()} {item.unit_type === 'liter' ? 'L' : 'U'}
-                                                </TableCell>
-                                                <TableCell className="text-right py-2 font-bold text-green-600">
-                                                    {Number(item.delivered_quantity || 0).toLocaleString()} {item.unit_type === 'liter' ? 'L' : 'U'}
-                                                </TableCell>
-                                                <TableCell className="text-right py-2 font-medium text-slate-600">
-                                                    {formatCurrency(item.rate_per_liter)}
-                                                </TableCell>
-                                                <TableCell className="text-right py-2 font-mono font-bold text-slate-800">
-                                                    {formatCurrency(item.total_amount)}
-                                                </TableCell>
-                                                <TableCell className="py-2 text-right">
-                                                    {po.status === 'pending' && item.status !== 'cancelled' && (
-                                                        <Tooltip>
-                                                            <TooltipTrigger asChild>
-                                                                <button
-                                                                    disabled={cancellingItem === item.product_id}
-                                                                    onClick={() => setItemToDelete({ id: item.product_id, name: item.product_name })}
-                                                                    className="text-destructive hover:bg-destructive/10 p-1 rounded-md transition-colors"
-                                                                >
-                                                                    {cancellingItem === item.product_id ? <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" /> : <Trash2 className="h-4 w-4" />}
-                                                                </button>
-                                                            </TooltipTrigger>
-                                                            <TooltipContent>Cancel this Item</TooltipContent>
-                                                        </Tooltip>
-                                                    )}
-                                                </TableCell>
-                                            </TableRow>
-                                        )) : (
+                                                    </TableCell>
+                                                    <TableCell className="text-right py-2 font-medium">
+                                                        {Number(item.ordered_quantity).toLocaleString()} {item.unit_type === 'liter' ? 'L' : 'U'}
+                                                    </TableCell>
+                                                    <TableCell className="text-right py-2 font-bold text-green-600">
+                                                        {Number(item.delivered_quantity || 0).toLocaleString()} {item.unit_type === 'liter' ? 'L' : 'U'}
+                                                    </TableCell>
+                                                    <TableCell className="text-right py-2 text-xs text-muted-foreground whitespace-nowrap">
+                                                        {itemDelivery ? format(new Date(itemDelivery.delivery_date), "dd/MM/yy") : "-"}
+                                                    </TableCell>
+                                                    <TableCell className="text-right py-2 font-medium text-slate-600">
+                                                        {item.rate_per_liter ? formatCurrency(item.rate_per_liter) : "-"}
+                                                    </TableCell>
+                                                    <TableCell className="text-right py-2 font-mono font-bold text-slate-800">
+                                                        {formatCurrency(item.total_amount)}
+                                                    </TableCell>
+                                                    <TableCell className="py-2 text-right">
+                                                        {po.status === 'pending' && item.status !== 'cancelled' && (
+                                                            <Tooltip>
+                                                                <TooltipTrigger asChild>
+                                                                    <button
+                                                                        disabled={cancellingItem === item.product_id}
+                                                                        onClick={() => setItemToDelete({ id: item.product_id, name: item.product_name })}
+                                                                        className="text-destructive hover:bg-destructive/10 p-1 rounded-md transition-colors"
+                                                                    >
+                                                                        {cancellingItem === item.product_id ? <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" /> : <Trash2 className="h-4 w-4" />}
+                                                                    </button>
+                                                                </TooltipTrigger>
+                                                                <TooltipContent>Cancel this Item</TooltipContent>
+                                                            </Tooltip>
+                                                        )}
+                                                    </TableCell>
+                                                </TableRow>
+                                            )
+                                        }) : (
                                             <TableRow>
-                                                <TableCell className="py-2">
-                                                    <span className="font-bold text-sm">{po.products?.name || "Product"}</span>
-                                                    <Badge variant="outline" className="ml-2 text-[10px]">{po.product_type}</Badge>
+                                                <TableCell colSpan={7} className="text-center py-6 text-muted-foreground">
+                                                    No items recorded in this transaction.
                                                 </TableCell>
-                                                <TableCell className="text-right py-2 font-medium">
-                                                    {Number(po.ordered_quantity).toLocaleString()} {po.unit_type === 'liter' ? 'L' : 'U'}
-                                                </TableCell>
-                                                <TableCell className="text-right py-2 font-bold text-green-600">
-                                                    {Number(po.delivered_quantity || 0).toLocaleString()} {po.unit_type === 'liter' ? 'L' : 'U'}
-                                                </TableCell>
-                                                <TableCell className="text-right py-2 font-medium text-slate-600">
-                                                    -
-                                                </TableCell>
-                                                <TableCell className="text-right py-2 font-mono font-bold text-slate-800">
-                                                    {formatCurrency(po.estimated_total)}
-                                                </TableCell>
-                                                <TableCell></TableCell>
                                             </TableRow>
                                         )}
                                         <TableRow className="bg-slate-50 hover:bg-slate-50">

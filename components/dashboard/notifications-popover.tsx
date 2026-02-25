@@ -31,6 +31,7 @@ import {
 } from "@/app/actions/balance-movement"
 import { markHoldAsReceived } from "@/app/actions/purchase-orders"
 import { toast } from "sonner"
+import { getTodayPKT } from "@/lib/utils"
 
 type NotificationItem = {
     id: string
@@ -123,7 +124,7 @@ export function NotificationsPopover() {
                             title: "Low Stock Alert",
                             message: `${p.product_name} is running low (${p.current_stock} ${p.unit}).`,
                             type: "warning",
-                            timestamp: new Date().toISOString(), // Live
+                            timestamp: getTodayPKT(), // Live
                             read: false, // Always unread if low
                             source: "stock",
                             link: "/dashboard/inventory"
@@ -189,7 +190,7 @@ export function NotificationsPopover() {
                             suppliers(name)
                         )
                     `)
-                    .lte('trigger_date', new Date().toISOString().split('T')[0])
+                    .lte('trigger_date', getTodayPKT())
                     .eq('status', 'pending')
 
                 if (salesHoldNotifs) {
@@ -227,7 +228,7 @@ export function NotificationsPopover() {
                             title: "Payment Due",
                             message: `Outstanding balance of Rs. ${s.balance} for ${s.supplier_name}.`,
                             type: "warning",
-                            timestamp: new Date().toISOString(),
+                            timestamp: getTodayPKT(),
                             read: false,
                             source: "supplier",
                             link: "/dashboard/suppliers"

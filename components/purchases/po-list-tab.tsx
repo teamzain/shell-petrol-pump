@@ -5,8 +5,8 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Search, Eye, Truck, XCircle, Filter, Calendar, Package } from "lucide-react"
-import { getPurchaseOrders, cancelPurchaseOrder, updatePurchaseOrderDate } from "@/app/actions/purchase-orders"
+import { Search, Eye, Truck, XCircle, Filter, Calendar, Package, Trash2 } from "lucide-react"
+import { getPurchaseOrders, cancelPurchaseOrder, updatePurchaseOrderDate, cancelPurchaseOrderItem } from "@/app/actions/purchase-orders"
 import { toast } from "sonner"
 import { BrandLoader } from "@/components/ui/brand-loader"
 import { PODetailModal } from "./po-detail-modal"
@@ -16,9 +16,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 
 interface POListTabProps {
     onCreateDelivery: (po: any) => void
+    dateFilters?: { from: string; to: string }
 }
 
-export function POListTab({ onCreateDelivery }: POListTabProps) {
+export function POListTab({ onCreateDelivery, dateFilters }: POListTabProps) {
     const [pos, setPos] = useState<any[]>([])
     const [loading, setLoading] = useState(true)
     const [searchQuery, setSearchQuery] = useState("")
@@ -31,7 +32,9 @@ export function POListTab({ onCreateDelivery }: POListTabProps) {
         setLoading(true)
         try {
             const data = await getPurchaseOrders({
-                status: statusFilter === 'all' ? undefined : statusFilter
+                status: statusFilter === 'all' ? undefined : statusFilter,
+                date_from: dateFilters?.from,
+                date_to: dateFilters?.to
             })
             setPos(data || [])
         } catch (error) {
@@ -43,7 +46,7 @@ export function POListTab({ onCreateDelivery }: POListTabProps) {
 
     useEffect(() => {
         fetchPOs()
-    }, [statusFilter])
+    }, [statusFilter, dateFilters])
 
     const filteredPOs = pos.filter(po =>
         po.po_number?.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -72,6 +75,17 @@ export function POListTab({ onCreateDelivery }: POListTabProps) {
         try {
             await cancelPurchaseOrder(id)
             toast.success("PO cancelled")
+            fetchPOs()
+        } catch (error: any) {
+            toast.error(error.message)
+        }
+    }
+
+    const handleCancelItem = async (poId: string, productId: string) => {
+        if (!confirm("Are you sure you want to cancel this item?")) return
+        try {
+            await cancelPurchaseOrderItem(poId, productId)
+            toast.success("Item cancelled")
             fetchPOs()
         } catch (error: any) {
             toast.error(error.message)
@@ -113,12 +127,15 @@ export function POListTab({ onCreateDelivery }: POListTabProps) {
 
         const statuses = items.map((i: any) => i.status || 'pending')
         const allPending = statuses.every((s: string) => s === 'pending')
-        const allDelivered = statuses.every((s: string) => s === 'delivered' || s === 'received')
+        const allDone = statuses.every((s: string) => s === 'delivered' || s === 'received' || s === 'cancelled')
         const anyRescheduled = statuses.some((s: string) => s === 'rescheduled' || s === 'scheduled')
 
-        if (allDelivered) return 'delivered'
+        if (allDone) {
+            // If everything is cancelled, it's cancelled, otherwise it's delivered
+            return statuses.every((s: string) => s === 'cancelled') ? 'cancelled' : 'delivered'
+        }
         if (anyRescheduled) return 'rescheduled'
-        if (!allPending && !allDelivered) return 'partial'
+        if (!allPending) return 'partial'
 
         return 'pending'
     }
@@ -193,7 +210,7 @@ export function POListTab({ onCreateDelivery }: POListTabProps) {
                             return true;
                         });
 
-                        const hasPendingItems = items.some((i: any) => i.status !== 'delivered' && i.status !== 'received');
+                        const hasPendingItems = items.some((i: any) => i.status !== 'delivered' && i.status !== 'received' && i.status !== 'cancelled');
                         if ((statusFilter === 'pending' || statusFilter === 'partial') && !hasPendingItems) return null;
 
                         return (
@@ -272,12 +289,23 @@ export function POListTab({ onCreateDelivery }: POListTabProps) {
                                                                     <Button
                                                                         variant="ghost"
                                                                         size="icon"
-                                                                        className="h-8 w-8 rounded-full hover:bg-slate-200 text-slate-500 shrink-0"
+                                                                        className="h-8 w-8 rounded-full hover:bg-slate-200 text-slate-500 shrink-0 text-nowrap"
                                                                         title="Reschedule Item Delivery"
                                                                         onClick={() => setRescheduleData({ poId: po.id, itemIdx: item._idx, poNum: po.po_number, date: item.expected_delivery_date || po.expected_delivery_date })}
                                                                         disabled={item.status === 'delivered' || po.status === 'cancelled' || item.status === 'received'}
                                                                     >
                                                                         <Calendar className="h-4 w-4" />
+                                                                    </Button>
+
+                                                                    <Button
+                                                                        variant="ghost"
+                                                                        size="icon"
+                                                                        className="h-8 w-8 rounded-full hover:bg-red-50 text-red-500 shrink-0"
+                                                                        title="Cancel Item"
+                                                                        onClick={() => handleCancelItem(po.id, item.product_id)}
+                                                                        disabled={item.status === 'delivered' || po.status === 'cancelled' || item.status === 'received'}
+                                                                    >
+                                                                        <Trash2 className="h-4 w-4" />
                                                                     </Button>
                                                                 </div>
                                                             </TableCell>

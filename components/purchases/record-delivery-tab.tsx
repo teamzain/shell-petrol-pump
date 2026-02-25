@@ -38,6 +38,7 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog"
 import { HoldAmountPopup } from "./hold-amount-popup"
+import { getTodayPKT } from "@/lib/utils"
 
 const deliverySchema = z.object({
     purchase_order_id: z.string().min(1, "Purchase Order is required"),
@@ -72,7 +73,7 @@ export function RecordDeliveryTab({ initialPO, onSuccess }: RecordDeliveryTabPro
             item_index: 0,
             delivered_quantity: 0,
             rate_per_liter: 0,
-            delivery_date: new Date().toISOString().split('T')[0],
+            delivery_date: getTodayPKT(),
             company_invoice_number: "",
             vehicle_number: "",
             driver_name: "",

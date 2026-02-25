@@ -1,6 +1,7 @@
 "use server"
 
 import { createClient } from "@/lib/supabase/server"
+import { getTodayPKT, getTomorrowPKT } from "@/lib/utils"
 
 export async function getBalanceMovement(filters?: {
     date_from?: string;
@@ -104,7 +105,7 @@ export async function getPendingNotifications() {
         .select("*")
         .eq("is_read", false)
         .eq("reference_type", "purchase_order")
-        .lte("scheduled_for", new Date().toISOString().split('T')[0])
+        .lte("scheduled_for", getTodayPKT())
 
     if (error) throw error
     if (!notifications || notifications.length === 0) return []
@@ -142,7 +143,7 @@ export async function snoozeNotification(id: string) {
     tomorrow.setDate(tomorrow.getDate() + 1)
 
     const { error } = await supabase.from("notifications")
-        .update({ scheduled_for: tomorrow.toISOString().split('T')[0] })
+        .update({ scheduled_for: getTomorrowPKT() })
         .eq("id", id)
 
     if (error) throw error
@@ -166,7 +167,7 @@ export async function getPOHoldNotifications() {
             )
         `)
         .in("status", ["pending", "snoozed"])
-        .lte("trigger_date", new Date().toISOString().split('T')[0])
+        .lte("trigger_date", getTodayPKT())
         .order("trigger_date", { ascending: true })
 
     if (error) throw error
@@ -182,7 +183,7 @@ export async function snoozePOHoldNotification(id: string) {
     const { error } = await supabase.from("po_notifications")
         .update({
             status: 'snoozed',
-            trigger_date: tomorrow.toISOString().split('T')[0]
+            trigger_date: getTomorrowPKT()
         })
         .eq("id", id)
 
@@ -192,7 +193,7 @@ export async function snoozePOHoldNotification(id: string) {
     const { data: notif } = await supabase.from("po_notifications").select("related_hold_id").eq("id", id).single()
     if (notif?.related_hold_id) {
         await supabase.from("po_hold_records")
-            .update({ expected_return_date: tomorrow.toISOString().split('T')[0] })
+            .update({ expected_return_date: getTomorrowPKT() })
             .eq("id", notif.related_hold_id)
     }
 

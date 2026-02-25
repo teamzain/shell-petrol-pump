@@ -22,6 +22,10 @@ import { HoldAlerts } from "@/components/dashboard/hold-alerts"
 import { getPurchaseSummary } from "@/app/actions/purchase-orders"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { ActiveHoldsTab } from "@/components/purchases/active-holds-tab"
+import { getTodayPKT } from "@/lib/utils"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Calendar as CalendarIcon, Filter as FilterIcon } from "lucide-react"
 
 export default function PurchasesPage() {
   const [activeTab, setActiveTab] = useState("po")
@@ -30,20 +34,30 @@ export default function PurchasesPage() {
     totalOrders: 0,
     totalValue: 0,
     totalPaid: 0,
-    totalDue: 0
+    totalDue: 0,
+    totalOnHold: 0,
+    totalReleased: 0
+  })
+
+  const [dateRange, setDateRange] = useState({
+    from: getTodayPKT(),
+    to: getTodayPKT()
   })
 
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        const data = await getPurchaseSummary()
+        const data = await getPurchaseSummary({
+          date_from: dateRange.from,
+          date_to: dateRange.to
+        })
         setStats(data)
       } catch (error) {
         console.error("Failed to fetch purchase stats:", error)
       }
     }
     fetchStats()
-  }, [activeTab]) // Refresh when tabs change
+  }, [activeTab, dateRange]) // Refresh when tabs or dates change
 
   const handleRecordDelivery = (po: any) => {
     setSelectedPOForDelivery(po)
@@ -65,6 +79,36 @@ export default function PurchasesPage() {
           >
             <Plus className="mr-2 h-4 w-4" /> CREATE PO
           </Button>
+        </div>
+
+        {/* Global Date Filter */}
+        <div className="flex flex-col sm:flex-row items-end gap-3 bg-white p-4 rounded-xl border shadow-sm">
+          <div className="flex flex-col gap-1.5 w-full sm:w-auto">
+            <Label className="text-[10px] uppercase font-black text-slate-500 flex items-center gap-1.5 ml-1">
+              <CalendarIcon className="h-3 w-3 text-primary" /> From Date
+            </Label>
+            <Input
+              type="date"
+              value={dateRange.from}
+              onChange={(e) => setDateRange(prev => ({ ...prev, from: e.target.value }))}
+              className="h-10 rounded-lg border-slate-200 font-bold text-sm w-full sm:w-44 focus:ring-primary/20"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5 w-full sm:w-auto">
+            <Label className="text-[10px] uppercase font-black text-slate-500 flex items-center gap-1.5 ml-1">
+              <FilterIcon className="h-3 w-3 text-primary" /> To Date
+            </Label>
+            <Input
+              type="date"
+              value={dateRange.to}
+              onChange={(e) => setDateRange(prev => ({ ...prev, to: e.target.value }))}
+              className="h-10 rounded-lg border-slate-200 font-bold text-sm w-full sm:w-44 focus:ring-primary/20"
+            />
+          </div>
+          <div className="hidden sm:block h-10 w-px bg-slate-100 mx-2"></div>
+          <div className="flex-1 text-right hidden sm:block">
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest italic">Filtering all records & summaries</p>
+          </div>
         </div>
 
         {/* Summary Cards */}
@@ -112,6 +156,28 @@ export default function PurchasesPage() {
               <p className="text-[10px] text-muted-foreground uppercase font-bold mt-1">Liability for pending orders</p>
             </CardContent>
           </Card>
+
+          <Card className="border-l-4 border-l-amber-500 bg-amber-50/10">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-[10px] font-black uppercase tracking-widest text-amber-700">Pending Holds</CardTitle>
+              <AlertCircle className="h-4 w-4 text-amber-500" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-black text-amber-600">Rs. {stats.totalOnHold.toLocaleString()}</div>
+              <p className="text-[10px] text-amber-700/70 uppercase font-bold mt-1">Sum of all missing items</p>
+            </CardContent>
+          </Card>
+
+          <Card className="border-l-4 border-l-emerald-600 bg-emerald-50/10">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Received Post-Hold</CardTitle>
+              <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-black text-emerald-600">Rs. {stats.totalReleased.toLocaleString()}</div>
+              <p className="text-[10px] text-emerald-700/70 uppercase font-bold mt-1">Returned by supplier</p>
+            </CardContent>
+          </Card>
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
@@ -149,7 +215,7 @@ export default function PurchasesPage() {
           </TabsList>
 
           <TabsContent value="po" className="mt-0 focus-visible:outline-none">
-            <POListTab onCreateDelivery={handleRecordDelivery} />
+            <POListTab onCreateDelivery={handleRecordDelivery} dateFilters={dateRange} />
           </TabsContent>
 
           <TabsContent value="create" className="mt-0 focus-visible:outline-none">
@@ -167,11 +233,11 @@ export default function PurchasesPage() {
           </TabsContent>
 
           <TabsContent value="history" className="mt-0 focus-visible:outline-none">
-            <DeliveryHistoryTab />
+            <DeliveryHistoryTab dateFilters={dateRange} />
           </TabsContent>
 
           <TabsContent value="holds" className="mt-0 focus-visible:outline-none">
-            <ActiveHoldsTab />
+            <ActiveHoldsTab dateFilters={dateRange} />
           </TabsContent>
         </Tabs>
       </div>

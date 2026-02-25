@@ -277,35 +277,69 @@ export async function cancelPurchaseOrderItem(poId: string, itemId: string) {
     return { success: true, allCancelled }
 }
 
-export async function getPurchaseSummary() {
+export async function getPurchaseSummary(filters?: { date_from?: string; date_to?: string }) {
     const supabase = await createClient()
 
     // 1. Total Pending/Partial Orders
-    const { count: pendingCount } = await supabase
+    let poQuery = supabase
         .from("purchase_orders")
-        .select("*", { count: 'exact', head: true })
+        .select("items, status, ordered_quantity, delivered_quantity, rate_per_liter", { count: 'exact' })
         .in("status", ["pending", "partially_delivered"])
 
-    // 2. Committed Value (Total amount of pending/partial)
-    const { data: committedData } = await supabase
-        .from("purchase_orders")
-        .select("estimated_total")
-        .in("status", ["pending", "partially_delivered"])
+    if (filters?.date_from) poQuery = poQuery.gte("expected_delivery_date", filters.date_from)
+    if (filters?.date_to) poQuery = poQuery.lte("expected_delivery_date", filters.date_to)
 
-    const committedValue = committedData?.reduce((acc, po) => acc + Number(po.estimated_total), 0) || 0
+    const { data: committedData, count: pendingCount } = await poQuery
 
-    // 3. Total Settled (Sum of all deliveries)
-    const { data: settledData } = await supabase
+    // Calculate committed value as the sum of PENDING items only
+    const committedValue = committedData?.reduce((acc, po) => {
+        let poPending = 0
+        if (po.items && Array.isArray(po.items) && po.items.length > 0) {
+            po.items.forEach((item: any) => {
+                const isPending = !['delivered', 'received', 'cancelled'].includes(item.status)
+                if (isPending) {
+                    poPending += Number(item.total_amount || 0)
+                }
+            })
+        } else {
+            // Legacy PO handling
+            const remaining = Math.max(0, Number(po.ordered_quantity || 0) - Number(po.delivered_quantity || 0))
+            poPending = remaining * Number(po.rate_per_liter || 0)
+        }
+        return acc + poPending
+    }, 0) || 0
+
+    // 2. Total Settled (Sum of all deliveries)
+    let delQuery = supabase
         .from("deliveries")
         .select("total_amount")
 
+    if (filters?.date_from) delQuery = delQuery.gte("delivery_date", filters.date_from)
+    if (filters?.date_to) delQuery = delQuery.lte("delivery_date", filters.date_to)
+
+    const { data: settledData } = await delQuery
     const totalSettled = settledData?.reduce((acc, d) => acc + Number(d.total_amount), 0) || 0
+
+    // 3. New Specific Hold Stats
+    let holdQuery = supabase
+        .from("po_hold_records")
+        .select("hold_amount, status")
+
+    if (filters?.date_from) holdQuery = holdQuery.gte("created_at", filters.date_from)
+    if (filters?.date_to) holdQuery = holdQuery.lte("created_at", filters.date_to)
+
+    const { data: holdData } = await holdQuery
+
+    const totalOnHold = holdData?.filter(h => h.status === 'on_hold').reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
+    const totalReleased = holdData?.filter(h => h.status === 'released').reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
 
     return {
         totalOrders: pendingCount || 0,
         totalValue: committedValue,
         totalPaid: totalSettled,
-        totalDue: Math.max(0, committedValue - totalSettled) // Simplification for dashboard
+        totalDue: committedValue, // Outstanding is now exactly the committed pending value
+        totalOnHold,
+        totalReleased
     }
 }
 
@@ -333,7 +367,10 @@ export async function getPurchaseOrderDetail(poId: string) {
                 company_invoice_number,
                 vehicle_number,
                 driver_name,
-                notes
+                notes,
+                po_item_index,
+                delivered_quantity,
+                delivered_amount
             ),
             po_hold_records (
                 id,
@@ -401,13 +438,14 @@ export async function setPOHoldExpectedDate(holdRecordId: string, poId: string, 
     return { success: true }
 }
 
-export async function getAllHolds() {
+export async function getAllHolds(filters?: { date_from?: string; date_to?: string }) {
     const supabase = await createClient()
 
-    const { data, error } = await supabase
+    let query = supabase
         .from("po_hold_records")
         .select(`
             id,
+            delivery_id,
             hold_amount,
             hold_quantity,
             expected_return_date,
@@ -415,13 +453,20 @@ export async function getAllHolds() {
             product_id,
             product_name,
             status,
+            created_at,
             purchase_orders (
                 id,
                 po_number,
+                created_at,
                 suppliers ( name )
             )
         `)
         .order("created_at", { ascending: false })
+
+    if (filters?.date_from) query = query.gte("created_at", filters.date_from)
+    if (filters?.date_to) query = query.lte("created_at", filters.date_to)
+
+    const { data, error } = await query
 
     if (error) throw error
     return data

@@ -13,29 +13,34 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { AlertCircle, Clock, CheckCircle2, Eye } from "lucide-react"
+import { AlertCircle, Clock, CheckCircle2, Eye, Search } from "lucide-react"
+import { Input } from "@/components/ui/input"
 import { getAllHolds, markHoldAsReceived } from "@/app/actions/purchase-orders"
 import { toast } from "sonner"
 import { differenceInDays, isPast, isToday, format } from "date-fns"
 import { BrandLoader } from "@/components/ui/brand-loader"
 import { PODetailModal } from "./po-detail-modal"
 
-export function ActiveHoldsTab() {
+export function ActiveHoldsTab({ dateFilters }: { dateFilters?: { from: string; to: string } }) {
     const [holds, setHolds] = useState<any[]>([])
     const [loading, setLoading] = useState(true)
     const [processingId, setProcessingId] = useState<string | null>(null)
     const [filterTab, setFilterTab] = useState("all") // all, pending, released
+    const [searchQuery, setSearchQuery] = useState("")
     const [selectedPO, setSelectedPO] = useState<string | null>(null)
     const [selectedDelivery, setSelectedDelivery] = useState<string | null>(null)
 
     useEffect(() => {
         loadHolds()
-    }, [])
+    }, [dateFilters])
 
     const loadHolds = async () => {
         setLoading(true)
         try {
-            const data = await getAllHolds()
+            const data = await getAllHolds({
+                date_from: dateFilters?.from,
+                date_to: dateFilters?.to
+            })
             setHolds(data || [])
         } catch (error) {
             console.error("Failed to load holds:", error)
@@ -74,9 +79,16 @@ export function ActiveHoldsTab() {
     const formatCurrency = (val: number) => `PKR ${Number(val).toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
     const filteredHolds = holds.filter(h => {
-        if (filterTab === 'pending') return h.status === 'on_hold'
-        if (filterTab === 'released') return h.status === 'released'
-        return true
+        // Tab filtering
+        if (filterTab === 'pending' && h.status !== 'on_hold') return false
+        if (filterTab === 'released' && h.status !== 'released') return false
+
+        // Search filtering
+        const poNum = h.purchase_orders?.po_number?.toLowerCase() || ""
+        const supplier = h.purchase_orders?.suppliers?.name?.toLowerCase() || ""
+        const query = searchQuery.toLowerCase()
+
+        return poNum.includes(query) || supplier.includes(query)
     })
 
     const pendingTotal = holds.filter(h => h.status === 'on_hold').reduce((sum, h) => sum + Number(h.hold_amount), 0)
@@ -102,13 +114,25 @@ export function ActiveHoldsTab() {
                     </p>
                 </div>
 
-                <Tabs value={filterTab} onValueChange={setFilterTab} className="w-full sm:w-auto">
-                    <TabsList className="grid w-full grid-cols-3 sm:w-80 h-10">
-                        <TabsTrigger value="all" className="font-bold text-[10px] uppercase tracking-wider">All Holds</TabsTrigger>
-                        <TabsTrigger value="pending" className="font-bold text-[10px] uppercase tracking-wider text-amber-700 data-[state=active]:bg-amber-100 data-[state=active]:text-amber-800 border-amber-200">Pending</TabsTrigger>
-                        <TabsTrigger value="released" className="font-bold text-[10px] uppercase tracking-wider text-emerald-700 data-[state=active]:bg-emerald-100 data-[state=active]:text-emerald-800 border-emerald-200">Resolved</TabsTrigger>
-                    </TabsList>
-                </Tabs>
+                <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
+                    <div className="relative w-full sm:w-64">
+                        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                            placeholder="Search PO# or Supplier..."
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            className="pl-9 h-10 rounded-lg border-slate-200"
+                        />
+                    </div>
+
+                    <Tabs value={filterTab} onValueChange={setFilterTab} className="w-full sm:w-auto">
+                        <TabsList className="grid w-full grid-cols-3 sm:w-64 h-10">
+                            <TabsTrigger value="all" className="font-bold text-[10px] uppercase tracking-wider">All</TabsTrigger>
+                            <TabsTrigger value="pending" className="font-bold text-[10px] uppercase tracking-wider text-amber-700 data-[state=active]:bg-amber-100 data-[state=active]:text-amber-800">Pending</TabsTrigger>
+                            <TabsTrigger value="released" className="font-bold text-[10px] uppercase tracking-wider text-emerald-700 data-[state=active]:bg-emerald-100 data-[state=active]:text-emerald-800">Received</TabsTrigger>
+                        </TabsList>
+                    </Tabs>
+                </div>
             </div>
 
             <Card className="border-slate-200 shadow-sm overflow-hidden">
@@ -117,8 +141,8 @@ export function ActiveHoldsTab() {
                         <TableHeader className="bg-slate-50 border-b">
                             <TableRow>
                                 <TableHead className="font-black text-[10px] uppercase tracking-widest">PO Number</TableHead>
+                                <TableHead className="font-black text-[10px] uppercase tracking-widest">Order Date</TableHead>
                                 <TableHead className="font-black text-[10px] uppercase tracking-widest">Supplier</TableHead>
-                                <TableHead className="font-black text-[10px] uppercase tracking-widest">Product / Missing Qty</TableHead>
                                 <TableHead className="font-black text-[10px] uppercase tracking-widest text-right">Hold Amount</TableHead>
                                 <TableHead className="font-black text-[10px] uppercase tracking-widest text-center">Urgency / Status</TableHead>
                                 <TableHead className="font-black text-[10px] uppercase tracking-widest text-right">Action</TableHead>
@@ -142,18 +166,11 @@ export function ActiveHoldsTab() {
                                             <TableCell className="font-mono text-xs font-bold text-slate-700">
                                                 {po.po_number || "-"}
                                             </TableCell>
+                                            <TableCell className="text-xs text-slate-500 font-medium">
+                                                {po.created_at ? format(new Date(po.created_at), 'dd MMM yyyy') : "-"}
+                                            </TableCell>
                                             <TableCell className="font-semibold text-sm">
                                                 {po.suppliers?.name || "-"}
-                                            </TableCell>
-                                            <TableCell>
-                                                <div className="flex flex-col gap-1">
-                                                    <span className="text-xs font-bold bg-slate-100 px-2 py-0.5 rounded-md w-fit whitespace-nowrap overflow-hidden text-ellipsis max-w-[150px]">
-                                                        {hold.product_name || hold.product_type || "Unknown Product"}
-                                                    </span>
-                                                    <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">
-                                                        {hold.hold_quantity} Units Missing
-                                                    </span>
-                                                </div>
                                             </TableCell>
                                             <TableCell className="text-right font-black font-mono text-amber-700">
                                                 {formatCurrency(hold.hold_amount)}
@@ -165,11 +182,11 @@ export function ActiveHoldsTab() {
                                                     ) : (
                                                         <Clock className="w-3 h-3 mr-1 inline-block" />
                                                     )}
-                                                    {urgency.text}
+                                                    {isResolved ? "Received" : urgency.text}
                                                 </Badge>
                                                 {isResolved && hold.actual_return_date && (
-                                                    <div className="text-[9px] text-emerald-600/70 mt-1 font-mono">
-                                                        {format(new Date(hold.actual_return_date), 'dd MMM yyyy')}
+                                                    <div className="text-[9px] text-emerald-600/70 mt-1 font-mono uppercase tracking-tighter">
+                                                        Received: {format(new Date(hold.actual_return_date), 'dd MMM yyyy')}
                                                     </div>
                                                 )}
                                             </TableCell>
@@ -189,7 +206,7 @@ export function ActiveHoldsTab() {
 
                                                     {isResolved ? (
                                                         <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-200 border-none font-black text-[10px] uppercase h-8 px-3">
-                                                            Settled
+                                                            Received
                                                         </Badge>
                                                     ) : (
                                                         <Button
@@ -203,7 +220,7 @@ export function ActiveHoldsTab() {
                                                             ) : (
                                                                 <>
                                                                     <CheckCircle2 className="h-3 w-3 mr-1.5" />
-                                                                    Resolve
+                                                                    Mark As Read
                                                                 </>
                                                             )}
                                                         </Button>

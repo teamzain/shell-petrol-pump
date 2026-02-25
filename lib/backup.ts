@@ -1,4 +1,5 @@
 import { createClient } from "./supabase/client"
+import { getTodayPKT } from "./utils"
 
 export async function exportAllData() {
     const supabase = createClient()
@@ -25,7 +26,7 @@ export async function exportAllData() {
 
     try {
         const backupData: Record<string, any> = {
-            backup_date: new Date().toISOString(),
+            backup_date: getTodayPKT(),
             version: "1.0",
             data: {}
         }
@@ -52,7 +53,7 @@ export async function exportAllData() {
 
         const link = document.createElement("a")
         link.href = url
-        link.download = `petrol-pump-backup-${new Date().toISOString().split('T')[0]}.json`
+        link.download = `petrol-pump-backup-${getTodayPKT()}.json`
         document.body.appendChild(link)
         link.click()
         document.body.removeChild(link)

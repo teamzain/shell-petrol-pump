@@ -9,6 +9,7 @@ import { AlertCircle, CalendarIcon, Save } from "lucide-react"
 import { setPOHoldExpectedDate } from "@/app/actions/purchase-orders"
 import { toast } from "sonner"
 import { format } from "date-fns"
+import { getTodayPKT } from "@/lib/utils"
 
 interface HoldAmountPopupProps {
     open: boolean
@@ -93,7 +94,7 @@ export function HoldAmountPopup({
                             <Input
                                 id="expected-date"
                                 type="date"
-                                min={new Date().toISOString().split('T')[0]} // Today or future only
+                                min={getTodayPKT()} // Today or future only
                                 className="pl-9"
                                 value={expectedDate}
                                 onChange={(e) => setExpectedDate(e.target.value)}

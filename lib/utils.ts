@@ -18,3 +18,12 @@ export function getTodayPKT(): string {
   // This uses the built-in Intl API which is standard in Node.js and Browsers
   return now.toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' })
 }
+/**
+ * Returns tomorrow's date in Pakistan Standard Time (PKT) as YYYY-MM-DD.
+ */
+export function getTomorrowPKT(): string {
+  const now = new Date()
+  const tomorrow = new Date(now)
+  tomorrow.setDate(tomorrow.getDate() + 1)
+  return tomorrow.toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' })
+}

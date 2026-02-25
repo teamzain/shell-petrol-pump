@@ -24,7 +24,7 @@ import { toast } from "sonner"
 import { BrandLoader } from "@/components/ui/brand-loader"
 import { PODetailModal } from "./po-detail-modal"
 
-export function DeliveryHistoryTab() {
+export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: string; to: string } }) {
     const [deliveries, setDeliveries] = useState<any[]>([])
     const [loading, setLoading] = useState(true)
     const [searchQuery, setSearchQuery] = useState("")
@@ -35,7 +35,10 @@ export function DeliveryHistoryTab() {
     const fetchDeliveries = async () => {
         setLoading(true)
         try {
-            const data = await getDeliveries()
+            const data = await getDeliveries({
+                date_from: dateFilters?.from,
+                date_to: dateFilters?.to
+            })
             setDeliveries(data || [])
         } catch (error) {
             toast.error("Failed to fetch delivery history")
@@ -46,12 +49,50 @@ export function DeliveryHistoryTab() {
 
     useEffect(() => {
         fetchDeliveries()
-    }, [])
+    }, [dateFilters])
 
-    const filteredDeliveries = deliveries.filter(del =>
-        del.suppliers?.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    const groupedDeliveries = deliveries.reduce((acc: any, del: any) => {
+        const key = `${del.purchase_order_id}-${del.company_invoice_number || 'no-invoice'}`
+
+        // Handle case where purchase_orders might be an array or object depending on join behavior
+        const poData = Array.isArray(del.purchase_orders) ? del.purchase_orders[0] : del.purchase_orders;
+
+        if (!acc[key]) {
+            acc[key] = {
+                id: del.id,
+                purchase_order_id: del.purchase_order_id,
+                company_invoice_number: del.company_invoice_number,
+                po_number: poData?.po_number,
+                supplier_name: del.suppliers?.name,
+                order_date: poData?.created_at,
+                receiving_date: del.delivery_date,
+                total_order_value: poData?.estimated_total || 0,
+                debited_value: 0,
+                hold_value: 0,
+                release_value: 0,
+            }
+        }
+        acc[key].debited_value += Number(del.delivered_amount || 0)
+        acc[key].hold_value += Number(del.hold_amount || 0)
+
+        // Sum release values from hold records (if any)
+        if (del.po_hold_records) {
+            const hRecords = Array.isArray(del.po_hold_records) ? del.po_hold_records : [del.po_hold_records];
+            hRecords.forEach((hr: any) => {
+                if (hr.status === 'released') {
+                    acc[key].release_value += Number(hr.hold_amount || 0)
+                }
+            })
+        }
+        return acc
+    }, {})
+
+    const deliveryList = Object.values(groupedDeliveries)
+
+    const filteredDeliveries = deliveryList.filter((del: any) =>
+        del.supplier_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
         del.company_invoice_number?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        del.purchase_orders?.po_number.toLowerCase().includes(searchQuery.toLowerCase())
+        del.po_number?.toLowerCase().includes(searchQuery.toLowerCase())
     )
 
     return (
@@ -60,7 +101,7 @@ export function DeliveryHistoryTab() {
                 <div className="relative flex-1 w-full">
                     <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
-                        placeholder="Search DEL#, Invoice#, or Supplier..."
+                        placeholder="Search Invoice#, PO#, or Supplier..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         className="pl-10"
@@ -76,21 +117,23 @@ export function DeliveryHistoryTab() {
             <div className="border rounded-lg bg-white overflow-hidden">
                 <Table>
                     <TableHeader>
-                        <TableRow className="bg-slate-50/50">
+                        <TableRow className="bg-slate-50/50 text-[10px]">
                             <TableHead className="font-bold">Invoice #</TableHead>
                             <TableHead className="font-bold">PO #</TableHead>
                             <TableHead className="font-bold">Supplier</TableHead>
-                            <TableHead className="font-bold">Product</TableHead>
-                            <TableHead className="font-bold text-right">Qty</TableHead>
-                            <TableHead className="font-bold text-right">Amount</TableHead>
-                            <TableHead className="font-bold text-center">Date</TableHead>
+                            <TableHead className="font-bold">Order Date</TableHead>
+                            <TableHead className="font-bold">Received Date</TableHead>
+                            <TableHead className="font-bold text-right text-slate-700">Order Value</TableHead>
+                            <TableHead className="font-bold text-right text-blue-700 font-black">Debited</TableHead>
+                            <TableHead className="font-bold text-right text-amber-700">Hold</TableHead>
+                            <TableHead className="font-bold text-right text-green-700">Released</TableHead>
                             <TableHead className="font-bold text-right">Actions</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
                         {loading ? (
                             <TableRow>
-                                <TableCell colSpan={9} className="h-48">
+                                <TableCell colSpan={10} className="h-48">
                                     <div className="flex items-center justify-center w-full h-full">
                                         <BrandLoader size="lg" />
                                     </div>
@@ -98,23 +141,33 @@ export function DeliveryHistoryTab() {
                             </TableRow>
                         ) : filteredDeliveries.length === 0 ? (
                             <TableRow>
-                                <TableCell colSpan={9} className="h-24 text-center text-muted-foreground">
+                                <TableCell colSpan={10} className="h-24 text-center text-muted-foreground">
                                     No delivery records found.
                                 </TableCell>
                             </TableRow>
                         ) : (
-                            filteredDeliveries.map((del) => (
-                                <TableRow key={del.id} className="hover:bg-slate-50/30">
-                                    <TableCell className="font-mono text-[10px] font-bold">{del.company_invoice_number}</TableCell>
-                                    <TableCell className="font-mono text-[10px] text-muted-foreground">{del.purchase_orders?.po_number}</TableCell>
-                                    <TableCell className="font-medium text-xs">{del.suppliers?.name}</TableCell>
-                                    <TableCell className="capitalize text-[10px] whitespace-nowrap overflow-hidden text-ellipsis max-w-[120px]" title={del.product_name || del.product_type}>
-                                        {del.product_name || del.product_type}
+                            filteredDeliveries.map((del: any) => (
+                                <TableRow key={`${del.purchase_order_id}-${del.company_invoice_number}`} className="hover:bg-slate-50/30">
+                                    <TableCell className="font-mono text-[10px] font-bold">{del.company_invoice_number || 'N/A'}</TableCell>
+                                    <TableCell className="font-mono text-[10px] text-muted-foreground">{del.po_number}</TableCell>
+                                    <TableCell className="font-medium text-[10px]">{del.supplier_name}</TableCell>
+                                    <TableCell className="text-[10px] whitespace-nowrap">
+                                        {del.order_date ? new Date(del.order_date).toLocaleDateString('en-PK') : '-'}
                                     </TableCell>
-                                    <TableCell className="text-right font-bold text-xs">{Number(del.delivered_quantity).toLocaleString()}</TableCell>
-                                    <TableCell className="text-right font-black text-primary text-xs">Rs. {Number(del.total_amount).toLocaleString()}</TableCell>
-                                    <TableCell className="text-center text-[10px] whitespace-nowrap">
-                                        {new Date(del.delivery_date).toLocaleDateString('en-PK')}
+                                    <TableCell className="text-[10px] whitespace-nowrap">
+                                        {del.receiving_date ? new Date(del.receiving_date).toLocaleDateString('en-PK') : '-'}
+                                    </TableCell>
+                                    <TableCell className="text-right font-bold text-xs text-slate-500">
+                                        Rs. {Number(del.total_order_value || 0).toLocaleString()}
+                                    </TableCell>
+                                    <TableCell className="text-right font-black text-blue-800 text-xs text-nowrap pl-4">
+                                        Rs. {Number(del.debited_value).toLocaleString()}
+                                    </TableCell>
+                                    <TableCell className="text-right font-bold text-amber-700 text-xs text-nowrap pl-4">
+                                        Rs. {Number(del.hold_value).toLocaleString()}
+                                    </TableCell>
+                                    <TableCell className="text-right font-bold text-green-700 text-xs text-nowrap pl-4">
+                                        {del.release_value > 0 ? `Rs. ${Number(del.release_value).toLocaleString()}` : '-'}
                                     </TableCell>
                                     <TableCell className="text-right">
                                         <Button
@@ -147,6 +200,6 @@ export function DeliveryHistoryTab() {
                 poId={selectedPO}
                 deliveryId={selectedDelivery || undefined}
             />
-        </div>
+        </div >
     )
 }

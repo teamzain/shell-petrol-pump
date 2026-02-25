@@ -32,6 +32,7 @@ import { getProducts } from "@/app/actions/products"
 import { createPurchaseOrder, getNextPONumber } from "@/app/actions/purchase-orders"
 import { AlertCircle, Plus, Trash2, ShoppingCart, RefreshCcw } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { getTodayPKT } from "@/lib/utils"
 
 const poSchema = z.object({
     po_number: z.string().min(1, "PO Number is required"),
@@ -63,8 +64,8 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
         defaultValues: {
             po_number: "",
             supplier_id: "",
-            order_date: new Date().toISOString().split('T')[0],
-            expected_delivery_date: new Date().toISOString().split('T')[0],
+            order_date: getTodayPKT(),
+            expected_delivery_date: getTodayPKT(),
             notes: "",
             products: [{ product_id: "", product_type: "fuel", unit_type: "liter", ordered_quantity: 0, rate_per_liter: 0 }]
         }
@@ -231,7 +232,7 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
                                                 <FormItem>
                                                     <FormLabel className="font-bold">Expected Delivery Date</FormLabel>
                                                     <FormControl>
-                                                        <Input type="date" className="h-12" {...field} min={new Date().toISOString().split('T')[0]} />
+                                                        <Input type="date" className="h-12" {...field} min={getTodayPKT()} />
                                                     </FormControl>
                                                     <FormMessage />
                                                 </FormItem>
