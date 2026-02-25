@@ -14,23 +14,22 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { createClient } from "@/lib/supabase/client"
 import { Fuel, AlertCircle } from "lucide-react"
 import { BrandLoader } from "../ui/brand-loader"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { upsertProduct } from "@/app/actions/products"
 
 interface FuelProductDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   product?: {
     id: string
-    product_name: string
+    name: string
     tank_capacity: number
     current_stock: number
+    min_stock_level: number
     purchase_price: number
-    weighted_avg_cost: number
     selling_price: number
-    status: string
   } | null
   onSuccess: () => void
 }
@@ -39,30 +38,33 @@ export function FuelProductDialog({ open, onOpenChange, product, onSuccess }: Fu
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
   const [formData, setFormData] = useState({
-    product_name: "",
+    name: "",
     tank_capacity: "",
     current_stock: "",
+    min_stock_level: "500",
     purchase_price: "",
     selling_price: "",
   })
 
-  const supabase = createClient()
+
   const isEditing = !!product
 
   useEffect(() => {
     if (product) {
       setFormData({
-        product_name: product.product_name,
-        tank_capacity: product.tank_capacity.toString(),
-        current_stock: product.current_stock.toString(),
-        purchase_price: product.purchase_price.toString(),
-        selling_price: product.selling_price.toString(),
+        name: product.name,
+        tank_capacity: (product.tank_capacity || 0).toString(),
+        current_stock: (product.current_stock || 0).toString(),
+        min_stock_level: (product.min_stock_level || 500).toString(),
+        purchase_price: (product.purchase_price || 0).toString(),
+        selling_price: (product.selling_price || 0).toString(),
       })
     } else {
       setFormData({
-        product_name: "",
+        name: "",
         tank_capacity: "",
         current_stock: "",
+        min_stock_level: "500",
         purchase_price: "",
         selling_price: "",
       })
@@ -78,6 +80,7 @@ export function FuelProductDialog({ open, onOpenChange, product, onSuccess }: Fu
     try {
       const tankCapacity = parseFloat(formData.tank_capacity)
       const currentStock = parseFloat(formData.current_stock)
+      const minStockLevel = parseFloat(formData.min_stock_level)
       const purchasePrice = parseFloat(formData.purchase_price)
       const sellingPrice = parseFloat(formData.selling_price)
 
@@ -90,61 +93,13 @@ export function FuelProductDialog({ open, onOpenChange, product, onSuccess }: Fu
         throw new Error("Selling price must be greater than purchase price")
       }
 
-      const productData = {
-        product_name: formData.product_name,
-        product_type: "fuel" as const,
-        unit: "liters",
-        tank_capacity: tankCapacity,
-        current_stock: currentStock,
-        purchase_price: purchasePrice,
-        weighted_avg_cost: purchasePrice, // Initial weighted avg equals purchase price
-        selling_price: sellingPrice,
-        stock_value: currentStock * purchasePrice,
-        status: "active",
+      const payload = {
+        ...formData,
+        type: "fuel",
+        category: "Fuel",
       }
 
-      if (isEditing && product) {
-        const { error: updateError } = await supabase
-          .from("products")
-          .update({
-            product_name: productData.product_name,
-            tank_capacity: productData.tank_capacity,
-            purchase_price: productData.purchase_price,
-            weighted_avg_cost: productData.weighted_avg_cost,
-            selling_price: productData.selling_price,
-            stock_value: productData.stock_value,
-          })
-          .eq("id", product.id)
-
-        if (updateError) throw updateError
-      } else {
-        const { error: insertError } = await supabase
-          .from("products")
-          .insert(productData)
-
-        if (insertError) throw insertError
-
-        // Record initial stock movement if there's opening stock
-        if (currentStock > 0) {
-          const { data: newProduct } = await supabase
-            .from("products")
-            .select("id")
-            .eq("product_name", formData.product_name)
-            .single()
-
-          if (newProduct) {
-            await supabase.from("stock_movements").insert({
-              product_id: newProduct.id,
-              movement_type: "initial",
-              quantity: currentStock,
-              unit_price: purchasePrice,
-              weighted_avg_after: purchasePrice,
-              balance_after: currentStock,
-              notes: "Initial opening stock",
-            })
-          }
-        }
-      }
+      await upsertProduct(payload, product?.id)
 
       onSuccess()
       onOpenChange(false)
@@ -182,11 +137,11 @@ export function FuelProductDialog({ open, onOpenChange, product, onSuccess }: Fu
 
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
-              <Label htmlFor="product_name">Product Name</Label>
+              <Label htmlFor="name">Product Name</Label>
               <Input
-                id="product_name"
-                value={formData.product_name}
-                onChange={(e) => setFormData({ ...formData, product_name: e.target.value })}
+                id="name"
+                value={formData.name}
+                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                 placeholder="e.g., Petrol, Diesel, Hi-Octane"
                 required
               />
@@ -221,6 +176,22 @@ export function FuelProductDialog({ open, onOpenChange, product, onSuccess }: Fu
                   placeholder="e.g., 5000"
                   required
                   disabled={isEditing}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="min_stock_level">Min Stock Alert (Liters)</Label>
+                <Input
+                  id="min_stock_level"
+                  type="number"
+                  step="0.001"
+                  min="0"
+                  value={formData.min_stock_level}
+                  onChange={(e) => setFormData({ ...formData, min_stock_level: e.target.value })}
+                  placeholder="e.g., 1000"
+                  required
                 />
               </div>
             </div>

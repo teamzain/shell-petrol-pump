@@ -60,14 +60,15 @@ interface BankAccount {
 
 interface Product {
   id: string
-  product_name: string
-  product_type: string
+  name: string
+  type: string
   current_stock: number
   purchase_price: number
   selling_price: number
   tank_capacity: number | null
   minimum_stock_level: number
   stock_value: number
+  unit?: string
 }
 
 interface DailyBalance {
@@ -156,7 +157,7 @@ export function PurchaseDialog({ open, onOpenChange, onSuccess }: PurchaseDialog
   }
 
   const fetchProducts = async () => {
-    const { data } = await supabase.from("products").select("*").eq("status", "active").eq("product_type", "fuel").order("product_name")
+    const { data } = await supabase.from("products").select("*").eq("status", "active").order("name")
     if (data) setProducts(data)
   }
 
@@ -249,77 +250,38 @@ export function PurchaseDialog({ open, onOpenChange, onSuccess }: PurchaseDialog
       const err = await validateOrder()
       if (err) throw new Error(err)
 
+      // Format items for JSONB storage
+      const itemsToStore = cart.map(item => ({
+        product_id: item.product.id,
+        product_name: item.product.name,
+        product_category: item.product.type || 'fuel',
+        ordered_quantity: item.quantity,
+        rate_per_liter: item.unitPrice,
+        unit_type: item.product.unit || 'liter',
+        total_amount: item.total,
+        delivered_quantity: 0,
+        status: "pending"
+      }));
+
       // 1. Create Purchase Order
       const { data: order, error: orderError } = await supabase.from("purchase_orders").insert({
-        purchase_date: formData.purchase_date,
+        po_number: formData.invoice_number.trim(),
         supplier_id: formData.supplier_id,
-        invoice_number: formData.invoice_number.trim(),
-        total_amount: orderTotal,
-        paid_amount: orderTotal,
-        due_amount: 0,
-        payment_method: 'prepaid',
-        bank_account_id: null,
-        status: formData.status,
-        notes: formData.notes
+        expected_delivery_date: formData.purchase_date,
+        estimated_total: orderTotal,
+        status: 'pending',
+        is_closed: false,
+        items: itemsToStore,
+        // Fill legacy columns for potential backward compatibility
+        product_id: cart[0].product.id,
+        product_category: cart[0].product.type || 'fuel',
+        product_type: cart[0].product.name,
+        ordered_quantity: cart.reduce((sum, item) => sum + item.quantity, 0),
+        rate_per_liter: cart[0].unitPrice,
+        unit_type: cart[0].product.unit || 'liter'
       }).select().single()
 
       if (orderError) throw orderError
-
-      // 2. Process Cart Items
-      for (const item of cart) {
-        // Insert Purchase Item
-        const { error: itemError } = await supabase.from("purchases").insert({
-          order_id: order.id,
-          purchase_date: formData.purchase_date,
-          supplier_id: formData.supplier_id,
-          product_id: item.product.id,
-          quantity: item.quantity,
-          purchase_price_per_unit: item.unitPrice,
-          total_amount: item.total,
-          payment_method: 'prepaid',
-          bank_account_id: null,
-        })
-
-        // Only update Product Stock & Price IF status is 'received'
-        if (formData.status === "received") {
-          const newStock = item.product.current_stock + item.quantity
-          const newValue = newStock * item.unitPrice
-
-          await supabase.from("products").update({
-            current_stock: newStock,
-            purchase_price: item.unitPrice,
-            weighted_avg_cost: item.unitPrice,
-            stock_value: newValue,
-            last_purchase_price: item.unitPrice,
-            last_purchase_date: formData.purchase_date
-          }).eq("id", item.product.id)
-        }
-
-        // Stock Movement is now handled by database trigger (trg_universal_stock_purchases)
-        // This prevents duplicate entries in the stock_movements table
-
-        // Price History
-        if (Math.abs(item.unitPrice - item.product.purchase_price) > 0.01) {
-          await supabase.from("price_history").insert({
-            product_id: item.product.id,
-            old_purchase_price: item.product.purchase_price,
-            new_purchase_price: item.unitPrice,
-            change_reason: `Purchase Price Update (Order: ${formData.status})`
-          })
-        }
-      }
-
-      // 3. Financial Impact is handled by database triggers based on status
-      // We only manually update supplier totals if the order is 'received'
-      if (formData.status === 'received' && formData.supplier_id) {
-        const { data: s } = await supabase.from("suppliers").select("total_purchases").eq("id", formData.supplier_id).single()
-        if (s) {
-          await supabase.from("suppliers").update({
-            total_purchases: (s.total_purchases || 0) + orderTotal,
-            last_purchase_date: formData.purchase_date
-          }).eq("id", formData.supplier_id)
-        }
-      }
 
       setSuccessData({ total: orderTotal, items: cart.length })
       setStep("success")
@@ -345,20 +307,20 @@ export function PurchaseDialog({ open, onOpenChange, onSuccess }: PurchaseDialog
         {step === "form" && (
           <>
             <DialogHeader>
-              <DialogTitle className="flex items-center gap-2 font-bold text-xl"><Fuel className="h-5 w-5 text-primary" /> New Fuel Purchase</DialogTitle>
+              <DialogTitle className="flex items-center gap-2 font-bold text-xl"><Package className="h-5 w-5 text-primary" /> Create Purchase Order</DialogTitle>
             </DialogHeader>
 
             <div className="grid gap-4 py-2">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 <div className="space-y-1">
-                  <Label className="text-[10px] uppercase font-bold text-muted-foreground ml-1">Date</Label>
+                  <Label className="text-[10px] uppercase font-bold text-muted-foreground ml-1">Expected Delivery Date</Label>
                   <Input type="date" className="h-9 rounded-lg" value={formData.purchase_date} onChange={(e) => setFormData({ ...formData, purchase_date: e.target.value })} />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-[10px] uppercase font-bold text-muted-foreground ml-1">Invoice #</Label>
-                  <Input value={formData.invoice_number} className="h-9 rounded-lg font-mono text-primary font-bold" onChange={(e) => setFormData({ ...formData, invoice_number: e.target.value })} placeholder="FUEL-001" />
+                  <Label className="text-[10px] uppercase font-bold text-muted-foreground ml-1">PO #</Label>
+                  <Input value={formData.invoice_number} className="h-9 rounded-lg font-mono text-primary font-bold" onChange={(e) => setFormData({ ...formData, invoice_number: e.target.value })} placeholder="PO-001" />
                 </div>
-                <div className="space-y-1 md:col-span-2">
+                <div className="space-y-1 lg:col-span-2">
                   <Label className="text-[10px] uppercase font-bold text-muted-foreground ml-1">Supplier</Label>
                   <Select value={formData.supplier_id} onValueChange={(v) => setFormData({ ...formData, supplier_id: v })}>
                     <SelectTrigger className="h-9 rounded-lg font-medium"><SelectValue placeholder="Select Supplier" /></SelectTrigger>
@@ -369,32 +331,20 @@ export function PurchaseDialog({ open, onOpenChange, onSuccess }: PurchaseDialog
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <Label className="text-[10px] uppercase font-bold text-muted-foreground ml-1">Order Status</Label>
-                  <Select value={formData.status} onValueChange={(v) => setFormData({ ...formData, status: v })}>
-                    <SelectTrigger className="h-9 rounded-lg font-bold border-primary/20"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="hold">⏳ Hold</SelectItem>
-                      <SelectItem value="scheduled">📅 Scheduled</SelectItem>
-                      <SelectItem value="received">✅ Received</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
+
 
               {/* Cart Input */}
               <div className="bg-primary/5 p-4 rounded-2xl border border-primary/10 space-y-3">
                 <div className="flex items-center justify-between">
-                  <h4 className="text-[11px] uppercase font-black tracking-tight flex items-center gap-1.5 text-primary"><Plus className="h-3 w-3" /> Add Fuel Products</h4>
+                  <h4 className="text-[11px] uppercase font-black tracking-tight flex items-center gap-1.5 text-primary"><Plus className="h-3 w-3" /> Add Products</h4>
                 </div>
                 <div className="grid grid-cols-12 gap-2 items-end">
                   <div className="col-span-12 sm:col-span-5">
                     <Label className="text-[10px] uppercase font-bold text-muted-foreground ml-1">Product</Label>
                     <Select value={currentItem.product_id} onValueChange={(v) => setCurrentItem({ ...currentItem, product_id: v })}>
-                      <SelectTrigger className="h-10 rounded-xl font-semibold bg-background shadow-sm border-muted-foreground/20"><SelectValue placeholder="Select Fuel Type..." /></SelectTrigger>
+                      <SelectTrigger className="h-10 rounded-xl font-semibold bg-background shadow-sm border-muted-foreground/20"><SelectValue placeholder="Select Product..." /></SelectTrigger>
                       <SelectContent>
-                        {products.map(p => <SelectItem key={p.id} value={p.id}>{p.product_name} ({p.current_stock})</SelectItem>)}
+                        {products.map(p => <SelectItem key={p.id} value={p.id}>{p.name} ({p.current_stock})</SelectItem>)}
                       </SelectContent>
                     </Select>
                   </div>
@@ -429,7 +379,7 @@ export function PurchaseDialog({ open, onOpenChange, onSuccess }: PurchaseDialog
                       <tr><td colSpan={5} className="p-8 text-center text-muted-foreground italic">No items added to invoice</td></tr>
                     ) : cart.map(item => (
                       <tr key={item.product.id} className="hover:bg-muted/30 transition-colors">
-                        <td className="p-3 font-semibold">{item.product.product_name}</td>
+                        <td className="p-3 font-semibold">{item.product.name}</td>
                         <td className="p-3 text-right font-mono">{item.quantity} Ltr</td>
                         <td className="p-3 text-right font-mono">{formatCurrency(item.unitPrice)}</td>
                         <td className="p-3 text-right font-black text-primary">{formatCurrency(item.total)}</td>
@@ -481,7 +431,7 @@ export function PurchaseDialog({ open, onOpenChange, onSuccess }: PurchaseDialog
             <DialogFooter className="gap-2 sm:gap-0">
               <Button variant="outline" onClick={() => onOpenChange(false)} className="rounded-full px-8 hover:bg-muted font-bold">Discard</Button>
               <Button onClick={handleSubmit} disabled={loading || cart.length === 0} className="rounded-full px-10 bg-primary hover:bg-primary/90 font-black shadow-lg shadow-primary/20">
-                {loading ? <BrandLoader size="xs" /> : <CheckSquare className="mr-2 h-4 w-4" />} SAVE INVOICE
+                {loading ? <BrandLoader size="xs" /> : <CheckSquare className="mr-2 h-4 w-4" />} SAVE PURCHASE ORDER
               </Button>
             </DialogFooter>
           </>

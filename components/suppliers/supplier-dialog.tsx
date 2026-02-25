@@ -1,13 +1,10 @@
 "use client"
 
-import React from "react"
-
 import { useState, useEffect } from "react"
-import { createClient } from "@/lib/supabase/client"
+import { zodResolver } from "@hookform/resolvers/zod"
+import { useForm } from "react-hook-form"
+import * as z from "zod"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
 import {
   Dialog,
   DialogContent,
@@ -17,276 +14,224 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form"
+import { Input } from "@/components/ui/input"
+import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Alert, AlertDescription } from "@/components/ui/alert"
-import { AlertCircle } from "lucide-react"
-import { BrandLoader } from "../ui/brand-loader"
+import { Textarea } from "@/components/ui/textarea"
+import { toast } from "sonner"
+import { upsertSupplier } from "@/app/actions/suppliers"
+import { BrandLoader } from "@/components/ui/brand-loader"
 
-type Supplier = {
-  id: string
-  supplier_name: string
-  contact_person: string | null
-  phone_number: string
-  address: string | null
-  supplier_type: string
-  notes: string | null
-  status: string
-}
+const supplierSchema = z.object({
+  name: z.string().min(1, "Company Name is required"),
+  contact_person: z.string().optional(),
+  phone: z.string().min(1, "Phone Number is required"),
+  email: z.string().email().optional().or(z.literal("")),
+  address: z.string().optional(),
+  ntn_number: z.string().optional(),
+  product_type: z.enum(["fuel", "oil", "both"]),
+  status: z.enum(["active", "inactive"]),
+})
 
-type Props = {
+interface SupplierDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  supplier: Supplier | null
-  onSaved: () => void
+  supplier: any | null
+  onSuccess: () => void
 }
 
-export function SupplierDialog({ open, onOpenChange, supplier, onSaved }: Props) {
-  const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [formData, setFormData] = useState({
-    supplier_name: "",
-    contact_person: "",
-    phone_number: "",
-    address: "",
-    supplier_type: "both_petrol_diesel",
-    notes: "",
-    status: "active",
+export function SupplierDialog({ open, onOpenChange, supplier, onSuccess }: SupplierDialogProps) {
+  const [loading, setLoading] = useState(false)
+
+  const form = useForm<z.infer<typeof supplierSchema>>({
+    resolver: zodResolver(supplierSchema),
+    defaultValues: {
+      name: "",
+      contact_person: "",
+      phone: "",
+      email: "",
+      address: "",
+      ntn_number: "",
+      product_type: "both",
+      status: "active",
+    },
   })
-  const supabase = createClient()
 
   useEffect(() => {
     if (supplier) {
-      setFormData({
-        supplier_name: supplier.supplier_name,
+      form.reset({
+        name: supplier.name || "",
         contact_person: supplier.contact_person || "",
-        phone_number: supplier.phone_number,
+        phone: supplier.phone || "",
+        email: supplier.email || "",
         address: supplier.address || "",
-        supplier_type: supplier.supplier_type,
-        notes: supplier.notes || "",
-        status: supplier.status,
-      })
-    } else {
-      setFormData({
-        supplier_name: "",
-        contact_person: "",
-        phone_number: "",
-        address: "",
-        supplier_type: "both_petrol_diesel",
-        notes: "",
-        status: "active",
+        ntn_number: supplier.ntn_number || "",
+        product_type: supplier.product_type || "both",
+        status: supplier.status || "active",
       })
     }
-    setError(null)
-  }, [supplier, open])
+  }, [supplier, form])
 
-  const handleChange = (
-    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
-  ) => {
-    const { name, value } = e.target
-    setFormData((prev) => ({ ...prev, [name]: value }))
-  }
-
-  const handleSelectChange = (name: string, value: string) => {
-    setFormData((prev) => ({ ...prev, [name]: value }))
-  }
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setError(null)
-    setIsLoading(true)
-
+  const onSubmit = async (values: z.infer<typeof supplierSchema>) => {
+    setLoading(true)
     try {
-      // Validation
-      if (!formData.supplier_name.trim()) {
-        throw new Error("Supplier name is required")
+      const result = await upsertSupplier(values, supplier?.id)
+      if (result.success) {
+        toast.success(supplier ? "Supplier updated successfully" : "Supplier created successfully")
+        onOpenChange(false)
+        onSuccess()
       }
-      if (!formData.phone_number.trim()) {
-        throw new Error("Phone number is required")
-      }
-
-      const data = {
-        supplier_name: formData.supplier_name.trim(),
-        contact_person: formData.contact_person.trim() || null,
-        phone_number: formData.phone_number.trim(),
-        address: formData.address.trim() || null,
-        supplier_type: formData.supplier_type,
-        notes: formData.notes.trim() || null,
-        status: formData.status,
-        updated_at: new Date().toISOString(),
-      }
-
-      if (supplier) {
-        // Update existing supplier
-        const { error: updateError } = await supabase
-          .from("suppliers")
-          .update(data)
-          .eq("id", supplier.id)
-
-        if (updateError) throw updateError
-      } else {
-        // Create new supplier
-        const { error: insertError } = await supabase
-          .from("suppliers")
-          .insert(data)
-
-        if (insertError) throw insertError
-      }
-
-      onSaved()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "An error occurred")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to save supplier")
     } finally {
-      setIsLoading(false)
+      setLoading(false)
     }
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>
-            {supplier ? "Edit Supplier" : "Add New Supplier"}
-          </DialogTitle>
+          <DialogTitle>{supplier ? "Edit Supplier" : "Add New Supplier"}</DialogTitle>
           <DialogDescription>
-            {supplier
-              ? "Update supplier information"
-              : "Add a new fuel or product supplier"}
+            Update the company details and contact information.
           </DialogDescription>
         </DialogHeader>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {error && (
-            <Alert variant="destructive">
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-
-          <div className="space-y-2">
-            <Label htmlFor="supplier_name">Supplier Name *</Label>
-            <Input
-              id="supplier_name"
-              name="supplier_name"
-              value={formData.supplier_name}
-              onChange={handleChange}
-              placeholder="Enter supplier name"
-              disabled={isLoading}
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="contact_person">Contact Person</Label>
-              <Input
-                id="contact_person"
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <FormField
+                control={form.control}
+                name="name"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Company Name</FormLabel>
+                    <FormControl><Input placeholder="e.g. Shell Pakistan" {...field} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
                 name="contact_person"
-                value={formData.contact_person}
-                onChange={handleChange}
-                placeholder="Contact name"
-                disabled={isLoading}
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Contact Person</FormLabel>
+                    <FormControl><Input placeholder="Name" {...field} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
               />
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="phone_number">Phone Number *</Label>
-              <Input
-                id="phone_number"
-                name="phone_number"
-                value={formData.phone_number}
-                onChange={handleChange}
-                placeholder="+92 300 1234567"
-                disabled={isLoading}
+            <div className="grid grid-cols-2 gap-4">
+              <FormField
+                control={form.control}
+                name="phone"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Phone Number</FormLabel>
+                    <FormControl><Input placeholder="0300-1234567" {...field} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="email"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Email</FormLabel>
+                    <FormControl><Input placeholder="info@company.com" {...field} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
               />
             </div>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="address">Address</Label>
-            <Input
-              id="address"
+            <FormField
+              control={form.control}
               name="address"
-              value={formData.address}
-              onChange={handleChange}
-              placeholder="Full address"
-              disabled={isLoading}
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="supplier_type">Supplier Type *</Label>
-              <Select
-                value={formData.supplier_type}
-                onValueChange={(value) => handleSelectChange("supplier_type", value)}
-                disabled={isLoading}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select type" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="petrol">Petrol Only</SelectItem>
-                  <SelectItem value="diesel">Diesel Only</SelectItem>
-                  <SelectItem value="both_petrol_diesel">Petrol & Diesel</SelectItem>
-                  <SelectItem value="products_oils">Products & Oils Only</SelectItem>
-                  <SelectItem value="both_petrol_diesel_and_oils">Fuel + Oils (All Products)</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="status">Status</Label>
-              <Select
-                value={formData.status}
-                onValueChange={(value) => handleSelectChange("status", value)}
-                disabled={isLoading}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="active">Active</SelectItem>
-                  <SelectItem value="inactive">Inactive</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="notes">Notes</Label>
-            <Textarea
-              id="notes"
-              name="notes"
-              value={formData.notes}
-              onChange={handleChange}
-              placeholder="Additional notes (optional)"
-              rows={3}
-              disabled={isLoading}
-            />
-          </div>
-
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-              disabled={isLoading}
-            >
-              Cancel
-            </Button>
-            <Button type="submit" disabled={isLoading}>
-              {isLoading ? (
-                <BrandLoader size="xs" />
-              ) : supplier ? (
-                "Update Supplier"
-              ) : (
-                "Add Supplier"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Physical Address</FormLabel>
+                  <FormControl><Textarea placeholder="Full address" {...field} /></FormControl>
+                  <FormMessage />
+                </FormItem>
               )}
-            </Button>
-          </DialogFooter>
-        </form>
+            />
+            <div className="grid grid-cols-3 gap-4">
+              <FormField
+                control={form.control}
+                name="ntn_number"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>NTN Number</FormLabel>
+                    <FormControl><Input placeholder="1234567-8" {...field} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="product_type"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Product Type</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select type" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="fuel">Fuel Only</SelectItem>
+                        <SelectItem value="oil">Oil / Lubricants</SelectItem>
+                        <SelectItem value="both">Both Fuel & Oil</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="status"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Status</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select status" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="active">Active</SelectItem>
+                        <SelectItem value="inactive">Inactive</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+              <Button type="submit" disabled={loading}>{loading ? <BrandLoader size="xs" /> : "Update Profile"}</Button>
+            </DialogFooter>
+          </form>
+        </Form>
       </DialogContent>
     </Dialog>
   )

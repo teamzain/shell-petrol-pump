@@ -14,7 +14,7 @@ import { Fuel, Eye, EyeOff, Lock, User, AlertCircle } from "lucide-react"
 import { BrandLoader as Loader } from "@/components/ui/brand-loader"
 
 export default function LoginPage() {
-  const [email, setEmail] = useState("")
+  const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -26,7 +26,7 @@ export default function LoginPage() {
     const checkAdmin = async () => {
       const supabase = createClient()
       const { count } = await supabase
-        .from("users")
+        .from("profiles")
         .select("*", { count: 'exact', head: true })
 
       setHasAdmin(count !== null && count > 0)
@@ -42,59 +42,59 @@ export default function LoginPage() {
     try {
       const supabase = createClient()
 
+      // 1. Find email by username (case-insensitive lookup in profiles)
+      const { data: userRecord, error: userError } = await supabase
+        .from("profiles")
+        .select("email")
+        .ilike("username", username.trim())
+        .maybeSingle()
+
+      if (userError) {
+        console.error("Username lookup error:", userError)
+        setError("An error occurred during sign-in. Please try again.")
+        setIsLoading(false)
+        return
+      }
+
+      if (!userRecord) {
+        setError("Invalid username or password.")
+        setIsLoading(false)
+        return
+      }
+
       const { data, error: signInError } = await supabase.auth.signInWithPassword({
-        email,
+        email: userRecord.email,
         password,
       })
 
       if (signInError) {
-        if (signInError.message.includes("Invalid login credentials")) {
-          setError("Invalid email or password. Please try again.")
-        } else if (signInError.message.includes("Email not confirmed")) {
-          setError("Please confirm your email before logging in.")
-        } else {
-          setError(signInError.message)
-        }
+        setError(signInError.message.includes("Invalid login credentials") ? "Invalid username or password." : signInError.message)
+        setIsLoading(false)
         return
       }
 
       if (data.user) {
-        // Double Check: Verify user exists in the public.users table
-        const { data: dbUser, error: dbError } = await supabase
-          .from("users")
+        // Double Check: Verify user exists in the public.profiles table
+        const { data: dbUser } = await supabase
+          .from("profiles")
           .select("id")
           .eq("id", data.user.id)
           .single()
 
-        if (!dbUser || dbError) {
-          // If the user exists in Auth but not in our database (e.g. after a truncate)
-          // We must sign them out immediately and show an error
+        if (!dbUser) {
           await supabase.auth.signOut()
-          setError("Access Denied: Your account record was not found in the database. Please contact your administrator.")
+          setError("Access Denied: Your account record was not found in the database.")
           setIsLoading(false)
           return
         }
 
-        // Update last login
-        await supabase
-          .from("users")
-          .update({
-            last_login: new Date().toISOString(),
-            failed_login_attempts: 0
-          })
-          .eq("id", data.user.id)
-
-        // Check if setup is completed
+        // Check if setup is completed (keeping lookup for future use if needed, but redirecting to dashboard)
         const { data: pumpConfig } = await supabase
           .from("pump_config")
           .select("setup_completed")
           .limit(1)
 
-        if (!pumpConfig || pumpConfig.length === 0 || !pumpConfig[0]?.setup_completed) {
-          router.push("/setup")
-        } else {
-          router.push("/dashboard")
-        }
+        router.push("/dashboard")
         router.refresh()
       }
     } catch (err) {
@@ -210,15 +210,15 @@ export default function LoginPage() {
                 )}
 
                 <div className="space-y-2">
-                  <Label htmlFor="email" className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Email Address</Label>
+                  <Label htmlFor="username" className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Username</Label>
                   <div className="relative group">
                     <User className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground group-focus-within:text-primary transition-colors" />
                     <Input
-                      id="email"
-                      type="email"
-                      placeholder="admin@unitedfilling.com"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
+                      id="username"
+                      type="text"
+                      placeholder="admin_user"
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
                       className="pl-10 h-14 bg-slate-50 border-slate-200 focus:border-primary/50 text-slate-900 transition-all font-bold placeholder:text-slate-300"
                       required
                       disabled={isLoading}

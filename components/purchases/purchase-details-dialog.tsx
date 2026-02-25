@@ -8,9 +8,18 @@ import { format } from "date-fns"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Button } from "@/components/ui/button"
 import { createClient } from "@/lib/supabase/client"
-import { AlertCircle, CheckCircle2, RefreshCw } from "lucide-react"
-import { Alert, AlertDescription } from "@/components/ui/alert"
+import { AlertCircle, CheckCircle2, RefreshCw, AlertTriangle, ShieldCheck } from "lucide-react"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { BrandLoader } from "../ui/brand-loader"
+
+interface POHoldRecord {
+  id: string
+  hold_quantity: number
+  hold_amount: number
+  expected_return_date: string | null
+  actual_return_date: string | null
+  status: "on_hold" | "returned"
+}
 
 interface PurchaseOrder {
   id: string
@@ -24,9 +33,13 @@ interface PurchaseOrder {
   notes: string | null
   supplier_id: string
   created_at: string
+  unit_type: "liter" | "unit"
+  quantity_remaining: number
+  estimated_total: number
   suppliers: {
     supplier_name: string
-    phone_number: string
+    contact_person?: string
+    phone?: string
   }
   purchases: {
     id: string
@@ -38,8 +51,12 @@ interface PurchaseOrder {
       product_name: string
       product_type: string
       unit: string
+      notes?: string
     }
   }[]
+  po_hold_records: POHoldRecord[]
+  deliveries: any[]
+  rate_per_liter: number
 }
 
 interface PurchaseDetailsDialogProps {
@@ -56,6 +73,7 @@ export function PurchaseDetailsDialog({
   onRefresh
 }: PurchaseDetailsDialogProps) {
   const [updating, setUpdating] = useState(false)
+  const [resolvingHold, setResolvingHold] = useState(false)
   const [error, setError] = useState("")
   const [success, setSuccess] = useState("")
   const supabase = createClient()
@@ -135,9 +153,34 @@ export function PurchaseDetailsDialog({
     }
   }
 
+  const handleResolveHold = async (holdId: string, holdAmount: number) => {
+    setResolvingHold(true)
+    setError("")
+    setSuccess("")
+    try {
+      // 1. Call Atomic Postgres Function to release hold
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) throw new Error("Unauthorized")
+
+      const { data, error: releaseError } = await supabase.rpc('release_po_hold', {
+        p_hold_id: holdId,
+        p_user_id: user.id
+      })
+
+      if (releaseError) throw releaseError
+
+      setSuccess(`Hold successfully resolved! Credited Rs. ${holdAmount.toLocaleString()} to supplier account.`)
+      if (onRefresh) onRefresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to resolve hold")
+    } finally {
+      setResolvingHold(false)
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[650px] max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-[700px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 font-bold text-xl">
             Invoice Details
@@ -153,7 +196,7 @@ export function PurchaseDetailsDialog({
             <div className="space-y-1">
               <p className="text-xs text-muted-foreground uppercase tracking-wider">Supplier</p>
               <p className="font-bold text-lg">{order.suppliers?.supplier_name}</p>
-              <p className="text-sm text-muted-foreground">{order.suppliers?.phone_number}</p>
+              <p className="text-sm text-muted-foreground">{order.suppliers?.phone}</p>
             </div>
             <div className="text-right space-y-1">
               <p className="text-xs text-muted-foreground uppercase tracking-wider">Date</p>
@@ -235,26 +278,104 @@ export function PurchaseDetailsDialog({
             </div>
             <Separator />
             <div className="flex justify-between font-bold text-lg pt-1">
-              <span>Due Balance:</span>
-              <span className={order.due_amount > 0 ? "text-destructive" : "text-green-600"}>
-                {formatCurrency(order.due_amount)}
+              <span>{order.status === 'closed' ? 'Final Total' : 'Estimated Total'}:</span>
+              <span className={order.status === 'closed' ? "text-primary" : "text-amber-600"}>
+                {formatCurrency(order.status === 'closed' ? (order.estimated_total || 0) - order.quantity_remaining * order.rate_per_liter : order.estimated_total || 0)}
               </span>
             </div>
           </div>
 
-          {/* Payment Method & Notes */}
-          <div className="grid grid-cols-2 gap-4 text-sm bg-secondary/20 p-3 rounded">
-            <div>
-              <span className="text-muted-foreground block mb-1">Payment Method</span>
-              <Badge variant="outline" className="capitalize">
-                {order.payment_method?.replace("_", " ")}
-              </Badge>
+          {/* Active Holds Section */}
+          {order.po_hold_records && order.po_hold_records.length > 0 && (
+            <div className="space-y-3">
+              <h4 className="font-bold text-sm uppercase tracking-wider text-amber-700 flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4" />
+                Hold Records
+              </h4>
+              <div className="space-y-2">
+                {order.po_hold_records.map((hold) => (
+                  <Alert key={hold.id} className={`border ${hold.status === 'on_hold' ? 'bg-amber-50 border-amber-200' : 'bg-green-50 border-green-200'}`}>
+                    {hold.status === 'on_hold' ? <AlertTriangle className="h-4 w-4 text-amber-600" /> : <ShieldCheck className="h-4 w-4 text-green-600" />}
+                    <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start w-full gap-4">
+                      <div>
+                        <AlertTitle className={`text-sm font-bold ${hold.status === 'on_hold' ? 'text-amber-800' : 'text-green-800'}`}>
+                          {hold.status === 'on_hold' ? 'Active Hold' : 'Resolved Hold'}
+                        </AlertTitle>
+                        <AlertDescription className="text-xs text-muted-foreground mt-1">
+                          Missing Qty: <span className="font-bold font-mono">{hold.hold_quantity}</span> {order.unit_type === 'unit' ? 'Units' : 'Liters'} <br />
+                          Hold Amount: <span className="font-bold text-slate-800">{formatCurrency(hold.hold_amount)}</span>
+                        </AlertDescription>
+                      </div>
+                      {hold.status === 'on_hold' && (
+                        <div className="flex-shrink-0">
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            className="bg-amber-600 hover:bg-amber-700 text-white font-bold h-8 text-xs w-full sm:w-auto"
+                            onClick={() => handleResolveHold(hold.id, hold.hold_amount)}
+                            disabled={resolvingHold}
+                          >
+                            {resolvingHold ? <BrandLoader size="sm" /> : "Resolve & Return Funds"}
+                          </Button>
+                        </div>
+                      )}
+                      {hold.status === 'returned' && hold.actual_return_date && (
+                        <div className="text-right flex-shrink-0">
+                          <span className="text-[10px] uppercase font-bold text-green-700 bg-green-200 px-2 py-1 rounded">
+                            Returned on {format(new Date(hold.actual_return_date), "MMM d, yyyy")}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </Alert>
+                ))}
+              </div>
             </div>
-            {order.notes && (
-              <div className="col-span-2 mt-2">
+          )}
+
+          {/* Delivery Details Section */}
+          {order.deliveries && order.deliveries.length > 0 && (
+            <div className="space-y-3">
+              <h4 className="font-bold text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-green-600" />
+                Delivery Info
+              </h4>
+              <div className="bg-slate-50 border rounded-lg p-3 text-sm grid grid-cols-2 gap-y-2 gap-x-4">
+                <div>
+                  <span className="text-muted-foreground block text-[10px] uppercase font-bold">Delivery Ref</span>
+                  <span className="font-mono text-slate-700">{order.deliveries[0].delivery_number || "N/A"}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block text-[10px] uppercase font-bold">Supplier Invoice</span>
+                  <span className="font-mono text-slate-700">{order.deliveries[0].company_invoice_number || "N/A"}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block text-[10px] uppercase font-bold">Vehicle</span>
+                  <span className="font-bold">{order.deliveries[0].vehicle_number || "N/A"}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block text-[10px] uppercase font-bold">Driver</span>
+                  <span className="font-bold">{order.deliveries[0].driver_name || "N/A"}</span>
+                </div>
+                {order.deliveries[0].notes && (
+                  <div className="col-span-2 mt-1 pt-2 border-t border-slate-200">
+                    <span className="text-muted-foreground block text-[10px] uppercase font-bold">Remarks</span>
+                    <span className="italic text-xs">{order.deliveries[0].notes}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Notes */}
+          <div className="grid grid-cols-1 gap-4 text-sm bg-secondary/20 p-3 rounded">
+            {order.notes ? (
+              <div>
                 <span className="text-muted-foreground block mb-1">Notes</span>
                 <p className="italic text-muted-foreground">{order.notes}</p>
               </div>
+            ) : (
+              <span className="text-muted-foreground block mb-1">No additional notes provided.</span>
             )}
           </div>
         </div>

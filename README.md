@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Petrol Pump Management System
 
 *Automatically synced with your [v0.app](https://v0.app) deployments*
@@ -28,3 +29,6 @@ Continue building your app on:
 2. Deploy your chats from the v0 interface
 3. Changes are automatically pushed to this repository
 4. Vercel deploys the latest version from this repository
+=======
+# shell-petrol-pump
+>>>>>>> fe74c34fc8bbe6ad1055498e4038793e79b75b61

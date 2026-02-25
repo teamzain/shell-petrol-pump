@@ -21,7 +21,16 @@ import {
     X
 } from "lucide-react"
 import Link from "next/link"
-import { formatDistanceToNow } from "date-fns"
+import { format, formatDistanceToNow } from "date-fns"
+import {
+    getPendingNotifications,
+    dismissNotification,
+    snoozeNotification,
+    getPOHoldNotifications,
+    snoozePOHoldNotification
+} from "@/app/actions/balance-movement"
+import { markHoldAsReceived } from "@/app/actions/purchase-orders"
+import { toast } from "sonner"
 
 type NotificationItem = {
     id: string
@@ -30,8 +39,9 @@ type NotificationItem = {
     type: "info" | "warning" | "error" | "success"
     timestamp: string
     read: boolean
-    source: "system" | "stock" | "supplier"
+    source: "system" | "stock" | "supplier" | "po_hold"
     link?: string
+    relatedHoldId?: string
 }
 
 export function NotificationsPopover() {
@@ -42,7 +52,15 @@ export function NotificationsPopover() {
 
     const supabase = createClient()
 
+    // Keep track of notified IDs to avoid spamming
+    const [notifiedIds, setNotifiedIds] = useState<Set<string>>(new Set())
+
     useEffect(() => {
+        // Request Notification permission on mount
+        if ("Notification" in window && Notification.permission === "default") {
+            Notification.requestPermission()
+        }
+
         fetchNotifications()
 
         // Subscribe to new notifications
@@ -114,7 +132,87 @@ export function NotificationsPopover() {
                 })
             }
 
-            // 3. Fetch Supplier Dues (Live) - Only if balance column exists (graceful fallback)
+            // 3. Fetch PO Delivery Reminders (Live from table)
+            try {
+                const poNotifs = await getPendingNotifications()
+                if (poNotifs) {
+                    poNotifs.forEach((pn: any) => {
+                        allItems.push({
+                            id: pn.id,
+                            title: pn.title || "Delivery Reminder",
+                            message: pn.message || `${pn.purchase_orders?.po_number}: ${pn.purchase_orders?.ordered_quantity}L ${pn.purchase_orders?.product_type} expected today.`,
+                            type: "info",
+                            timestamp: pn.created_at,
+                            read: pn.is_read,
+                            source: "supplier", // Grouping with supplier for icon
+                            link: "/dashboard/purchases"
+                        })
+                    })
+                }
+            } catch (err) {
+                console.error("PO Notifs error:", err)
+            }
+
+            // 5. Fetch PO Hold Reminders (Live from table)
+            try {
+                const poHoldNotifs = await getPOHoldNotifications()
+                if (poHoldNotifs) {
+                    poHoldNotifs.forEach((pn: any) => {
+                        const po = pn.purchase_orders || {}
+                        const hold = pn.po_hold_records || {}
+                        allItems.push({
+                            id: pn.id,
+                            title: pn.notification_type === 'hold_return_reminder' ? "Fund Return Due" : "Delivery Reminder",
+                            message: `Rs. ${hold.hold_amount?.toLocaleString() || 0} is due back from ${po.suppliers?.name || 'supplier'} for PO# ${po.po_number}.`,
+                            type: "warning",
+                            timestamp: pn.trigger_date,
+                            read: false,
+                            source: "po_hold",
+                            link: "/dashboard/balance",
+                            relatedHoldId: pn.related_hold_id
+                        })
+                    })
+                }
+            } catch (err) {
+                console.error("PO Hold Notifs error:", err)
+            }
+
+            // 6. Fetch Sales Card Hold Notifications (New)
+            try {
+                const { data: salesHoldNotifs } = await supabase
+                    .from('card_hold_notifications')
+                    .select(`
+                        id, trigger_date, card_hold_id,
+                        card_hold_records(
+                            hold_amount, payment_type, sale_date,
+                            payment_methods(name),
+                            suppliers(name)
+                        )
+                    `)
+                    .lte('trigger_date', new Date().toISOString().split('T')[0])
+                    .eq('status', 'pending')
+
+                if (salesHoldNotifs) {
+                    salesHoldNotifs.forEach((sn: any) => {
+                        const hold = sn.card_hold_records || {}
+                        allItems.push({
+                            id: sn.id,
+                            title: "Card Hold Due",
+                            message: `PKR ${hold.hold_amount?.toLocaleString()} ${hold.payment_methods?.name} payment from ${format(new Date(hold.sale_date), 'dd MMM')} is due today.`,
+                            type: "warning",
+                            timestamp: sn.trigger_date,
+                            read: false,
+                            source: "system", // Using system for general behavior
+                            link: "/dashboard/sales",
+                            relatedHoldId: sn.card_hold_id
+                        })
+                    })
+                }
+            } catch (err) {
+                console.error("Sales Hold Notifs error:", err)
+            }
+
+            // 4. Fetch Supplier Dues (Live) - Only if balance column exists (graceful fallback)
             try {
                 const { data: suppliers } = await supabase
                     .from('suppliers')
@@ -141,11 +239,29 @@ export function NotificationsPopover() {
             }
 
             // Sort by timestamp (newest first)
-            // Note: For live items, timestamp is now, so they appear at top.
             allItems.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
 
             setNotifications(allItems)
-            setUnreadCount(allItems.filter(n => !n.read).length)
+
+            const newUnreadCount = allItems.filter(n => !n.read).length
+            setUnreadCount(newUnreadCount)
+
+            // Trigger Browser Notifications for new unread items
+            if ("Notification" in window && Notification.permission === "granted") {
+                const newNotifiedIds = new Set(notifiedIds)
+                allItems.filter(n => !n.read).forEach(item => {
+                    if (!notifiedIds.has(item.id)) {
+                        new Notification(item.title, {
+                            body: item.message,
+                            icon: "/favicon.ico" // You can replace with your actual icon path
+                        })
+                        newNotifiedIds.add(item.id)
+                    }
+                })
+                if (newNotifiedIds.size !== notifiedIds.size) {
+                    setNotifiedIds(newNotifiedIds)
+                }
+            }
 
         } catch (error) {
             console.error("Error fetching notifications:", error)
@@ -158,8 +274,39 @@ export function NotificationsPopover() {
         if (source === 'system') {
             await supabase.from('notifications').update({ is_read: true }).eq('id', id)
             fetchNotifications()
+        } else if (source === 'po_hold') {
+            // Handle po_hold via custom buttons
+        } else if (id.length > 30) { // Likely a UUID for PO Notif
+            try {
+                await dismissNotification(id)
+                toast.success("Notification dismissed")
+                fetchNotifications()
+            } catch (error) {
+                toast.error("Failed to dismiss notification")
+            }
         }
-        // Live items (stock/supplier) cannot be marked read, they disappear when resolved.
+        // Live items (stock) cannot be marked read, they disappear when resolved.
+    }
+
+    const handleSnooze = async (id: string) => {
+        try {
+            await snoozePOHoldNotification(id)
+            toast.success("Reminder snoozed until tomorrow")
+            fetchNotifications()
+        } catch (error) {
+            toast.error("Failed to snooze reminder")
+        }
+    }
+
+    const handleMarkReceived = async (holdId: string) => {
+        try {
+            await markHoldAsReceived(holdId)
+            toast.success("Hold marked as received and account credited")
+            fetchNotifications()
+            setOpen(false)
+        } catch (error) {
+            toast.error("Failed to process hold return")
+        }
     }
 
     const markAllRead = async () => {
@@ -245,6 +392,16 @@ export function NotificationsPopover() {
                                             <span className="sr-only">Dismiss</span>
                                             <div className="h-2 w-2 rounded-full bg-blue-500" />
                                         </Button>
+                                    )}
+                                    {item.source === 'po_hold' && (
+                                        <div className="flex flex-col gap-1 shrink-0 ml-2">
+                                            <Button size="sm" variant="outline" className="h-7 text-[10px] px-2" onClick={() => handleMarkReceived(item.relatedHoldId!)}>
+                                                Received
+                                            </Button>
+                                            <Button size="sm" variant="ghost" className="h-7 text-[10px] px-2 text-muted-foreground" onClick={() => handleSnooze(item.id)}>
+                                                Snooze
+                                            </Button>
+                                        </div>
                                     )}
                                 </div>
                             ))}

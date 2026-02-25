@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useMemo } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -21,7 +21,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { createClient } from "@/lib/supabase/client"
 import {
   Plus,
   Gauge,
@@ -67,7 +66,7 @@ interface Product {
 export default function NozzlesPage() {
   const [nozzles, setNozzles] = useState<Nozzle[]>([])
   const [products, setProducts] = useState<Product[]>([])
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
@@ -83,37 +82,9 @@ export default function NozzlesPage() {
     initial_reading: "0",
   })
 
-  const supabase = createClient()
-
-  const fetchNozzles = useCallback(async () => {
-    setLoading(true)
-    const { data, error } = await supabase
-      .from("nozzles")
-      .select("*, products(product_name, product_type)")
-      .order("dispenser_number", { ascending: true })
-      .order("nozzle_side", { ascending: true })
-
-    if (!error && data) {
-      setNozzles(data as Nozzle[])
-    }
-    setLoading(false)
-  }, [supabase])
-
-  const fetchProducts = useCallback(async () => {
-    const { data } = await supabase
-      .from("products")
-      .select("id, product_name, product_type")
-      .eq("status", "active")
-      .eq("product_type", "fuel")
-      .order("product_name")
-
-    if (data) setProducts(data)
-  }, [supabase])
-
   useEffect(() => {
-    fetchNozzles()
-    fetchProducts()
-  }, [fetchNozzles, fetchProducts])
+    // Backend logic removed for system recreation
+  }, [])
 
   const handleOpenDialog = (nozzle?: Nozzle) => {
     if (nozzle) {
@@ -140,86 +111,16 @@ export default function NozzlesPage() {
   }
 
   const handleSave = async () => {
-    setError("")
-    setSaving(true)
-
-    try {
-      if (!formData.nozzle_number.trim()) {
-        throw new Error("Please enter a nozzle name/number")
-      }
-      if (!String(formData.dispenser_number).trim()) {
-        throw new Error("Please enter a Dispenser number")
-      }
-      if (!formData.nozzle_side) {
-        throw new Error("Please select a nozzle side (Left or Right)")
-      }
-      if (!formData.product_id) {
-        throw new Error("Please select a fuel type")
-      }
-
-      const initialReading = parseFloat(formData.initial_reading) || 0
-
-      if (selectedNozzle) {
-        // Update existing nozzle
-        const { error: updateError } = await supabase
-          .from("nozzles")
-          .update({
-            nozzle_number: formData.nozzle_number.trim(),
-            dispenser_number: String(formData.dispenser_number).trim() || null,
-            nozzle_side: formData.nozzle_side || null,
-            product_id: formData.product_id,
-            initial_reading: initialReading,
-          })
-          .eq("id", selectedNozzle.id)
-
-        if (updateError) throw updateError
-        setSuccess("Nozzle updated successfully!")
-      } else {
-        // Create new nozzle
-        const { error: insertError } = await supabase
-          .from("nozzles")
-          .insert({
-            nozzle_number: formData.nozzle_number.trim(),
-            dispenser_number: String(formData.dispenser_number).trim() || null,
-            nozzle_side: formData.nozzle_side || null,
-            product_id: formData.product_id,
-            initial_reading: initialReading,
-            current_reading: initialReading,
-            status: "active",
-          })
-
-        if (insertError) throw insertError
-        setSuccess("Nozzle added successfully!")
-      }
-
-      setDialogOpen(false)
-      fetchNozzles()
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : typeof err === "object" && err !== null && "message" in err ? String((err as { message: string }).message) : "Failed to save nozzle"
-      setError(msg)
-    } finally {
-      setSaving(false)
-    }
+    setSuccess(selectedNozzle ? "Nozzle updated (UI Only mode)" : "Nozzle added (UI Only mode)")
+    setDialogOpen(false)
+    setTimeout(() => setSuccess(""), 3000)
   }
 
   const handleDelete = async () => {
-    if (!selectedNozzle) return
-
-    try {
-      const { error } = await supabase
-        .from("nozzles")
-        .delete()
-        .eq("id", selectedNozzle.id)
-
-      if (error) throw error
-
-      setSuccess("Nozzle deleted successfully!")
-      setDeleteDialogOpen(false)
-      setSelectedNozzle(null)
-      fetchNozzles()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete nozzle")
-    }
+    setSuccess("Nozzle deleted (UI Only mode)")
+    setDeleteDialogOpen(false)
+    setSelectedNozzle(null)
+    setTimeout(() => setSuccess(""), 3000)
   }
 
   const getNozzleBadgeColor = (productName: string) => {

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -13,24 +13,24 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
-import { createClient } from "@/lib/supabase/client"
 import { Plus, Search, Pencil, Trash2, Package, AlertTriangle } from "lucide-react"
 import { OilProductDialog } from "@/components/products/oil-product-dialog"
 import { BrandLoader } from "@/components/ui/brand-loader"
 import { DeleteConfirmDialog } from "@/components/ui/delete-confirm-dialog"
 
+import { createClient } from "@/lib/supabase/client"
+import { toast } from "sonner"
+import { getProducts, deleteProduct as deleteProductAction } from "@/app/actions/products"
+
 interface OilProduct {
   id: string
-  product_name: string
+  name: string
   category: string
   unit: string
   current_stock: number
-  minimum_stock_level: number
+  min_stock_level: number
   purchase_price: number
-  weighted_avg_cost: number
   selling_price: number
-  stock_value: number
-  status: string
 }
 
 export default function OilProductsPage() {
@@ -42,25 +42,21 @@ export default function OilProductsPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [productToDelete, setProductToDelete] = useState<OilProduct | null>(null)
 
-  const supabase = createClient()
-
-  const fetchProducts = useCallback(async () => {
+  const fetchProducts = async () => {
     setLoading(true)
-    const { data, error } = await supabase
-      .from("products")
-      .select("*")
-      .eq("product_type", "oil_lubricant")
-      .order("product_name")
-
-    if (!error && data) {
-      setProducts(data)
+    try {
+      const data = await getProducts('oil')
+      setProducts(data || [])
+    } catch (error) {
+      console.error("Error fetching oil products:", error)
+      toast.error("Failed to load products")
     }
     setLoading(false)
-  }, [supabase])
+  }
 
   useEffect(() => {
     fetchProducts()
-  }, [fetchProducts])
+  }, [])
 
   const handleEdit = (product: OilProduct) => {
     setSelectedProduct(product)
@@ -70,25 +66,24 @@ export default function OilProductsPage() {
   const handleDelete = async () => {
     if (!productToDelete) return
 
-    const { error } = await supabase
-      .from("products")
-      .delete()
-      .eq("id", productToDelete.id)
-
-    if (!error) {
+    try {
+      await deleteProductAction(productToDelete.id)
+      toast.success("Product deleted successfully")
       fetchProducts()
+    } catch (error) {
+      toast.error("Failed to delete product")
     }
     setDeleteDialogOpen(false)
     setProductToDelete(null)
   }
 
   const filteredProducts = products.filter(product =>
-    product.product_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     product.category?.toLowerCase().includes(searchQuery.toLowerCase())
   )
 
-  const lowStockProducts = products.filter(p => p.current_stock <= p.minimum_stock_level)
-  const totalStockValue = products.reduce((sum, p) => sum + (p.stock_value || 0), 0)
+  const lowStockProducts = products.filter(p => p.current_stock <= p.min_stock_level)
+  const totalStockValue = products.reduce((sum, p) => sum + (p.current_stock * p.purchase_price), 0)
 
   return (
     <div className="flex flex-col gap-6">
@@ -140,7 +135,7 @@ export default function OilProductsPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {products.filter(p => p.status === "active").length}
+              {products.length}
             </div>
           </CardContent>
         </Card>
@@ -201,36 +196,23 @@ export default function OilProductsPage() {
                     <TableHead className="text-right whitespace-nowrap">Purchase Price</TableHead>
                     <TableHead className="text-right whitespace-nowrap">Selling Price</TableHead>
                     <TableHead className="text-right whitespace-nowrap">Stock Value</TableHead>
-                    <TableHead className="whitespace-nowrap">Status</TableHead>
                     <TableHead className="text-right whitespace-nowrap">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filteredProducts.map((product) => (
                     <TableRow key={product.id}>
-                      <TableCell className="font-medium whitespace-nowrap">{product.product_name}</TableCell>
+                      <TableCell className="font-medium whitespace-nowrap">{product.name}</TableCell>
                       <TableCell className="whitespace-nowrap">{product.category || "-"}</TableCell>
                       <TableCell className="text-right whitespace-nowrap">
-                        <span className={product.current_stock <= product.minimum_stock_level ? "text-destructive font-medium" : ""}>
+                        <span className={product.current_stock <= product.min_stock_level ? "text-destructive font-medium" : ""}>
                           {product.current_stock} {product.unit}
                         </span>
                       </TableCell>
-                      <TableCell className="text-right whitespace-nowrap">{product.minimum_stock_level} {product.unit}</TableCell>
+                      <TableCell className="text-right whitespace-nowrap">{product.min_stock_level} {product.unit}</TableCell>
                       <TableCell className="text-right whitespace-nowrap">Rs. {product.purchase_price.toFixed(2)}</TableCell>
                       <TableCell className="text-right whitespace-nowrap">Rs. {product.selling_price.toFixed(2)}</TableCell>
-                      <TableCell className="text-right whitespace-nowrap">Rs. {(product.stock_value || 0).toLocaleString()}</TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        {product.current_stock <= product.minimum_stock_level ? (
-                          <Badge variant="destructive" className="gap-1">
-                            <AlertTriangle className="h-3 w-3" />
-                            Low Stock
-                          </Badge>
-                        ) : (
-                          <Badge variant="secondary" className="bg-primary/10 text-primary">
-                            In Stock
-                          </Badge>
-                        )}
-                      </TableCell>
+                      <TableCell className="text-right whitespace-nowrap">Rs. {(product.current_stock * product.purchase_price).toLocaleString()}</TableCell>
                       <TableCell className="text-right whitespace-nowrap">
                         <div className="flex justify-end gap-2">
                           <Button
@@ -267,7 +249,10 @@ export default function OilProductsPage() {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         product={selectedProduct}
-        onSuccess={fetchProducts}
+        onSuccess={() => {
+          fetchProducts()
+          setDialogOpen(false)
+        }}
       />
 
       <DeleteConfirmDialog
@@ -275,7 +260,7 @@ export default function OilProductsPage() {
         onOpenChange={setDeleteDialogOpen}
         onConfirm={handleDelete}
         title="Delete Product"
-        description={`Are you sure you want to delete "${productToDelete?.product_name}"? This action cannot be undone.`}
+        description={`Are you sure you want to delete "${productToDelete?.name}"? This action cannot be undone.`}
       />
     </div>
   )

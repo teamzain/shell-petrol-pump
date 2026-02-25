@@ -1,9 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { createClient } from "@/lib/supabase/client"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { getTodayPKT } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import {
   Fuel,
@@ -17,6 +15,8 @@ import {
 } from "lucide-react"
 import Link from "next/link"
 import { DailyOperationsWidget } from "@/components/dashboard/daily-operations-widget"
+import { HoldAlerts } from "@/components/dashboard/hold-alerts"
+import { SalesHoldAlerts } from "@/components/dashboard/sales-hold-alerts"
 import { BrandLoader } from "@/components/ui/brand-loader"
 
 type DashboardStats = {
@@ -45,127 +45,11 @@ export default function DashboardPage() {
     cashBalance: 0,
     bankBalance: 0,
   })
-  const [isLoading, setIsLoading] = useState(true)
-  const supabase = createClient()
+  const [isLoading, setIsLoading] = useState(false)
 
   useEffect(() => {
-    const fetchStats = async () => {
-      try {
-        // Fetch products count
-        const { count: totalProducts } = await supabase
-          .from("products")
-          .select("*", { count: "exact", head: true })
-          .eq("status", "active")
-
-        // Fetch low stock products
-        const { data: lowStockData } = await supabase
-          .from("products")
-          .select("id, current_stock, minimum_stock_level")
-          .eq("status", "active")
-
-        const lowStockProducts = lowStockData?.filter(
-          (p) => p.current_stock <= p.minimum_stock_level
-        ).length || 0
-
-        // Fetch balance from daily_balances - get the most recent record
-        const today = getTodayPKT()
-        let cashBal = 0
-        let bankBal = 0
-
-        // Fetch current balances from accounts table (Source of Truth)
-        const { data: accounts } = await supabase
-          .from("accounts")
-          .select("account_type, current_balance")
-          .eq("status", "active")
-
-        if (accounts) {
-          cashBal = accounts
-            .filter(a => a.account_type === 'cash')
-            .reduce((sum, a) => sum + Number(a.current_balance || 0), 0)
-
-          bankBal = accounts
-            .filter(a => a.account_type === 'bank')
-            .reduce((sum, a) => sum + Number(a.current_balance || 0), 0)
-        }
-
-        // Fetch today's fuel sales
-        const { data: fuelSales } = await supabase
-          .from("nozzle_readings")
-          .select("sale_amount")
-          .eq("reading_date", today)
-
-        // Fetch today's product sales
-        const { data: productSales } = await supabase
-          .from("sales")
-          .select("sale_amount")
-          .eq("sale_date", today)
-
-        const totalFuelSales = fuelSales?.reduce((sum, s) => sum + Number(s.sale_amount || 0), 0) || 0
-        const totalProductSales = productSales?.reduce((sum, s) => sum + Number(s.sale_amount || 0), 0) || 0
-        const totalSales = totalFuelSales + totalProductSales
-
-        // Fetch today's purchases total
-        const { data: todayPurchases } = await supabase
-          .from("purchases")
-          .select("total_amount")
-          .gte("purchase_date", today)
-
-        const todayExpensesTotal = todayPurchases?.reduce((sum, p) => sum + Number(p.total_amount || 0), 0) || 0
-
-        setStats({
-          totalProducts: totalProducts || 0,
-          lowStockProducts,
-          todaySales: totalSales,
-          todayExpenses: todayExpensesTotal,
-          cashBalance: cashBal,
-          bankBalance: bankBal,
-        })
-      } catch (error) {
-        console.error("Error fetching stats:", error)
-      } finally {
-        setIsLoading(false)
-      }
-    }
-
-    fetchStats()
-
-    // Realtime subscription for daily_balances
-    const balanceChannel = supabase
-      .channel('dashboard_balance_updates')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'daily_balances',
-        },
-        () => {
-          fetchStats()
-        }
-      )
-      .subscribe()
-
-    // Realtime subscription for accounts
-    const accountsChannel = supabase
-      .channel('dashboard_accounts_updates')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'accounts',
-        },
-        () => {
-          fetchStats()
-        }
-      )
-      .subscribe()
-
-    return () => {
-      supabase.removeChannel(balanceChannel)
-      supabase.removeChannel(accountsChannel)
-    }
-  }, [supabase])
+    // Backend logic removed for system recreation
+  }, [])
 
   const statCards = [
     {
@@ -235,6 +119,12 @@ export default function DashboardPage() {
 
       {/* Daily Operations Widget */}
       {/* <DailyOperationsWidget /> */}
+
+      {/* Holds Alerts */}
+      <div className="grid gap-6 md:grid-cols-2">
+        <HoldAlerts onlyToday={true} />
+        <SalesHoldAlerts onlyToday={true} />
+      </div>
 
       {/* Stats Grid */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo, useCallback } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { format } from "date-fns"
 import { getTodayPKT } from "@/lib/utils"
 import {
@@ -33,7 +33,6 @@ import { Textarea } from "@/components/ui/textarea"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
-import { createClient } from "@/lib/supabase/client"
 import {
     Dialog,
     DialogContent,
@@ -88,7 +87,7 @@ interface Expense {
 }
 
 export default function ExpensesPage() {
-    const [loading, setLoading] = useState(true)
+    const [loading, setLoading] = useState(false)
     const [saving, setSaving] = useState(false)
     const [categories, setCategories] = useState<ExpenseCategory[]>([])
     const [todayBalance, setTodayBalance] = useState<DailyBalance | null>(null)
@@ -118,69 +117,9 @@ export default function ExpensesPage() {
     const [categoryFilter, setCategoryFilter] = useState("all")
     const [expenses, setExpenses] = useState<Expense[]>([])
 
-    const supabase = createClient()
-
-    const fetchData = useCallback(async () => {
-        setLoading(true)
-        setError("")
-        try {
-            // 1. Fetch Categories
-            const { data: catData } = await supabase
-                .from("expense_categories")
-                .select("*")
-                .eq("status", "active")
-                .order("category_name")
-
-            if (catData) setCategories(catData)
-
-            // 2. Fetch Today's Balance
-            const today = getTodayPKT()
-            const { data: balanceData } = await supabase
-                .from("daily_balances")
-                .select("*")
-                .eq("balance_date", today)
-                .maybeSingle()
-
-            if (balanceData) setTodayBalance(balanceData)
-
-            // 3. Fetch Expenses
-            const { data: expensesData } = await supabase
-                .from("expenses")
-                .select(`
-                    *,
-                    category:expense_categories(category_name, category_type)
-                `)
-                .order("expense_date", { ascending: false })
-                .order("created_at", { ascending: false })
-                .limit(100)
-
-            if (expensesData) setExpenses(expensesData as any)
-
-            // 4. Fetch Bank Accounts
-            const { data: bankData } = await supabase
-                .from("accounts")
-                .select("id, account_name, current_balance")
-                .eq("account_type", "bank")
-                .eq("status", "active")
-                .order("account_name")
-
-            if (bankData) {
-                setBankAccounts(bankData)
-                if (bankData.length > 0) {
-                    setFormData(prev => ({ ...prev, bankAccountId: bankData[0].id }))
-                }
-            }
-
-        } catch (err: any) {
-            setError(err.message || "Failed to load data")
-        } finally {
-            setLoading(false)
-        }
-    }, [supabase])
-
     useEffect(() => {
-        fetchData()
-    }, [fetchData])
+        // Backend logic removed for system recreation
+    }, [])
 
     // --- Derived Stats ---
     const stats = useMemo(() => {
@@ -210,131 +149,20 @@ export default function ExpensesPage() {
     const currentBank = todayBalance?.bank_closing ?? todayBalance?.bank_opening ?? 0
 
     const handleSubmit = async () => {
-        setError("")
-        const amountNum = parseFloat(formData.amount) || 0
-
-        if (!formData.categoryId || amountNum <= 0 || !formData.description) {
-            setError("Please fill all required fields correctly.")
-            return
-        }
-
-        const isCash = formData.paymentMethod === "cash"
-        const selectedBank = bankAccounts.find(b => b.id === formData.bankAccountId)
-        const available = isCash ? currentCash : (selectedBank ? Number(selectedBank.current_balance) : 0)
-
-        if (amountNum > available) {
-            setError(`Insufficient ${isCash ? "Cash" : "Bank"} Balance! Available: Rs. ${available.toLocaleString()}`)
-            return
-        }
-
-        setSaving(true)
-        try {
-            const user = await supabase.auth.getUser()
-
-            // Insert into expenses table. Triggers handle transactions & balance.
-            const { error: expError } = await supabase.from("expenses").insert({
-                expense_date: formData.date,
-                category_id: formData.categoryId,
-                amount: amountNum,
-                payment_method: formData.paymentMethod,
-                bank_account_id: formData.paymentMethod !== "cash" ? formData.bankAccountId : null,
-                description: formData.description,
-                paid_to: formData.paidTo,
-                invoice_number: formData.invoiceNumber,
-                notes: formData.notes,
-                created_by: user.data.user?.id
-            })
-
-            if (expError) throw expError
-
-            setSuccess("Expense recorded successfully!")
-            setIsDialogOpen(false)
-            setFormData({
-                date: getTodayPKT(),
-                categoryId: "",
-                amount: "",
-                paymentMethod: "cash",
-                bankAccountId: bankAccounts.length > 0 ? bankAccounts[0].id : "",
-                description: "",
-                paidTo: "",
-                invoiceNumber: "",
-                notes: ""
-            })
-            fetchData()
-
-            // Hide success after 3 seconds
-            setTimeout(() => setSuccess(null), 3000)
-
-        } catch (err: any) {
-            setError(err.message || "Failed to save expense")
-        } finally {
-            setSaving(false)
-        }
+        setSuccess("Expense recorded (UI Only mode)")
+        setIsDialogOpen(false)
+        setTimeout(() => setSuccess(null), 3000)
     }
 
     const handleAddCategory = async () => {
-        if (!newCategory.name.trim()) return
-
-        setAddingCategory(true)
-        try {
-            const { data, error: catError } = await supabase
-                .from("expense_categories")
-                .insert({
-                    category_name: newCategory.name.trim(),
-                    category_type: newCategory.type,
-                    status: "active"
-                })
-                .select()
-                .single()
-
-            if (catError) throw catError
-
-            // Refresh categories and select the new one
-            await fetchData()
-            setFormData(prev => ({ ...prev, categoryId: data.id }))
-            setIsCategoryDialogOpen(false)
-            setNewCategory({ name: "", type: "operating" })
-            setSuccess("Category added successfully!")
-            setTimeout(() => setSuccess(null), 3000)
-        } catch (err: any) {
-            setError(err.message || "Failed to add category")
-        } finally {
-            setAddingCategory(false)
-        }
+        setIsCategoryDialogOpen(false)
+        setSuccess("Category added (UI Only mode)")
+        setTimeout(() => setSuccess(null), 3000)
     }
 
     const handleDeleteCategory = async (id: string, name: string) => {
-        if (!confirm(`Are you sure you want to delete the category "${name}"?`)) return
-
-        setAddingCategory(true)
-        try {
-            const { error: catError } = await supabase
-                .from("expense_categories")
-                .delete()
-                .eq("id", id)
-
-            if (catError) {
-                if (catError.code === "23503") {
-                    throw new Error("Cannot delete this category because it is already used in existing expense records.")
-                }
-                throw catError
-            }
-
-            // Refresh categories
-            await fetchData()
-
-            // If the deleted category was selected, clear it
-            if (formData.categoryId === id) {
-                setFormData(prev => ({ ...prev, categoryId: "" }))
-            }
-
-            setSuccess("Category deleted successfully!")
-            setTimeout(() => setSuccess(null), 3000)
-        } catch (err: any) {
-            setError(err.message || "Failed to delete category")
-        } finally {
-            setAddingCategory(false)
-        }
+        setSuccess("Category deleted (UI Only mode)")
+        setTimeout(() => setSuccess(null), 3000)
     }
 
     const formatCurrency = (val: number) => `Rs. ${val.toLocaleString("en-PK")}`
@@ -356,7 +184,7 @@ export default function ExpensesPage() {
                     <p className="text-muted-foreground">Detailed tracking of operating costs and daily reconcilements.</p>
                 </div>
                 <div className="flex items-center gap-3">
-                    <Button variant="outline" onClick={fetchData} className="hidden md:flex">
+                    <Button variant="outline" onClick={() => { }} className="hidden md:flex">
                         <RefreshCw className="mr-2 h-4 w-4" />
                         Refresh
                     </Button>

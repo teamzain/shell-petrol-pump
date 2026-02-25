@@ -6,7 +6,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
-import { createClient } from "@/lib/supabase/client"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
     CheckCircle2, AlertCircle, User, Shield, Lock, Save
@@ -14,90 +13,30 @@ import {
 import { BrandLoader as Loader } from "@/components/ui/brand-loader"
 
 export default function ProfilePage() {
-    const [loading, setLoading] = useState(true)
+    const [loading, setLoading] = useState(false)
     const [saving, setSaving] = useState(false)
     const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
 
     const [profile, setProfile] = useState({
-        id: "",
-        full_name: "",
-        email: "",
-        mobile: "",
-        role: "",
+        id: "mock-user-id",
+        full_name: "Mock User",
+        email: "user@example.com",
+        mobile: "0300-1234567",
+        role: "admin",
     })
 
-    // Separate state checks to avoid infinite loops if we depend on `profile` in effects improperly
-    const supabase = createClient()
-
     useEffect(() => {
-        const fetchProfile = async () => {
-            setLoading(true)
-            const { data: { user } } = await supabase.auth.getUser()
-
-            if (user) {
-                const { data } = await supabase
-                    .from("users")
-                    .select("*")
-                    .eq("id", user.id)
-                    .single()
-
-                if (data) {
-                    setProfile({
-                        id: data.id,
-                        full_name: data.full_name || "",
-                        email: data.email || user.email || "",
-                        mobile: data.mobile || "",
-                        role: data.role || "staff",
-                    })
-                }
-            }
-            setLoading(false)
-        }
-
-        fetchProfile()
-    }, [supabase])
+        // Backend logic removed for system recreation
+    }, [])
 
     const handleUpdateProfile = async () => {
-        setSaving(true)
-        setMessage(null)
-
-        try {
-            const { error } = await supabase
-                .from("users")
-                .update({
-                    full_name: profile.full_name,
-                    mobile: profile.mobile,
-                    updated_at: new Date().toISOString(),
-                })
-                .eq("id", profile.id)
-
-            if (error) throw error
-
-            setMessage({ type: 'success', text: "Profile updated successfully!" })
-        } catch (err) {
-            setMessage({ type: 'error', text: err instanceof Error ? err.message : "Failed to update profile" })
-        } finally {
-            setSaving(false)
-        }
+        setMessage({ type: 'success', text: "Profile updated (UI Only mode)" })
+        setTimeout(() => setMessage(null), 3000)
     }
 
     const handlePasswordReset = async () => {
-        setSaving(true)
-        setMessage(null)
-
-        try {
-            const { error } = await supabase.auth.resetPasswordForEmail(profile.email, {
-                redirectTo: `${window.location.origin}/auth/update-password`,
-            })
-
-            if (error) throw error
-
-            setMessage({ type: 'success', text: "Password reset email sent!" })
-        } catch (err) {
-            setMessage({ type: 'error', text: err instanceof Error ? err.message : "Failed to send reset email" })
-        } finally {
-            setSaving(false)
-        }
+        setMessage({ type: 'success', text: "Password reset email sent (UI Only mode)" })
+        setTimeout(() => setMessage(null), 3000)
     }
 
     return (

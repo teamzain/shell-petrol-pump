@@ -1,8 +1,9 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { createClient } from "@/lib/supabase/client"
+import { useState, useEffect } from "react"
+import Link from "next/link"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import {
   Table,
@@ -12,6 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { Badge } from "@/components/ui/badge"
 import {
   Select,
   SelectContent,
@@ -19,206 +21,128 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Plus, Search, Pencil, Trash2, Truck, Filter } from "lucide-react"
+import {
+  Plus,
+  Search,
+  ExternalLink,
+  Wallet,
+  History,
+  Edit,
+  UserPlus,
+  Phone,
+  Building2,
+  Filter
+} from "lucide-react"
 import { BrandLoader } from "@/components/ui/brand-loader"
+import { getSuppliers } from "@/app/actions/suppliers"
+import { SupplierWizard } from "@/components/suppliers/supplier-wizard"
 import { SupplierDialog } from "@/components/suppliers/supplier-dialog"
-import { DeleteConfirmDialog } from "@/components/ui/delete-confirm-dialog"
-
-type Supplier = {
-  id: string
-  supplier_name: string
-  contact_person: string | null
-  phone_number: string
-  address: string | null
-  supplier_type: string
-  notes: string | null
-  status: string
-  total_purchases: number
-  account_balance: number
-  last_purchase_date: string | null
-  created_at: string
-}
-
-const supplierTypeLabels: Record<string, string> = {
-  petrol: "Petrol Only",
-  diesel: "Diesel Only",
-  petrol_only: "Petrol Only", // Legacy support
-  diesel_only: "Diesel Only", // Legacy support
-  both_petrol_diesel: "Petrol & Diesel",
-  products_oils: "Products & Oils",
-  both_petrol_diesel_and_oils: "Fuel + Oils",
-}
 
 export default function SuppliersPage() {
-  const [suppliers, setSuppliers] = useState<Supplier[]>([])
-  const [filteredSuppliers, setFilteredSuppliers] = useState<Supplier[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+  const [suppliers, setSuppliers] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
-  const [typeFilter, setTypeFilter] = useState<string>("all")
+  const [wizardOpen, setWizardOpen] = useState(false)
+  const [editDialogOpen, setEditDialogOpen] = useState(false)
+  const [selectedSupplier, setSelectedSupplier] = useState<any>(null)
+
+  // New Filter States
+  const [productTypeFilter, setProductTypeFilter] = useState<string>("all")
   const [statusFilter, setStatusFilter] = useState<string>("all")
-  const [isDialogOpen, setIsDialogOpen] = useState(false)
-  const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null)
-  const [deleteSupplier, setDeleteSupplier] = useState<Supplier | null>(null)
-  const supabase = createClient()
+  const [accountFilter, setAccountFilter] = useState<string>("all")
 
   const fetchSuppliers = async () => {
-    setIsLoading(true)
-    const { data, error } = await supabase
-      .from("suppliers")
-      .select("*")
-      .order("created_at", { ascending: false })
-
-    if (error) {
-      console.error("Error fetching suppliers:", error)
-    } else {
+    setLoading(true)
+    try {
+      const data = await getSuppliers()
       setSuppliers(data || [])
+    } catch (error) {
+      console.error("Error fetching suppliers:", error)
+    } finally {
+      setLoading(false)
     }
-    setIsLoading(false)
   }
 
   useEffect(() => {
     fetchSuppliers()
   }, [])
 
-  useEffect(() => {
-    let filtered = suppliers
+  const filteredSuppliers = suppliers.filter(s => {
+    const matchesSearch = s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (s.contact_person && s.contact_person.toLowerCase().includes(searchQuery.toLowerCase()))
 
-    // Search filter
-    if (searchQuery) {
-      filtered = filtered.filter(
-        (s) =>
-          s.supplier_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          s.phone_number.includes(searchQuery) ||
-          s.contact_person?.toLowerCase().includes(searchQuery.toLowerCase())
-      )
-    }
+    const matchesProductType = productTypeFilter === "all" || s.product_type === productTypeFilter
+    const matchesStatus = statusFilter === "all" || s.status === statusFilter
 
-    // Type filter
-    if (typeFilter !== "all") {
-      filtered = filtered.filter((s) => s.supplier_type === typeFilter)
-    }
+    const accountData = s.company_accounts
+    const account = Array.isArray(accountData) ? accountData[0] : accountData
+    const hasAccount = !!account
 
-    // Status filter
-    if (statusFilter !== "all") {
-      filtered = filtered.filter((s) => s.status === statusFilter)
-    }
+    const matchesAccount = accountFilter === "all" ||
+      (accountFilter === "linked" && hasAccount) ||
+      (accountFilter === "not_set" && !hasAccount)
 
-    setFilteredSuppliers(filtered)
-  }, [suppliers, searchQuery, typeFilter, statusFilter])
+    return matchesSearch && matchesProductType && matchesStatus && matchesAccount
+  })
 
-  const handleEdit = (supplier: Supplier) => {
-    setEditingSupplier(supplier)
-    setIsDialogOpen(true)
-  }
-
-  const handleDelete = async () => {
-    if (!deleteSupplier) return
-
-    const { error } = await supabase
-      .from("suppliers")
-      .delete()
-      .eq("id", deleteSupplier.id)
-
-    if (error) {
-      console.error("Error deleting supplier:", error)
-    } else {
-      fetchSuppliers()
-    }
-    setDeleteSupplier(null)
-  }
-
-  const handleDialogClose = () => {
-    setIsDialogOpen(false)
-    setEditingSupplier(null)
-  }
-
-  const handleSupplierSaved = () => {
-    fetchSuppliers()
-    handleDialogClose()
+  if (loading && suppliers.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] animate-in fade-in duration-500">
+        <BrandLoader size="lg" className="mb-4" />
+        <p className="text-muted-foreground font-medium animate-pulse">Loading Supplier Network...</p>
+      </div>
+    )
   }
 
   return (
-    <div className="space-y-6">
-      {/* Page Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <div className="flex flex-col gap-6">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Suppliers</h1>
-          <p className="text-muted-foreground">
-            Manage your fuel and product suppliers
-          </p>
+          <h1 className="text-3xl font-bold tracking-tight">Suppliers & Ledger</h1>
+          <p className="text-muted-foreground">Manage your supply chain and account balances.</p>
         </div>
-        <Button onClick={() => setIsDialogOpen(true)}>
-          <Plus className="w-4 h-4 mr-2" />
-          Add Supplier
+        <Button onClick={() => setWizardOpen(true)}>
+          <Plus className="mr-2 h-4 w-4" /> Add New Supplier
         </Button>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Suppliers</CardTitle>
-            <Truck className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{suppliers.length}</div>
-            <p className="text-xs text-muted-foreground">{suppliers.filter(s => s.status === 'active').length} active vendors</p>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-primary/[0.02] border-primary/20">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Prepaid Balance</CardTitle>
-            <Search className="h-4 w-4 text-primary" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-primary">Rs. {suppliers.reduce((sum, s) => sum + (s.account_balance || 0), 0).toLocaleString("en-PK", { minimumFractionDigits: 2 })}</div>
-            <p className="text-xs text-muted-foreground">Total funds in company accounts</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">All Time Purchases</CardTitle>
-            <Truck className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">Rs. {suppliers.reduce((sum, s) => sum + (s.total_purchases || 0), 0).toLocaleString("en-PK")}</div>
-            <p className="text-xs text-muted-foreground">Cumulative procurement value</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Filters */}
-      <Card>
-        <CardContent className="pt-6">
-          <div className="flex flex-col sm:flex-row gap-4">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input
-                placeholder="Search suppliers..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9"
-              />
-            </div>
-            <Select value={typeFilter} onValueChange={setTypeFilter}>
-              <SelectTrigger className="w-full sm:w-[180px]">
-                <Filter className="w-4 h-4 mr-2" />
-                <SelectValue placeholder="Filter by type" />
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="Search suppliers by name or contact..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-10 h-10"
+            />
+          </div>
+          <div className="flex items-center gap-2 overflow-x-auto pb-1 md:pb-0">
+            <Select value={productTypeFilter} onValueChange={setProductTypeFilter}>
+              <SelectTrigger className="w-[140px] h-10 bg-white">
+                <SelectValue placeholder="Product Type" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Types</SelectItem>
-                <SelectItem value="petrol_only">Petrol Only</SelectItem>
-                <SelectItem value="diesel_only">Diesel Only</SelectItem>
-                <SelectItem value="both_petrol_diesel">Petrol & Diesel</SelectItem>
-                <SelectItem value="products_oils">Products & Oils</SelectItem>
+                <SelectItem value="all">All Products</SelectItem>
+                <SelectItem value="fuel">Fuel Only</SelectItem>
+                <SelectItem value="oil">Oil Only</SelectItem>
+                <SelectItem value="both">Both (Fuel & Oil)</SelectItem>
               </SelectContent>
             </Select>
+
+            <Select value={accountFilter} onValueChange={setAccountFilter}>
+              <SelectTrigger className="w-[140px] h-10 bg-white">
+                <SelectValue placeholder="Account" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Accounts</SelectItem>
+                <SelectItem value="linked">Linked</SelectItem>
+                <SelectItem value="not_set">Not Set</SelectItem>
+              </SelectContent>
+            </Select>
+
             <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-full sm:w-[140px]">
+              <SelectTrigger className="w-[120px] h-10 bg-white">
                 <SelectValue placeholder="Status" />
               </SelectTrigger>
               <SelectContent>
@@ -227,139 +151,163 @@ export default function SuppliersPage() {
                 <SelectItem value="inactive">Inactive</SelectItem>
               </SelectContent>
             </Select>
+
+            {(productTypeFilter !== "all" || statusFilter !== "all" || accountFilter !== "all" || searchQuery !== "") && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setProductTypeFilter("all")
+                  setStatusFilter("all")
+                  setAccountFilter("all")
+                  setSearchQuery("")
+                }}
+                className="text-xs text-muted-foreground whitespace-nowrap"
+              >
+                Clear All
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <Card>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-slate-50/50">
+                  <TableHead className="font-bold">Supplier Info</TableHead>
+                  <TableHead className="font-bold">Contact Details</TableHead>
+                  <TableHead className="font-bold text-center">Account</TableHead>
+                  <TableHead className="font-bold text-right">Balance</TableHead>
+                  <TableHead className="font-bold text-center">Status</TableHead>
+                  <TableHead className="font-bold text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredSuppliers.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                      No suppliers found.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  filteredSuppliers.map((supplier) => {
+                    const accountData = supplier.company_accounts
+                    const account = Array.isArray(accountData) ? accountData[0] : accountData
+                    const hasAccount = !!account
+                    const balance = hasAccount ? Number(account.current_balance) : 0
+
+                    return (
+                      <TableRow key={supplier.id} className="hover:bg-slate-50/30 transition-colors">
+                        <TableCell>
+                          <div className="flex items-center gap-3">
+                            <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold">
+                              {supplier.name.charAt(0)}
+                            </div>
+                            <div>
+                              <div className="font-bold text-slate-900">{supplier.name}</div>
+                              <div className="text-[10px] uppercase font-bold tracking-tighter text-muted-foreground">
+                                {supplier.product_type === 'both' ? 'Fuel & Oil' : supplier.product_type} Supplier
+                              </div>
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="space-y-1">
+                            <div className="text-sm font-medium flex items-center gap-1.5">
+                              <Building2 className="h-3 w-3 text-muted-foreground" />
+                              {supplier.contact_person || "No POC"}
+                            </div>
+                            <div className="text-xs text-muted-foreground flex items-center gap-1.5">
+                              <Phone className="h-3 w-3" />
+                              {supplier.phone}
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          {hasAccount ? (
+                            <Badge variant="secondary" className="bg-green-100 text-green-700 hover:bg-green-100">
+                              Linked
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-muted-foreground border-dashed">
+                              Not Set
+                            </Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {hasAccount ? (
+                            <div className="flex flex-col items-end">
+                              <span className="font-bold text-slate-900">Rs. {balance.toLocaleString()}</span>
+                              <span className="text-[10px] text-muted-foreground uppercase font-black">Net Balance</span>
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground">-</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <Badge
+                            variant={supplier.status === "active" ? "secondary" : "outline"}
+                            className={supplier.status === "active" ? "bg-primary/10 text-primary" : ""}
+                          >
+                            {supplier.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            <Link href={`/dashboard/suppliers/${supplier.id}`}>
+                              <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-500">
+                                <ExternalLink className="h-4 w-4" />
+                              </Button>
+                            </Link>
+                            {hasAccount ? (
+                              <Link href={`/dashboard/suppliers/${supplier.id}/transactions`}>
+                                <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-500">
+                                  <History className="h-4 w-4" />
+                                </Button>
+                              </Link>
+                            ) : (
+                              <Button variant="ghost" size="icon" className="h-8 w-8 text-orange-500" title="Create Account">
+                                <UserPlus className="h-4 w-4" />
+                              </Button>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-primary"
+                              onClick={() => {
+                                setSelectedSupplier(supplier)
+                                setEditDialogOpen(true)
+                              }}
+                            >
+                              <Edit className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })
+                )}
+              </TableBody>
+            </Table>
           </div>
         </CardContent>
       </Card>
 
-      {/* Suppliers Table */}
-      <Card>
-        <CardHeader>
-          <CardTitle>All Suppliers</CardTitle>
-          <CardDescription>
-            {filteredSuppliers.length} supplier(s) found
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="p-0 sm:p-6">
-          {isLoading ? (
-            <div className="flex flex-col items-center justify-center py-20 animate-in fade-in duration-500">
-              <BrandLoader size="lg" className="mb-4" />
-              <p className="mt-4 text-sm text-muted-foreground font-medium animate-pulse">Loading suppliers...</p>
-            </div>
-          ) : filteredSuppliers.length === 0 ? (
-            <div className="text-center py-12 px-4">
-              <Truck className="w-12 h-12 mx-auto text-muted-foreground/50 mb-4" />
-              <h3 className="text-lg font-medium text-foreground mb-1">
-                No suppliers found
-              </h3>
-              <p className="text-muted-foreground mb-4">
-                {suppliers.length === 0
-                  ? "Get started by adding your first supplier"
-                  : "Try adjusting your search or filters"}
-              </p>
-              {suppliers.length === 0 && (
-                <Button onClick={() => setIsDialogOpen(true)}>
-                  <Plus className="w-4 h-4 mr-2" />
-                  Add Supplier
-                </Button>
-              )}
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="whitespace-nowrap">Supplier Name</TableHead>
-                    <TableHead className="whitespace-nowrap">Contact</TableHead>
-                    <TableHead className="whitespace-nowrap">Type</TableHead>
-                    <TableHead className="whitespace-nowrap">Account Balance</TableHead>
-                    <TableHead className="whitespace-nowrap">Total Purchases</TableHead>
-                    <TableHead className="whitespace-nowrap">Status</TableHead>
-                    <TableHead className="text-right whitespace-nowrap">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredSuppliers.map((supplier) => (
-                    <TableRow key={supplier.id}>
-                      <TableCell className="whitespace-nowrap">
-                        <div>
-                          <p className="font-medium">{supplier.supplier_name}</p>
-                          {supplier.address && (
-                            <p className="text-sm text-muted-foreground truncate max-w-[200px]">
-                              {supplier.address}
-                            </p>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        <div>
-                          <p>{supplier.phone_number}</p>
-                          {supplier.contact_person && (
-                            <p className="text-sm text-muted-foreground">
-                              {supplier.contact_person}
-                            </p>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        <Badge variant="outline">
-                          {supplierTypeLabels[supplier.supplier_type] || supplier.supplier_type}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        Rs. {(supplier.account_balance || 0).toLocaleString("en-PK", { minimumFractionDigits: 2 })}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        Rs. {(supplier.total_purchases || 0).toLocaleString("en-PK")}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        <Badge
-                          variant={supplier.status === "active" ? "default" : "secondary"}
-                        >
-                          {supplier.status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handleEdit(supplier)}
-                          >
-                            <Pencil className="w-4 h-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => setDeleteSupplier(supplier)}
-                          >
-                            <Trash2 className="w-4 h-4 text-destructive" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      <SupplierWizard
+        open={wizardOpen}
+        onOpenChange={setWizardOpen}
+        onSuccess={fetchSuppliers}
+      />
 
-      {/* Dialogs */}
       <SupplierDialog
-        open={isDialogOpen}
-        onOpenChange={handleDialogClose}
-        supplier={editingSupplier}
-        onSaved={handleSupplierSaved}
+        open={editDialogOpen}
+        onOpenChange={setEditDialogOpen}
+        supplier={selectedSupplier}
+        onSuccess={fetchSuppliers}
       />
-
-      <DeleteConfirmDialog
-        open={!!deleteSupplier}
-        onOpenChange={() => setDeleteSupplier(null)}
-        onConfirm={handleDelete}
-        title="Delete Supplier"
-        description={`Are you sure you want to delete "${deleteSupplier?.supplier_name}"? This action cannot be undone.`}
-      />
-    </div >
+    </div>
   )
 }

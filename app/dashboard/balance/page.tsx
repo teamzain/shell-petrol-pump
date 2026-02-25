@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect } from "react"
 import { format } from "date-fns"
 import { getTodayPKT } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -16,7 +16,6 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
-import { createClient } from "@/lib/supabase/client"
 import {
   Wallet,
   Banknote,
@@ -79,7 +78,7 @@ interface Supplier {
 }
 
 export default function BalanceManagementPage() {
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [todayBalance, setTodayBalance] = useState<DailyBalance | null>(null)
   const [balanceHistory, setBalanceHistory] = useState<DailyBalance[]>([])
@@ -105,376 +104,32 @@ export default function BalanceManagementPage() {
     bank: "0"
   })
 
-  const supabase = createClient()
-  const today = getTodayPKT()
-
-  const fetchBalances = useCallback(async () => {
-    setLoading(true)
-
-    // 1. Identify all previous unclosed days and finalized the most recent one for rollover
-    const { data: allPrevBalances } = await supabase
-      .from("daily_balances")
-      .select("*")
-      .lt("balance_date", today)
-      .order("balance_date", { ascending: false })
-
-    let previousClosing = { cash: 0, bank: 0 }
-
-    if (allPrevBalances && allPrevBalances.length > 0) {
-      // The first one in the list is the most recent previous day
-      const lastRecord = allPrevBalances[0]
-      previousClosing = {
-        cash: lastRecord.cash_closing ?? lastRecord.cash_opening ?? 0,
-        bank: lastRecord.bank_closing ?? lastRecord.bank_opening ?? 0
-      }
-
-      // Close all unclosed previous days
-      for (const record of allPrevBalances) {
-        if (!record.is_closed) {
-          console.log(`Attempting to close record for ${record.balance_date}`)
-          const { error: closeError } = await supabase
-            .from("daily_balances")
-            .update({
-              is_closed: true,
-              cash_closing: record.cash_closing ?? record.cash_opening,
-              bank_closing: record.bank_closing ?? record.bank_opening,
-            })
-            .eq("id", record.id)
-
-          if (closeError) {
-            console.error(`Auto-closure failed for ${record.balance_date}:`, closeError)
-            setError(`Failed to close ${record.balance_date}: ${closeError.message}`)
-          } else {
-            console.log(`Successfully closed record for ${record.balance_date}`)
-          }
-        }
-      }
-    }
-
-    // 2. Fetch or Create today's balance
-    const { data: todayData } = await supabase
-      .from("daily_balances")
-      .select("*")
-      .eq("balance_date", today)
-      .limit(1)
-
-    if (todayData && todayData.length > 0) {
-      setTodayBalance(todayData[0])
-    } else {
-      // Create new record for today using previous final values
-      console.log("Creating new record for today...")
-      const { data: newBalance, error: createError } = await supabase
-        .from("daily_balances")
-        .upsert({
-          balance_date: today,
-          cash_opening: previousClosing.cash,
-          bank_opening: previousClosing.bank,
-          cash_closing: previousClosing.cash,
-          bank_closing: previousClosing.bank,
-          is_closed: false
-        }, { onConflict: 'balance_date' })
-        .select()
-        .single()
-
-      if (createError) {
-        // If it's a duplicate, it means someone else created it, so just re-fetch
-        if (createError.code === '23505') {
-          const { data: refetch } = await supabase
-            .from("daily_balances")
-            .select("*")
-            .eq("balance_date", today)
-            .single()
-          if (refetch) setTodayBalance(refetch)
-        } else {
-          console.error("Create today failed:", createError)
-          setError("Failed to initialize today: " + createError.message)
-        }
-      } else if (newBalance) {
-        setTodayBalance(newBalance)
-      }
-    }
-
-    // 3. Fetch Bank Accounts
-    const { data: bankData } = await supabase
-      .from("accounts")
-      .select("*")
-      .eq("account_type", "bank")
-      .eq("status", "active")
-      .order("account_name")
-
-    if (bankData) {
-      setBankAccounts(bankData)
-      if (bankData.length > 0) {
-        setTransactionData(prev => ({ ...prev, bankId: bankData[0].id }))
-      }
-    }
-
-    // 4. Fetch Balance History (Recent 30 days)
-    const { data: historyData } = await supabase
-      .from("daily_balances")
-      .select("*")
-      .order("balance_date", { ascending: false })
-      .limit(30)
-
-    if (historyData) {
-      setBalanceHistory(historyData)
-    }
-
-    // 5. Fetch Suppliers for fund transfer
-    const { data: supplierData } = await supabase
-      .from("suppliers")
-      .select("id, supplier_name, account_balance")
-      .eq("status", "active")
-      .order("supplier_name")
-
-    if (supplierData) {
-      setSuppliers(supplierData)
-    }
-
-    setLoading(false)
-  }, [supabase, today])
-
   useEffect(() => {
-    fetchBalances()
-
-    const channel = supabase
-      .channel('balance_page_updates')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'daily_balances',
-        },
-        () => {
-          fetchBalances()
-        }
-      )
-      .subscribe()
-
-    return () => {
-      supabase.removeChannel(channel)
-    }
-  }, [fetchBalances, supabase])
+    // Backend logic removed for system recreation
+  }, [])
 
   const handleSetOpeningBalance = async () => {
-    setSaving(true)
-    setError("")
-    setSuccess("")
-
-    try {
-      const cashOpening = parseFloat(openingBalances.cash) || 0
-      const bankOpening = parseFloat(openingBalances.bank) || 0
-
-      if (todayBalance) {
-        // Update existing today's balance
-        // Calculate delta to preserve sales/transactions (movements)
-        const oldCashOpening = todayBalance.cash_opening || 0
-        const oldBankOpening = todayBalance.bank_opening || 0
-
-        const cashDelta = cashOpening - oldCashOpening
-        const bankDelta = bankOpening - oldBankOpening
-
-        const updatePayload: any = {
-          cash_opening: cashOpening,
-          bank_opening: bankOpening,
-        }
-
-        // Only adjust closing if it exists (meaning transactions/sales happened)
-        // If it's null, it implies it equals opening, so we leave it null (or set to new opening, 
-        // but leaving null allows it to float with opening if that's the logic, 
-        // though typically we treat null as 'no closing set').
-        // However, if we want to "perform operation on today's opening", we should ensure closing reflects that.
-        if (todayBalance.cash_closing !== null) {
-          updatePayload.cash_closing = Number(todayBalance.cash_closing) + cashDelta
-        }
-
-        if (todayBalance.bank_closing !== null) {
-          updatePayload.bank_closing = Number(todayBalance.bank_closing) + bankDelta
-        }
-
-        const { error: updateError } = await supabase
-          .from("daily_balances")
-          .update(updatePayload)
-          .eq("id", todayBalance.id)
-
-        if (updateError) throw updateError
-      } else {
-        // Create new balance record for today
-        const { error: insertError } = await supabase
-          .from("daily_balances")
-          .insert({
-            balance_date: today,
-            cash_opening: cashOpening,
-            bank_opening: bankOpening,
-          })
-
-        if (insertError) throw insertError
-      }
-
-      setSuccess("Opening balance set successfully!")
-      setOpeningDialogOpen(false)
-      fetchBalances()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to set opening balance")
-    } finally {
-      setSaving(false)
-    }
+    setSuccess("Opening balance set (UI Only mode)")
+    setOpeningDialogOpen(false)
+    setTimeout(() => setSuccess(""), 3000)
   }
 
   const handleCloseDay = async () => {
-    setSaving(true)
-    setError("")
-
-    try {
-      if (!todayBalance) {
-        throw new Error("No balance record found for today")
-      }
-
-      const user = await supabase.auth.getUser()
-
-      const cashClosing = todayBalance.cash_closing ?? todayBalance.cash_opening
-      const bankClosing = totalBankAssets
-
-      const { error: updateError } = await supabase
-        .from("daily_balances")
-        .update({
-          cash_closing: cashClosing,
-          bank_closing: bankClosing,
-          is_closed: true,
-          closed_at: new Date().toISOString(),
-          closed_by: user.data.user?.id || null,
-        })
-        .eq("id", todayBalance.id)
-
-      if (updateError) throw updateError
-
-      setSuccess("Day closed successfully! Tomorrow's opening balance will be set automatically.")
-      setCloseDialogOpen(false)
-      fetchBalances()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to close day")
-    } finally {
-      setSaving(false)
-    }
+    setSuccess("Day closed (UI Only mode)")
+    setCloseDialogOpen(false)
+    setTimeout(() => setSuccess(""), 3000)
   }
 
   const handleTransaction = async () => {
-    setSaving(true)
-    setError("")
-
-    try {
-      if (!todayBalance) throw new Error("No balance record for today. Please set opening balance first.")
-
-      const amount = parseFloat(transactionData.amount)
-      if (!amount || amount <= 0) throw new Error("Please enter a valid amount")
-
-      const defaultDescriptions = {
-        deposit: "Cash deposit to bank",
-        withdraw: "Bank withdrawal to cash",
-        add_cash: "Manual cash addition",
-        add_bank: "Manual bank balance addition",
-        transfer_to_supplier: "Transfer to supplier account"
-      }
-
-      const supplier = transactionType === "transfer_to_supplier"
-        ? suppliers.find(s => s.id === transactionData.supplierId)
-        : null
-
-      const finalDescription = transactionData.description.trim() ||
-        (transactionType === "transfer_to_supplier" && supplier
-          ? `Transfer to supplier: ${supplier.supplier_name}`
-          : defaultDescriptions[transactionType])
-
-      if ((transactionType === "deposit" || transactionType === "withdraw" || transactionType === "add_bank") && !transactionData.bankId) {
-        throw new Error("Please select a bank account")
-      }
-
-      if (transactionType === "transfer_to_supplier" && !transactionData.supplierId) {
-        throw new Error("Please select a supplier")
-      }
-
-      const user = await supabase.auth.getUser()
-      const userId = user.data.user?.id
-
-      const { data: cashAcc } = await supabase.from("accounts").select("id").eq("account_type", "cash").limit(1).single()
-      const cashAccountId = cashAcc?.id
-
-      let fromAccount = null
-      let toAccount = null
-      let txTypeStr = "income"
-      let categoryStr = "manual_adjustment"
-
-      if (transactionType === "deposit") {
-        txTypeStr = "transfer"
-        categoryStr = "bank_deposit"
-        fromAccount = cashAccountId
-        toAccount = transactionData.bankId
-      } else if (transactionType === "withdraw") {
-        txTypeStr = "transfer"
-        categoryStr = "bank_withdrawal"
-        fromAccount = transactionData.bankId
-        toAccount = cashAccountId
-      } else if (transactionType === "add_cash") {
-        toAccount = cashAccountId
-      } else if (transactionType === "add_bank") {
-        toAccount = transactionData.bankId
-      } else if (transactionType === "transfer_to_supplier") {
-        txTypeStr = "transfer"
-        categoryStr = "supplier_transfer"
-        fromAccount = transactionData.bankId || cashAccountId
-      }
-
-      // 1. Log Transaction
-      const { error: txError } = await supabase.from("transactions").insert({
-        transaction_date: today,
-        transaction_type: txTypeStr,
-        category: categoryStr,
-        description: finalDescription,
-        amount: amount,
-        from_account: fromAccount,
-        to_account: toAccount,
-        created_by: userId,
-        bank_account_id: (transactionType === "add_cash" || transactionType === "transfer_to_supplier") ? null : transactionData.bankId,
-        reference_type: transactionType === "transfer_to_supplier" ? 'supplier' : null,
-        reference_id: transactionType === "transfer_to_supplier" ? transactionData.supplierId : null
-      })
-      if (txError) throw txError
-
-      // 2. If transfer to supplier, update supplier balance
-      if (transactionType === "transfer_to_supplier") {
-        const { error: suppError } = await supabase.rpc('increment_supplier_balance', {
-          p_supplier_id: transactionData.supplierId,
-          p_amount: amount
-        });
-
-        // Fallback if RPC doesn't exist yet (though we should create it)
-        if (suppError) {
-          console.warn("RPC increment_supplier_balance failed, trying manual update", suppError);
-          const { data: currentSupp } = await supabase.from("suppliers").select("account_balance").eq("id", transactionData.supplierId).single();
-          const { error: manualError } = await supabase
-            .from("suppliers")
-            .update({ account_balance: (currentSupp?.account_balance || 0) + amount })
-            .eq("id", transactionData.supplierId);
-          if (manualError) throw manualError;
-        }
-      }
-
-      setSuccess("Transaction recorded successfully!")
-      setTransactionDialogOpen(false)
-      setTransactionData({
-        amount: "",
-        description: "",
-        bankId: bankAccounts.length > 0 ? bankAccounts[0].id : "",
-        supplierId: ""
-      })
-      fetchBalances()
-    } catch (err) {
-      console.error(err)
-      setError(err instanceof Error ? err.message : "Failed to record transaction")
-    } finally {
-      setSaving(false)
-    }
+    setSuccess("Transaction recorded (UI Only mode)")
+    setTransactionDialogOpen(false)
+    setTransactionData({
+      amount: "",
+      description: "",
+      bankId: "",
+      supplierId: ""
+    })
+    setTimeout(() => setSuccess(""), 3000)
   }
 
   const formatCurrency = (amount: number | null | undefined) => {
@@ -690,7 +345,7 @@ export default function BalanceManagementPage() {
             Close Day
           </Button>
           <Button
-            onClick={fetchBalances}
+            onClick={() => { }}
             variant="ghost"
             className="w-full sm:w-auto"
           >
@@ -740,7 +395,7 @@ export default function BalanceManagementPage() {
                 </TableHeader>
                 <TableBody>
                   {balanceHistory.map((balance) => {
-                    const isToday = balance.balance_date === today
+                    const isToday = balance.balance_date === getTodayPKT()
                     const cashChange = (balance.cash_closing ?? balance.cash_opening) - balance.cash_opening
                     const displayBankClosing = isToday ? totalBankAssets : balance.bank_closing
                     const bankChange = (displayBankClosing ?? balance.bank_opening) - balance.bank_opening

@@ -1,7 +1,6 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -19,21 +18,21 @@ import { FuelProductDialog } from "@/components/products/fuel-product-dialog"
 import { BrandLoader } from "@/components/ui/brand-loader"
 import { DeleteConfirmDialog } from "@/components/ui/delete-confirm-dialog"
 import { Progress } from "@/components/ui/progress"
+import { createClient } from "@/lib/supabase/client"
+import { toast } from "sonner"
+import { getProducts, deleteProduct as deleteProductAction } from "@/app/actions/products"
 
 type Product = {
   id: string
-  product_name: string
-  product_type: string
+  name: string
+  type: string
+  category: string
   unit: string
   current_stock: number
-  minimum_stock_level: number
+  min_stock_level: number
   tank_capacity: number
   purchase_price: number
-  weighted_avg_cost: number
   selling_price: number
-  last_purchase_price: number | null
-  stock_value: number
-  status: string
   created_at: string
 }
 
@@ -45,20 +44,15 @@ export default function FuelProductsPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [editingProduct, setEditingProduct] = useState<Product | null>(null)
   const [deleteProduct, setDeleteProduct] = useState<Product | null>(null)
-  const supabase = createClient()
 
   const fetchProducts = async () => {
     setIsLoading(true)
-    const { data, error } = await supabase
-      .from("products")
-      .select("*")
-      .eq("product_type", "fuel")
-      .order("product_name", { ascending: true })
-
-    if (error) {
-      console.error("Error fetching products:", error)
-    } else {
+    try {
+      const data = await getProducts('fuel')
       setProducts(data || [])
+    } catch (error) {
+      console.error("Error fetching products:", error)
+      toast.error("Failed to load fuel products")
     }
     setIsLoading(false)
   }
@@ -71,7 +65,7 @@ export default function FuelProductsPage() {
     if (searchQuery) {
       setFilteredProducts(
         products.filter((p) =>
-          p.product_name.toLowerCase().includes(searchQuery.toLowerCase())
+          p.name.toLowerCase().includes(searchQuery.toLowerCase())
         )
       )
     } else {
@@ -87,17 +81,16 @@ export default function FuelProductsPage() {
   const handleDelete = async () => {
     if (!deleteProduct) return
 
-    const { error } = await supabase
-      .from("products")
-      .delete()
-      .eq("id", deleteProduct.id)
-
-    if (error) {
-      console.error("Error deleting product:", error)
-    } else {
+    setIsLoading(true)
+    try {
+      await deleteProductAction(deleteProduct.id)
+      toast.success("Product deleted successfully")
       fetchProducts()
+    } catch (error: any) {
+      toast.error("Failed to delete product: " + error.message)
     }
     setDeleteProduct(null)
+    setIsLoading(false)
   }
 
   const handleDialogClose = () => {
@@ -116,7 +109,7 @@ export default function FuelProductsPage() {
   }
 
   const isLowStock = (product: Product) => {
-    return product.current_stock <= product.minimum_stock_level
+    return product.current_stock <= product.min_stock_level
   }
 
   return (
@@ -155,7 +148,7 @@ export default function FuelProductsPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              Rs. {products.reduce((sum, p) => sum + (p.stock_value || 0), 0).toLocaleString("en-PK")}
+              Rs. {products.reduce((sum, p) => sum + (p.current_stock * p.purchase_price), 0).toLocaleString("en-PK")}
             </div>
           </CardContent>
         </Card>
@@ -231,7 +224,6 @@ export default function FuelProductsPage() {
                     <TableHead className="whitespace-nowrap">Tank Level</TableHead>
                     <TableHead className="whitespace-nowrap">Purchase Price</TableHead>
                     <TableHead className="whitespace-nowrap">Selling Price</TableHead>
-                    <TableHead className="whitespace-nowrap">Status</TableHead>
                     <TableHead className="text-right whitespace-nowrap">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -244,7 +236,7 @@ export default function FuelProductsPage() {
                             <Fuel className="w-5 h-5 text-primary" />
                           </div>
                           <div>
-                            <p className="font-medium">{product.product_name}</p>
+                            <p className="font-medium">{product.name}</p>
                             <p className="text-sm text-muted-foreground">
                               Capacity: {product.tank_capacity?.toLocaleString()} {product.unit}
                             </p>
@@ -266,7 +258,7 @@ export default function FuelProductsPage() {
                           {isLowStock(product) && (
                             <p className="text-xs text-destructive flex items-center gap-1">
                               <AlertTriangle className="w-3 h-3" />
-                              Below minimum ({product.minimum_stock_level} {product.unit})
+                              Below minimum ({product.min_stock_level} {product.unit})
                             </p>
                           )}
                         </div>
@@ -278,13 +270,6 @@ export default function FuelProductsPage() {
                       </TableCell>
                       <TableCell>
                         Rs. {product.selling_price.toFixed(2)}
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={product.status === "active" ? "default" : "secondary"}
-                        >
-                          {product.status}
-                        </Badge>
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-2">
@@ -326,7 +311,7 @@ export default function FuelProductsPage() {
         onOpenChange={() => setDeleteProduct(null)}
         onConfirm={handleDelete}
         title="Delete Fuel Product"
-        description={`Are you sure you want to delete "${deleteProduct?.product_name}"? This will also delete all related inventory records.`}
+        description={`Are you sure you want to delete "${deleteProduct?.name}"? This will also delete all related inventory records.`}
       />
     </div>
   )

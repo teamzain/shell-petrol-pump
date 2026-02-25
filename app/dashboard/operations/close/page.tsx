@@ -1,7 +1,6 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { createClient } from "@/lib/supabase/client"
 import { useRouter } from "next/navigation"
 import { getTodayPKT } from "@/lib/utils"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
@@ -24,8 +23,7 @@ import {
 
 export default function CloseDayPage() {
     const router = useRouter()
-    const supabase = createClient()
-    const [loading, setLoading] = useState(true)
+    const [loading, setLoading] = useState(false)
     const [submitting, setSubmitting] = useState(false)
     const [step, setStep] = useState(1)
     const [error, setError] = useState("")
@@ -52,150 +50,15 @@ export default function CloseDayPage() {
     const today = getTodayPKT()
 
     useEffect(() => {
-        fetchDayData()
+        // Backend logic removed for system recreation
     }, [])
-
-    const fetchDayData = async () => {
-        setLoading(true)
-        try {
-            // 1. Get Day Record
-            const { data: dayRecord, error: dayError } = await supabase
-                .from("daily_operations")
-                .select("*")
-                .eq("operation_date", today)
-                .maybeSingle()
-
-            if (dayError) throw dayError
-            if (!dayRecord) {
-                setError("No active day found for today. Please start the day first.")
-                setLoading(false)
-                return
-            }
-            if (dayRecord.status === "closed") {
-                setError("Day is already closed!")
-                setLoading(false)
-                return
-            }
-
-            setDayData(dayRecord)
-
-            // 2. Fetch Sales (Fuel)
-            const { data: fuelReadings } = await supabase
-                .from("nozzle_readings")
-                .select("sale_amount")
-                .eq("reading_date", today)
-
-            const fuelTotal = fuelReadings?.reduce((sum, r) => sum + (Number(r.sale_amount) || 0), 0) || 0
-
-            // 3. Fetch Product Sales
-            const { data: productSales } = await supabase
-                .from("sales")
-                .select("sale_amount, payment_method")
-                .eq("sale_date", today)
-
-            // Assuming all sales are cash for now unless payment_method is specific
-            const prodTotal = productSales?.filter(s => s.payment_method !== 'credit').reduce((sum, s) => sum + (Number(s.sale_amount) || 0), 0) || 0
-
-            // 4. Fetch Expenses & Purchases (Cash Out)
-            // Check transactions table for accurate cash flow
-            const { data: cashTxns } = await supabase
-                .from("transactions")
-                .select("amount, transaction_type, payment_method")
-                .gte("transaction_date", `${today}T00:00:00`)
-                .lte("transaction_date", `${today}T23:59:59`)
-                .eq("payment_method", "cash") // Only count CASH transactions
-
-            // Simple logic: Income = Cash In, Expense = Cash Out
-            const cashIn = cashTxns?.filter(t => t.transaction_type === 'income').reduce((sum, t) => sum + Number(t.amount), 0) || 0
-            const cashOut = cashTxns?.filter(t => t.transaction_type === 'expense').reduce((sum, t) => sum + Number(t.amount), 0) || 0
-
-            // Combine logic
-            // Opening + (Fuel Sales [assume cash]) + (Product Sales [assume cash]) - Expenses(cash)
-            // Note: Fuel sales might not be in transactions table yet depending on implementation.
-            // Usually Fuel Sales are added to cash daily.
-            // Let's assume Fuel Sales = Cash In (unless credit). petrol pump usually cash.
-
-            const opening = Number(dayRecord.opening_cash_actual || 0)
-
-            // Refined Calc:
-            // If transactions table handles everything, just use that.
-            // But usually Nozzle Readings are separate until closed.
-            // So: Expected = Opening + FuelSales + ProductSales(Cash) - Expenses(Cash)
-
-            // Check if expenses in transactions covers purhcases? likely yes.
-
-            const calculatedExpected = opening + fuelTotal + prodTotal - cashOut
-
-            setFinancials({
-                openingCash: opening,
-                openingBank: Number(dayRecord.opening_bank || 0),
-                totalFuelSales: fuelTotal,
-                totalProductSales: prodTotal,
-                totalExpenses: cashOut,
-                totalCashIn: fuelTotal + prodTotal,
-                totalCashOut: cashOut,
-                expectedCash: calculatedExpected
-            })
-
-        } catch (err) {
-            console.error("Error fetching data:", err)
-            setError("Failed to load daily data.")
-        } finally {
-            setLoading(false)
-        }
-    }
 
     const handleCloseDay = async () => {
         setSubmitting(true)
-        setError("")
-
-        try {
-            const enteredCashVal = Number(actualCash)
-            const cashVariance = enteredCashVal - financials.expectedCash
-
-            // 1. Update Daily Operations
-            const { error: updateError } = await supabase
-                .from("daily_operations")
-                .update({
-                    status: "closed",
-                    closing_cash: financials.expectedCash, // Expected
-                    closing_cash_actual: enteredCashVal, // Actual
-                    closing_cash_variance: cashVariance,
-                    closing_cash_variance_note: cashVarianceNote,
-                    total_sales: financials.totalFuelSales + financials.totalProductSales, // Total Revenue
-                    total_expenses: financials.totalExpenses,
-                    closed_at: new Date().toISOString(),
-                    day_locked: true,
-                    locked_at: new Date().toISOString()
-                })
-                .eq("id", dayData.id)
-
-            if (updateError) throw updateError
-
-            // 2. Log Variance if significant
-            if (Math.abs(cashVariance) > 0) {
-                await supabase.from("cash_variance_log").insert({
-                    variance_date: today,
-                    variance_type: "CLOSING_CASH",
-                    expected_amount: financials.expectedCash,
-                    actual_amount: enteredCashVal,
-                    difference: cashVariance,
-                    explanation: cashVarianceNote,
-                    reported_by: (await supabase.auth.getUser()).data.user?.id
-                })
-            }
-
-            // 3. Update Balance History (Daily Balance Table or Opening Balance for Next Day)
-            // We rely on `daily_operations` as the primary record now.
-
+        // Transition to simulated closed state
+        setTimeout(() => {
             router.push("/dashboard")
-
-        } catch (err: any) {
-            console.error("Close day error:", err)
-            setError("Failed to close day: " + err.message)
-        } finally {
-            setSubmitting(false)
-        }
+        }, 1500)
     }
 
     const formatCurrency = (val: number) => `Rs. ${val.toLocaleString("en-PK")}`

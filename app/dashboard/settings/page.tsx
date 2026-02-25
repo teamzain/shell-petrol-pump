@@ -2,8 +2,6 @@
 
 import { useState, useEffect } from "react"
 import { useTheme } from "next-themes"
-import { createClient } from "@/lib/supabase/client"
-import { getTodayPKT } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -36,22 +34,21 @@ interface BankAccount {
 
 export default function SettingsPage() {
     const { setTheme, theme } = useTheme()
-    const supabase = createClient()
     const [loading, setLoading] = useState(false)
     const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
 
     // Profile State
     const [profile, setProfile] = useState({
-        id: '',
-        fullName: '',
-        email: '',
-        phone: ''
+        id: 'mock-id',
+        fullName: 'Mock User',
+        email: 'user@example.com',
+        phone: '0300-1234567'
     })
 
     // System Settings State
     const [systemConfig, setSystemConfig] = useState({
-        id: '',
-        adminPin: ''
+        id: 'mock-config-id',
+        adminPin: '1234'
     })
 
     // Password State
@@ -60,12 +57,6 @@ export default function SettingsPage() {
         new: '',
         confirm: ''
     })
-
-    useEffect(() => {
-        fetchProfile()
-        fetchSystemConfig()
-        fetchBankAccounts()
-    }, [])
 
     const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([])
     const [bankFormData, setBankFormData] = useState({
@@ -78,182 +69,34 @@ export default function SettingsPage() {
     const [isBankDialogOpen, setIsBankDialogOpen] = useState(false)
     const [isEditingBank, setIsEditingBank] = useState(false)
 
-    const fetchBankAccounts = async () => {
-        const { data } = await supabase
-            .from('accounts')
-            .select('*')
-            .eq('account_type', 'bank')
-            .order('account_name')
-        if (data) setBankAccounts(data)
-    }
+    useEffect(() => {
+        // Backend logic removed for system recreation
+    }, [])
 
     const handleBankSubmit = async (e: React.FormEvent) => {
         e.preventDefault()
-        setLoading(true)
-        setMessage(null)
-
-        try {
-            const payload = {
-                account_name: bankFormData.account_name,
-                account_number: bankFormData.account_number,
-                opening_balance: parseFloat(bankFormData.opening_balance) || 0,
-                account_type: 'bank',
-                status: bankFormData.status
-            }
-
-            if (isEditingBank) {
-                const { error } = await supabase
-                    .from('accounts')
-                    .update(payload)
-                    .eq('id', bankFormData.id)
-                if (error) throw error
-                setMessage({ type: 'success', text: 'Bank account updated!' })
-            } else {
-                // For new accounts, current_balance = opening_balance
-                const { error } = await supabase
-                    .from('accounts')
-                    .insert({ ...payload, current_balance: payload.opening_balance })
-                if (error) throw error
-
-                setMessage({ type: 'success', text: 'Bank account added!' })
-            }
-
-            setIsBankDialogOpen(false)
-            fetchBankAccounts()
-        } catch (error: any) {
-            setMessage({ type: 'error', text: error.message || 'Failed to save bank account' })
-        } finally {
-            setLoading(false)
-        }
-    }
-
-    const fetchSystemConfig = async () => {
-        try {
-            const { data, error } = await supabase
-                .from('pump_config')
-                .select('id, admin_pin')
-                .limit(1)
-                .maybeSingle()
-
-            if (data) {
-                setSystemConfig({
-                    id: data.id,
-                    adminPin: data.admin_pin || ''
-                })
-            }
-        } catch (error) {
-            console.error('Error loading system config:', error)
-        }
-    }
-
-    const fetchProfile = async () => {
-        try {
-            const { data: { user } } = await supabase.auth.getUser()
-            if (user) {
-                // Get extra details from public.users table if exists, or metadata
-                const { data: userDetails } = await supabase
-                    .from('users')
-                    .select('*')
-                    .eq('id', user.id)
-                    .single()
-
-                setProfile({
-                    id: user.id,
-                    fullName: userDetails?.full_name || user.user_metadata?.full_name || '',
-                    email: user.email || '',
-                    phone: userDetails?.mobile || user.user_metadata?.mobile || ''
-                })
-            }
-        } catch (error) {
-            console.error('Error loading profile:', error)
-        }
+        setMessage({ type: 'success', text: 'Bank account saved (UI Only mode)' })
+        setIsBankDialogOpen(false)
+        setTimeout(() => setMessage(null), 3000)
     }
 
     const handleProfileUpdate = async (e: React.FormEvent) => {
         e.preventDefault()
-        setLoading(true)
-        setMessage(null)
-
-        try {
-            // 1. Update Supabase Auth Metadata
-            const { error: authError } = await supabase.auth.updateUser({
-                data: { full_name: profile.fullName, mobile: profile.phone }
-            })
-            if (authError) throw authError
-
-            // 2. Update public.users table
-            const { error: dbError } = await supabase
-                .from('users')
-                .update({
-                    full_name: profile.fullName,
-                    mobile: profile.phone,
-                    updated_at: new Date().toISOString()
-                })
-                .eq('id', profile.id)
-
-            if (dbError) throw dbError
-
-            setMessage({ type: 'success', text: 'Profile updated successfully!' })
-        } catch (error: any) {
-            setMessage({ type: 'error', text: error.message || 'Failed to update profile' })
-        } finally {
-            setLoading(false)
-        }
+        setMessage({ type: 'success', text: 'Profile updated (UI Only mode)' })
+        setTimeout(() => setMessage(null), 3000)
     }
 
     const handlePasswordChange = async (e: React.FormEvent) => {
         e.preventDefault()
-        if (passwords.new !== passwords.confirm) {
-            setMessage({ type: 'error', text: 'New passwords do not match' })
-            return
-        }
-
-        setLoading(true)
-        setMessage(null)
-
-        try {
-            const { error } = await supabase.auth.updateUser({
-                password: passwords.new
-            })
-
-            if (error) throw error
-
-            setMessage({ type: 'success', text: 'Password updated successfully!' })
-            setPasswords({ current: '', new: '', confirm: '' })
-        } catch (error: any) {
-            setMessage({ type: 'error', text: error.message || 'Failed to update password' })
-        } finally {
-            setLoading(false)
-        }
+        setMessage({ type: 'success', text: 'Password updated (UI Only mode)' })
+        setPasswords({ current: '', new: '', confirm: '' })
+        setTimeout(() => setMessage(null), 3000)
     }
 
     const handlePinUpdate = async (e: React.FormEvent) => {
         e.preventDefault()
-        if (!systemConfig.adminPin || systemConfig.adminPin.length < 4) {
-            setMessage({ type: 'error', text: 'PIN must be at least 4 digits' })
-            return
-        }
-
-        setLoading(true)
-        setMessage(null)
-
-        try {
-            const { error } = await supabase
-                .from('pump_config')
-                .update({
-                    admin_pin: systemConfig.adminPin,
-                    updated_at: new Date().toISOString()
-                })
-                .eq('id', systemConfig.id)
-
-            if (error) throw error
-
-            setMessage({ type: 'success', text: 'Admin PIN updated successfully!' })
-        } catch (error: any) {
-            setMessage({ type: 'error', text: error.message || 'Failed to update PIN' })
-        } finally {
-            setLoading(false)
-        }
+        setMessage({ type: 'success', text: 'Admin PIN updated (UI Only mode)' })
+        setTimeout(() => setMessage(null), 3000)
     }
 
     return (

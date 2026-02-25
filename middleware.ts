@@ -30,11 +30,11 @@ export async function middleware(request: NextRequest) {
   const publicRoutes = ['/login', '/auth/login', '/auth/sign-up', '/auth/sign-up-success', '/auth/error']
   const isPublicRoute = publicRoutes.some(route => pathname.startsWith(route))
 
-  // If user is authenticated via Supabase Auth, verify they exist in the public.users table
+  // If user is authenticated via Supabase Auth, verify they exist in the public.profiles table
   let dbUser = null
   if (user) {
     const { data } = await supabase
-      .from('users')
+      .from('profiles')
       .select('id')
       .eq('id', user.id)
       .single()

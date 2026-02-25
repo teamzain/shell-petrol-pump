@@ -1,11 +1,10 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import { createClient } from "@/lib/supabase/client"
 import {
   Fuel,
   Package,
@@ -58,35 +57,7 @@ interface StockMovement {
 export default function InventoryPage() {
   const [products, setProducts] = useState<Product[]>([])
   const [movements, setMovements] = useState<StockMovement[]>([])
-  const [loading, setLoading] = useState(true)
-
-  const supabase = createClient()
-
-  const fetchData = useCallback(async () => {
-    setLoading(true)
-
-    const [productsRes, movementsRes] = await Promise.all([
-      supabase
-        .from("products")
-        .select("*")
-        .eq("status", "active")
-        .order("product_name"),
-      supabase
-        .from("stock_movements")
-        .select("*, products(product_name)")
-        .order("movement_date", { ascending: false })
-        .limit(20)
-    ])
-
-    if (productsRes.data) setProducts(productsRes.data)
-    if (movementsRes.data) setMovements(movementsRes.data as StockMovement[])
-
-    setLoading(false)
-  }, [supabase])
-
-  useEffect(() => {
-    fetchData()
-  }, [fetchData])
+  const [loading, setLoading] = useState(false)
 
   const fuelProducts = products.filter(p => p.product_type === "fuel")
   const oilProducts = products.filter(p => p.product_type === "oil_lubricant")

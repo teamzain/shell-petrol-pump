@@ -1,1140 +1,567 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
-import { createClient } from "@/lib/supabase/client"
+import { useState, useEffect } from "react"
 import { format } from "date-fns"
 import { getTodayPKT, cn } from "@/lib/utils"
 import Link from "next/link"
-import { ArrowLeft, ArrowRightLeft, Calendar as CalendarIcon, Search, Save, Lock, Unlock, AlertTriangle, AlertCircle, CheckCircle2, Fuel, Droplet, TrendingUp, HandCoins, CreditCard, Receipt } from "lucide-react"
-import { BrandLoader } from "@/components/ui/brand-loader"
+import { createClient } from "@/lib/supabase/client"
+import { ArrowLeft, ArrowRightLeft, Calendar as CalendarIcon, Save, AlertCircle, CheckCircle2, Droplet, CreditCard, Receipt, FileText, Download, TrendingUp } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { CardManagement } from "@/components/dashboard/card-management"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog"
 import { useToast } from "@/components/ui/use-toast"
+import { BrandLoader } from "@/components/ui/brand-loader"
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle
+} from "@/components/ui/dialog"
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue
+} from "@/components/ui/select"
 
-// --- Interfaces ---
-interface Nozzle {
-  id: string
-  nozzle_number: string
-  // pump_id: string 
-  product_id: string
-  current_reading: number
-  // pumps: {
-  //   pump_name: string
-  // }
-  products: {
-    product_name: string
-    selling_price: number
-    weighted_avg_cost: number
-  }
-}
-
-interface NozzleReading {
-  id?: string
-  nozzle_id: string
-  opening_reading: number
-  closing_reading: string
-  liters_sold: number
-  sales_amount: number
-  payment_method: "cash" | "bank"
-  bank_account_id?: string
-  status?: "pending" | "saved" | "locked"
-}
-
-interface BankAccount {
-  id: string
-  account_name: string
-  current_balance: number
-}
-
-interface OilProduct {
-  id: string
-  product_name: string
-  selling_price: number
-  weighted_avg_cost: number
-  purchase_price: number
-  current_stock: number
-  unit: string
-  category: string
-}
-
-interface Sale {
-  id: string
-  product_id: string
-  quantity: number
-  sale_amount: number
-  total_amount: number
-  paid_amount: number
-  payment_method: string
-  products: {
-    product_name: string
-  }
-}
-
-interface CardType {
-  id: string
-  card_name: string
-  tax_percentage: number
-}
-
-export default function SalesPage() {
-  const supabase = createClient()
+export default function SalesHistoryPage() {
   const { toast } = useToast()
+  const supabase = createClient()
 
   // State
+  const [activeTab, setActiveTab] = useState("daily")
   const [selectedDate, setSelectedDate] = useState<string>(getTodayPKT())
-  const [activeTab, setActiveTab] = useState("fuel")
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
 
-  // Data State
-  const [nozzles, setNozzles] = useState<Nozzle[]>([])
-  const [nozzleReadings, setNozzleReadings] = useState<NozzleReading[]>([])
-  const [productSales, setProductSales] = useState<Sale[]>([])
-  const [oilProducts, setOilProducts] = useState<OilProduct[]>([])
-  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([])
+  // Data
+  const [sales, setSales] = useState<any[]>([])
+  const [readings, setReadings] = useState<any[]>([])
+  const [holds, setHolds] = useState<any[]>([])
+  const [sessionUser, setSessionUser] = useState<string>("")
 
-  // Unlock Logic
-  const [unlockedNozzles, setUnlockedNozzles] = useState<Set<string>>(new Set())
-  const [authDialogOpen, setAuthDialogOpen] = useState(false)
-  const [unlockPin, setUnlockPin] = useState("")
-  const [dbAdminPin, setDbAdminPin] = useState("1234") // Fallback
-  const [nozzleToUnlock, setNozzleToUnlock] = useState<string | null>(null)
+  // Hold Release Modal
+  const [holdToRelease, setHoldToRelease] = useState<any>(null)
+  const [releasing, setReleasing] = useState(false)
 
-  // Product Sale Form
-  const [newProductSale, setNewProductSale] = useState({
-    product_id: "",
-    quantity: "",
-    total_amount: "",
-    discount_amount: "0", // New
-    paid_amount: "",
-    payment_method: "cash",
-    bank_account_id: ""
-  })
+  useEffect(() => {
+    // get user inline for releases
+    supabase.auth.getSession().then(({ data }) => setSessionUser(data.session?.user?.id || ''))
+    fetchData()
+  }, [selectedDate, activeTab])
 
-  // Dynamic Daily Card Summary
-  const [activeCardTypes, setActiveCardTypes] = useState<CardType[]>([])
-  const [cardAmounts, setCardAmounts] = useState<Record<string, string>>({})
-  const [initialCardAmounts, setInitialCardAmounts] = useState<Record<string, string>>({})
-  const [cardSubTab, setCardSubTab] = useState<"totals" | "manage">("manage")
-
-  // Alerts
-  const [error, setError] = useState("")
-  const [success, setSuccess] = useState("")
-
-  const fetchData = useCallback(async () => {
+  const fetchData = async () => {
     setLoading(true)
-    setError("")
     try {
-      // 1. Fetch Nozzles
-      const { data: nozzlesData } = await supabase
-        .from("nozzles")
-        .select(`
-          *,
-          products (product_name, selling_price, weighted_avg_cost)
-        `)
-        // .order("pump_id", { ascending: true })
-        .order("nozzle_number", { ascending: true })
-
-      // 2. Fetch Readings/Sales for selected date
-      const { data: readingsData } = await supabase
-        .from("nozzle_readings")
-        .select("*")
-        .eq("reading_date", selectedDate)
-
-      const { data: salesData } = await supabase
-        .from("sales")
-        .select("*, products(product_name)")
-        .eq("sale_date", selectedDate)
-        .eq("sale_type", "product")
-
-      if (salesData) setProductSales(salesData)
-
-      // 4. Fetch System Config & Card Types
-      const { data: ctData } = await supabase.from("card_types").select("*").eq("is_active", true).order("card_name")
-      if (ctData) setActiveCardTypes(ctData)
-
-      const { data: configData } = await supabase
-        .from("pump_config")
-        .select("admin_pin")
-        .limit(1)
-        .maybeSingle()
-
-      if (configData?.admin_pin) {
-        setDbAdminPin(configData.admin_pin)
+      if (activeTab === "daily") {
+        const { data, error } = await supabase
+          .from('daily_sales')
+          .select(`
+            id, sale_date, liters_sold, rate_per_liter, total_amount, payment_type, hold_status,
+            dispensers(name), nozzles(nozzle_number), products(name), payment_methods(name)
+          `)
+          .eq('sale_date', selectedDate)
+          .order('created_at', { ascending: false })
+        if (error) throw error
+        setSales(data || [])
       }
-
-      // Initialize readings state
-      if (nozzlesData) {
-        setNozzles(nozzlesData as Nozzle[])
-        let dailyShell = 0
-        let dailyBank = 0
-
-        setNozzleReadings(nozzlesData.map(n => {
-          const existing = readingsData?.find(r => r.nozzle_id === n.id)
-          if (existing) {
-            return {
-              id: existing.id,
-              nozzle_id: n.id,
-              opening_reading: existing.opening_reading,
-              closing_reading: existing.closing_reading.toString(),
-              liters_sold: existing.quantity_sold,
-              sales_amount: existing.sale_amount,
-              payment_method: existing.payment_method || "cash",
-              status: "saved"
-            }
-          }
-          return {
-            nozzle_id: n.id,
-            opening_reading: n.current_reading,
-            closing_reading: "",
-            liters_sold: 0,
-            sales_amount: 0,
-            payment_method: "cash",
-            status: "pending"
-          }
-        }))
-
-        // Initialize Card Breakdown from the first saved reading
-        const readingWithCard = readingsData?.find(r => r.card_breakdown && Object.keys(r.card_breakdown).length > 0)
-        if (readingWithCard) {
-          const breakdown = readingWithCard.card_breakdown as Record<string, number>
-          const amounts: Record<string, string> = {}
-          Object.entries(breakdown).forEach(([id, amt]) => {
-            amounts[id] = amt.toString()
-          })
-          setCardAmounts(amounts)
-          setInitialCardAmounts(amounts)
-        } else {
-          setCardAmounts({})
-          setInitialCardAmounts({})
-        }
+      else if (activeTab === "readings") {
+        const { data, error } = await supabase
+          .from('daily_meter_readings')
+          .select(`
+            id, reading_date, opening_reading, closing_reading, liters_sold,
+            nozzles(nozzle_number), dispensers(name)
+          `)
+          .eq('reading_date', selectedDate)
+          .order('created_at', { ascending: false })
+        if (error) throw error
+        setReadings(data || [])
       }
-
-      // 3. Fetch Oil Products
-      const { data: oilData } = await supabase
-        .from("products")
-        .select("*")
-        .eq("status", "active")
-        .neq("product_type", "fuel") // Broader: Anything that isn't fuel is a product sale
-        .order("product_name")
-
-      if (oilData) {
-        setOilProducts(oilData)
-      }
-
-      // 5. Fetch Bank Accounts
-      const { data: bankData } = await supabase
-        .from("accounts")
-        .select("id, account_name, current_balance")
-        .eq("account_type", "bank")
-        .eq("status", "active")
-        .order("account_name")
-
-      if (bankData) {
-        setBankAccounts(bankData)
-        if (bankData.length > 0) {
-          setNewProductSale(prev => ({ ...prev, bank_account_id: bankData[0].id }))
-        }
+      else if (activeTab === "holds") {
+        // Fetch all non-released holds globally for managing, maybe filter by date optionally, but usually see all pending
+        const { data, error } = await supabase
+          .from('card_hold_records')
+          .select(`
+            id, sale_date, hold_amount, expected_release_date, actual_release_date, status, payment_type,
+            payment_methods(name), suppliers(name)
+          `)
+          .order('sale_date', { ascending: false })
+        if (error) throw error
+        setHolds(data || [])
       }
 
     } catch (err: any) {
       console.error(err)
-      setError("Failed to fetch data.")
+      toast({ title: "Error loading data", description: err.message, variant: "destructive" })
     } finally {
       setLoading(false)
     }
-  }, [supabase, selectedDate])
-
-
-  useEffect(() => {
-    fetchData()
-  }, [fetchData])
-
-  // --- Handlers ---
-
-  const handleReadingChange = (nozzleId: string, value: string) => {
-    setNozzleReadings(prev => prev.map(r => {
-      if (r.nozzle_id !== nozzleId) return r
-      // Allow editing if new (no id) OR explicitly unlocked
-      if (r.id && !unlockedNozzles.has(nozzleId)) return r
-
-      const closing = parseFloat(value) || 0
-      const liters = closing > r.opening_reading ? closing - r.opening_reading : 0
-      const nozzle = nozzles.find(n => n.id === nozzleId)
-      const sellingPrice = nozzle?.products?.selling_price || 0
-
-      return {
-        ...r,
-        closing_reading: value,
-        liters_sold: liters,
-        sales_amount: liters * sellingPrice,
-        payment_method: "cash", // Always cash now
-        status: r.id ? "saved" : "pending"
-      }
-    }))
   }
 
-  const handleUnlockRequest = (nozzleId: string) => {
-    setNozzleToUnlock(nozzleId)
-    setAuthDialogOpen(true)
-    setUnlockPin("")
-  }
-
-  const confirmUnlock = () => {
-    // Check against PIN from database
-    if (unlockPin === dbAdminPin) {
-      if (nozzleToUnlock) {
-        setUnlockedNozzles(prev => new Set(prev).add(nozzleToUnlock))
-        setNozzleToUnlock(null)
-        setAuthDialogOpen(false)
-        toast({ title: "Unlocked", description: "You can now edit the reading." })
-      }
-    } else {
-      setError("Invalid PIN")
-    }
-  }
-
-  const handleSubmitFuelSales = async () => {
-    setSaving(true)
-    setError("")
-    setSuccess("")
-
+  const handleReleaseHold = async () => {
+    if (!holdToRelease) return
+    setReleasing(true)
     try {
-      const readingsToSave = nozzleReadings.filter(r => {
-        const hasChange = r.liters_sold > 0
-        const isEditable = !r.id || unlockedNozzles.has(r.nozzle_id)
-        return hasChange && isEditable
+      const { error } = await supabase.rpc('release_card_hold', {
+        p_hold_id: holdToRelease.id,
+        p_user_id: sessionUser || '00000000-0000-0000-0000-000000000000'
       })
+      if (error) throw error
 
-      if (readingsToSave.length === 0) {
-        toast({ title: "No changes", description: "No new valid readings to save." })
-        setSaving(false)
-        return
-      }
-
-      // Validation
-      for (const r of readingsToSave) {
-        if (parseFloat(r.closing_reading) < r.opening_reading) {
-          throw new Error(`Closing reading < Opening for a nozzle.`)
-        }
-      }
-
-      const saveReading = async (reading: any) => {
-        const nozzle = nozzles.find(n => n.id === reading.nozzle_id)
-        if (!nozzle) return
-
-        const closing = parseFloat(reading.closing_reading)
-        const product = nozzle.products
-        const user = await supabase.auth.getUser()
-        const userId = user.data.user?.id
-
-        if (reading.id) {
-          // Update Reading
-          const { error: nrUpdateError } = await supabase.from("nozzle_readings").update({
-            closing_reading: closing,
-            quantity_sold: reading.liters_sold,
-            sale_amount: reading.sales_amount,
-            payment_method: "cash",
-            bank_account_id: null,
-            recorded_by: userId
-          }).eq("id", reading.id)
-          if (nrUpdateError) throw nrUpdateError
-
-          // Sync Sales record
-          const fuelQty = reading.liters_sold
-          const fuelTotal = reading.sales_amount
-          const fuelCogsPerUnit = product.weighted_avg_cost || 0
-          const fuelTotalCogs = fuelQty * fuelCogsPerUnit
-          const fuelGrossProfit = fuelTotal - fuelTotalCogs
-
-          const { error: sUpdateError } = await supabase.from("sales").update({
-            quantity: fuelQty,
-            selling_price: product.selling_price,
-            sale_amount: fuelTotal,
-            payment_method: "cash",
-            bank_account_id: null,
-            cogs_per_unit: fuelCogsPerUnit,
-            total_cogs: fuelTotalCogs,
-            gross_profit: fuelGrossProfit,
-            recorded_by: userId
-          }).eq("nozzle_id", nozzle.id).eq("sale_date", selectedDate).eq("sale_type", "fuel")
-          if (sUpdateError) throw sUpdateError
-
-        } else {
-          // Insert Reading
-          const qty = reading.liters_sold
-          const total = reading.sales_amount
-          const { error: nrInsertError } = await supabase.from("nozzle_readings").insert({
-            nozzle_id: reading.nozzle_id,
-            reading_date: selectedDate,
-            opening_reading: reading.opening_reading,
-            closing_reading: closing,
-            quantity_sold: qty,
-            selling_price: nozzle.products.selling_price,
-            sale_amount: total,
-            payment_method: "cash",
-            bank_account_id: null,
-            cogs_per_unit: nozzle.products.weighted_avg_cost || 0,
-            total_cogs: qty * (nozzle.products.weighted_avg_cost || 0),
-            gross_profit: total - (qty * (nozzle.products.weighted_avg_cost || 0)),
-            recorded_by: userId
-          })
-          if (nrInsertError) throw nrInsertError
-
-          const fuelInsertCogsPerUnit = product.weighted_avg_cost || 0
-          const fuelInsertTotalCogs = qty * fuelInsertCogsPerUnit
-          const fuelInsertGrossProfit = total - fuelInsertTotalCogs
-
-          const { error: sInsertError } = await supabase.from("sales").insert({
-            sale_date: selectedDate,
-            product_id: nozzle.product_id,
-            quantity: reading.liters_sold,
-            selling_price: product.selling_price,
-            sale_amount: reading.sales_amount,
-            total_amount: reading.sales_amount,
-            paid_amount: reading.sales_amount,
-            sale_type: "fuel",
-            nozzle_id: nozzle.id,
-            payment_method: "cash",
-            bank_account_id: null,
-            cogs_per_unit: fuelInsertCogsPerUnit,
-            total_cogs: fuelInsertTotalCogs,
-            gross_profit: fuelInsertGrossProfit,
-            recorded_by: userId
-          })
-          if (sInsertError) throw sInsertError
-
-          // Update Nozzle Current Reading
-          const { error: nUpdateError } = await supabase.from("nozzles").update({ current_reading: closing }).eq("id", nozzle.id)
-          if (nUpdateError) throw nUpdateError
-        }
-      }
-
-      for (const r of readingsToSave) {
-        await saveReading(r)
-      }
-
-      toast({ title: "Success", description: "Fuel sales recorded successfully." })
-      fetchData()
+      toast({ title: "Success", description: "Hold successfully released." })
+      setHoldToRelease(null)
+      fetchData() // Refresh list
     } catch (err: any) {
-      console.error("Sale Recording Error:", err)
-      const errorMsg = err.message || (err.error && err.error.message) || "Failed to save sales."
-      setError(errorMsg)
-      toast({ title: "Error", description: errorMsg, variant: "destructive" })
+      toast({ title: "Release Failed", description: err.message, variant: "destructive" })
     } finally {
-      setSaving(false)
-    }
-  }
-
-  const handleSubmitCardPayments = async () => {
-    setSaving(true)
-    setError("")
-    setSuccess("")
-
-    try {
-      const cardTotalsChanged = JSON.stringify(cardAmounts) !== JSON.stringify(initialCardAmounts)
-      if (!cardTotalsChanged) {
-        toast({ title: "No changes", description: "No card totals to save." })
-        setSaving(false)
-        return
-      }
-
-      // Prepare card breakdown JSONB
-      const breakdown: Record<string, number> = {}
-      let totalCardAmt = 0
-      Object.entries(cardAmounts).forEach(([id, val]) => {
-        const amt = parseFloat(val) || 0
-        if (amt > 0) {
-          breakdown[id] = amt
-          totalCardAmt += amt
-        }
-      })
-
-      // Find ANY reading for the day to attach card totals to (financial trigger requirement)
-      // If none, we might need a dummy or a specific logic.
-      // Current design attaches to one reading per day.
-      const existingReading = nozzleReadings.find(r => r.id)
-      if (!existingReading) {
-        toast({ title: "Incomplete", description: "Please record at least one nozzle reading before saving card totals.", variant: "destructive" })
-        setSaving(false)
-        return
-      }
-
-      // Update the reading
-      const { error: nrErr } = await supabase.from("nozzle_readings").update({
-        total_card_amount: totalCardAmt,
-        card_breakdown: breakdown,
-        shell_card_amount: 0,
-        bank_card_amount: 0
-      }).eq("id", existingReading.id)
-      if (nrErr) throw nrErr
-
-      // Update the sale record associated with that reading
-      const { error: sErr } = await supabase.from("sales").update({
-        total_card_amount: totalCardAmt,
-        card_breakdown: breakdown,
-        shell_card_amount: 0,
-        bank_card_amount: 0
-      }).eq("nozzle_id", existingReading.nozzle_id).eq("sale_date", selectedDate).eq("sale_type", "fuel")
-      if (sErr) throw sErr
-
-      toast({ title: "Success", description: "Daily card totals updated." })
-      fetchData()
-    } catch (err: any) {
-      console.error("Card Recording Error:", err)
-      const errorMsg = err.message || "Failed to save card payments."
-      setError(errorMsg)
-      toast({ title: "Error", description: errorMsg, variant: "destructive" })
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const handleAddProductSale = async () => {
-    if (!newProductSale.product_id || !newProductSale.quantity) return
-    setSaving(true)
-    try {
-      const product = oilProducts.find(p => p.id === newProductSale.product_id)
-      if (!product) return
-
-      const qty = parseFloat(newProductSale.quantity)
-      const totalAmount = parseFloat(newProductSale.total_amount)
-      const paidAmount = parseFloat(newProductSale.paid_amount) || totalAmount
-
-      const recordedBy = (await supabase.auth.getUser()).data.user?.id
-
-      const { error: sInsertError } = await supabase.from("sales").insert({
-        sale_date: selectedDate,
-        product_id: product.id,
-        quantity: qty,
-        selling_price: product.selling_price,
-        sale_amount: paidAmount, // Map paid to sale_amount for financials
-        total_amount: totalAmount,
-        paid_amount: paidAmount,
-        sale_type: "product",
-        payment_method: newProductSale.payment_method === "bank" ? "bank_transfer" : "cash",
-        bank_account_id: newProductSale.payment_method === "bank" ? newProductSale.bank_account_id : null,
-        cogs_per_unit: product.weighted_avg_cost || product.purchase_price || 0,
-        total_cogs: qty * (product.weighted_avg_cost || product.purchase_price || 0),
-        gross_profit: paidAmount - (qty * (product.weighted_avg_cost || product.purchase_price || 0)),
-        recorded_by: recordedBy
-      })
-      if (sInsertError) throw sInsertError
-
-      toast({ title: "Success", description: "Product sale added." })
-      setNewProductSale({
-        product_id: "",
-        quantity: "",
-        total_amount: "",
-        discount_amount: "0",
-        paid_amount: "",
-        payment_method: "cash",
-        bank_account_id: ""
-      })
-      fetchData()
-    } catch (err: any) {
-      console.error(err)
-      const errorMsg = err.message || (err.error && err.error.message) || "Failed to add product sale"
-      setError(errorMsg)
-      toast({ title: "Error", description: errorMsg, variant: "destructive" })
-    } finally {
-      setSaving(false)
+      setReleasing(false)
     }
   }
 
   // --- Render Helpers ---
+  const dailyTotalAmount = sales.reduce((s, row) => s + Number(row.total_amount), 0)
+  const dailyTotalLiters = sales.reduce((s, row) => s + Number(row.liters_sold), 0)
 
-  const totalFuelLiters = nozzleReadings.reduce((sum, r) => sum + r.liters_sold, 0)
-  const totalFuelAmount = nozzleReadings.reduce((sum, r) => sum + r.sales_amount, 0)
+  // Hold Status Component
+  const HoldStatusBadge = ({ hold }: { hold: any }) => {
+    if (hold.status === 'released') return <Badge variant="outline" className="text-green-600 bg-green-50 border-green-200">Released</Badge>
 
-  const totalProductAmount = productSales.reduce((sum, s) => sum + s.sale_amount, 0)
-  const totalBankTransferAmount = productSales
-    .filter(s => s.payment_method === "bank_transfer")
-    .reduce((sum, s) => sum + s.sale_amount, 0)
-  const totalCashProductAmount = productSales
-    .filter(s => s.payment_method !== "bank_transfer")
-    .reduce((sum, s) => sum + s.sale_amount, 0)
+    const expDate = hold.expected_release_date ? new Date(hold.expected_release_date) : null
+    const today = new Date(selectedDate) // Using selected date as anchor for "today"
 
-  const totalCardAmount = Object.values(cardAmounts).reduce((sum, val) => sum + (parseFloat(val) || 0), 0)
-  const totalCombinedSales = totalFuelAmount + totalProductAmount
-  const totalCashAmount = (totalFuelAmount + totalCashProductAmount) - totalCardAmount
+    if (!expDate) return <Badge variant="secondary" className="bg-slate-100/80">Pending</Badge>
 
-  if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] animate-in fade-in duration-500">
-        <BrandLoader size="lg" className="mb-4" />
-        <p className="text-muted-foreground font-medium animate-pulse">Initializing Sales Dashboard...</p>
-      </div>
-    )
+    const diffTime = expDate.getTime() - today.getTime()
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+
+    if (diffDays < 0) return <Badge variant="destructive" className="bg-red-100 text-red-700 hover:bg-red-100 border-red-200 shadow-sm flex gap-1"><span className="h-1.5 w-1.5 rounded-full bg-red-500 my-auto" />Overdue</Badge> // Red
+    if (diffDays === 0) return <Badge variant="secondary" className="bg-orange-100 text-orange-700 border-orange-200">Due Today</Badge> // Orange
+    if (diffDays <= 3) return <Badge variant="secondary" className="bg-yellow-100 text-yellow-700 border-yellow-200 flex gap-1"><span className="h-1.5 w-1.5 rounded-full bg-yellow-500 my-auto" />In {diffDays} days</Badge> // Yellow
+
+    return <Badge variant="outline" className="bg-white">Upcoming</Badge> // Default
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-6 max-w-7xl mx-auto pb-10">
 
-      {/* Header & Filter */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      {/* Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b pb-4 border-border/40">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Sales Management</h1>
-          <p className="text-muted-foreground">Record daily nozzle readings and product sales.</p>
+          <div className="flex items-center gap-2 mb-1">
+            <Link href="/dashboard" legacyBehavior>
+              <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted/60 transition-colors">
+                <ArrowLeft className="h-4 w-4" />
+              </Button>
+            </Link>
+            <h1 className="text-3xl font-black tracking-tighter sm:text-4xl relative">
+              Sales <span className="text-primary tracking-tighter">History</span>
+              <div className="absolute -bottom-1 left-0 w-1/3 h-[2px] bg-primary/20 rounded-full" />
+            </h1>
+          </div>
+          <p className="text-muted-foreground ml-[40px] text-sm font-medium tracking-tight">
+            Manage daily sales, meter readings, and pending card holds.
+          </p>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="relative">
-            <CalendarIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="pl-10 w-[160px]"
-            />
+
+        <div className="flex items-center gap-3">
+          <Button variant="outline" className="shadow-sm bg-white" asChild>
+            <Link href="/dashboard/sales/daily-entry">
+              Record New Sale
+            </Link>
+          </Button>
+          <div className="relative group">
+            <div className="absolute -inset-0.5 bg-gradient-to-r from-primary/30 to-blue-500/30 rounded-lg blur opacity-40 group-hover:opacity-100 transition duration-500" />
+            <div className="relative flex items-center bg-white border border-border/50 rounded-lg shadow-sm">
+              <CalendarIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-primary" />
+              <Input
+                type="date"
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
+                className="pl-10 h-10 border-0 focus-visible:ring-0 bg-transparent font-black tracking-widest text-[#1a1a1a]"
+              />
+              <div className="absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-white to-transparent pointer-events-none rounded-r-lg" />
+            </div>
           </div>
-          <Link href="/dashboard">
-            <Button variant="outline"><ArrowLeft className="mr-2 h-4 w-4" /> Dashboard</Button>
-          </Link>
         </div>
-      </div>
-
-      {/* Stats Row */}
-      <div className="grid gap-4 md:grid-cols-4">
-        <Card className="p-4 flex flex-col gap-1 bg-primary/5 border-primary/10 shadow-sm">
-          <div className="flex items-center gap-2 text-primary">
-            <TrendingUp className="h-4 w-4" />
-            <span className="text-[10px] uppercase font-bold tracking-wider">Total Daily Sale</span>
-          </div>
-          <span className="text-2xl font-[900] tracking-tighter text-primary">
-            Rs. {totalCombinedSales.toLocaleString()}
-          </span>
-          <div className="flex flex-col gap-0.5 mt-1 border-t border-primary/10 pt-1">
-            <p className="text-[10px] text-muted-foreground font-medium flex justify-between">
-              <span>Fuel ({totalFuelLiters.toLocaleString()} L)</span>
-              <span className="font-bold text-primary/70">Rs. {totalFuelAmount.toLocaleString()}</span>
-            </p>
-            <p className="text-[10px] text-muted-foreground font-medium flex justify-between">
-              <span>Products</span>
-              <span className="font-bold text-primary/70">Rs. {totalProductAmount.toLocaleString()}</span>
-            </p>
-          </div>
-        </Card>
-
-        <Card className="p-4 flex flex-col gap-1 shadow-sm border-orange-100 bg-orange-50/30">
-          <div className="flex items-center gap-2 text-orange-600">
-            <CreditCard className="h-4 w-4" />
-            <span className="text-[10px] uppercase font-bold tracking-wider text-orange-600/70">Total Card Payments</span>
-          </div>
-          <span className="text-2xl font-bold tracking-tighter text-orange-700">Rs. {totalCardAmount.toLocaleString()}</span>
-          <p className="text-[10px] text-orange-600/70 font-medium mt-1 uppercase tracking-tighter italic">Total dynamic card receipts</p>
-        </Card>
-
-        <Card className="p-4 flex flex-col gap-1 shadow-sm border-blue-100 bg-blue-50/30">
-          <div className="flex items-center gap-2 text-blue-600">
-            <ArrowRightLeft className="h-4 w-4" />
-            <span className="text-[10px] uppercase font-bold tracking-wider text-blue-600/70">Bank Transfers</span>
-          </div>
-          <span className="text-2xl font-bold tracking-tighter text-blue-700">Rs. {totalBankTransferAmount.toLocaleString()}</span>
-          <p className="text-[10px] text-blue-600/70 font-medium mt-1 uppercase tracking-tighter italic">Lubricant Bank Receipts</p>
-        </Card>
-
-        <Card className="p-4 flex flex-col gap-1 shadow-sm border-green-100 bg-green-50/30">
-          <div className="flex items-center gap-2 text-green-600">
-            <HandCoins className="h-4 w-4" />
-            <span className="text-[10px] uppercase font-bold tracking-wider text-green-600/70">Net Cash Sale</span>
-          </div>
-          <span className="text-2xl font-bold tracking-tighter text-green-700">Rs. {totalCashAmount.toLocaleString()}</span>
-          <p className="text-[10px] text-green-600/70 font-medium mt-1 uppercase tracking-tighter italic">Total Cash to be Deposited</p>
-        </Card>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList className="grid w-full md:w-[600px] grid-cols-3">
-          <TabsTrigger value="fuel" className="font-bold flex items-center gap-2">
-            <Fuel className="h-4 w-4" />
-            Fuel Sales
+        <TabsList className="grid w-full md:w-[600px] grid-cols-4 bg-muted/60 p-1 rounded-xl">
+          <TabsTrigger value="daily" className="font-bold flex items-center gap-2 rounded-lg data-[state=active]:shadow-sm">
+            <Receipt className="h-4 w-4" /> Daily Sales
           </TabsTrigger>
-          <TabsTrigger value="products" className="font-bold flex items-center gap-2">
-            <Droplet className="h-4 w-4" />
-            Lubricants & Others
+          <TabsTrigger value="readings" className="font-bold flex items-center gap-2 rounded-lg data-[state=active]:shadow-sm">
+            <Droplet className="h-4 w-4" /> Readings
           </TabsTrigger>
-          <TabsTrigger value="cards" className="font-bold flex items-center gap-2">
-            <CreditCard className="h-4 w-4" />
-            Card Payments
+          <TabsTrigger value="holds" className="font-bold flex items-center gap-2 rounded-lg data-[state=active]:shadow-sm">
+            <div className="relative">
+              <CreditCard className="h-4 w-4" />
+              <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-orange-500 animate-pulse" />
+            </div>
+            Holds
+          </TabsTrigger>
+          <TabsTrigger value="reports" className="font-bold flex items-center gap-2 rounded-lg data-[state=active]:shadow-sm text-primary">
+            <FileText className="h-4 w-4" /> Reports
           </TabsTrigger>
         </TabsList>
 
-        {/* FUEL TAB */}
-        <TabsContent value="fuel" className="space-y-6 mt-4">
-          {/* Main Table Card */}
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <div>
-                <CardTitle>Nozzle Readings</CardTitle>
-                <CardDescription>Enter closing readings for {format(new Date(selectedDate), "MMMM dd, yyyy")}</CardDescription>
-              </div>
-              <Button onClick={handleSubmitFuelSales} disabled={saving} className="min-w-[120px]">
-                {saving ? (
-                  <BrandLoader size="xs" />
-                ) : (
-                  <><Save className="mr-2 h-4 w-4" /> Save All</>
-                )}
-              </Button>
-            </CardHeader>
-            <CardContent className="p-0 sm:p-6">
-              <div className="overflow-x-auto">
+        {/* TAB: DAILY SALES */}
+        <TabsContent value="daily" className="mt-6 space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+          <div className="grid gap-4 md:grid-cols-3">
+            <Card className="shadow-sm border-white/40 bg-[#f8fafc]/60 backdrop-blur-sm relative overflow-hidden group">
+              <div className="absolute inset-0 bg-gradient-to-br from-[#f8fafc] to-[#e2e8f0] opacity-50 z-0" />
+              <div className="absolute top-0 right-0 w-32 h-32 bg-primary/5 rounded-full blur-3xl -mr-10 -mt-10 transition-transform duration-700 group-hover:scale-150" />
+              <CardHeader className="pb-2 relative z-10 flex flex-row items-center justify-between">
+                <div className="space-y-1">
+                  <CardTitle className="text-[11px] uppercase tracking-widest font-black text-muted-foreground flex items-center gap-2">
+                    <Receipt className="h-3.5 w-3.5" /> Total Invoices
+                  </CardTitle>
+                </div>
+              </CardHeader>
+              <CardContent className="relative z-10">
+                <div className="text-3xl font-black tracking-tighter text-[#1e293b]">
+                  {sales.length}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="shadow-sm border-white/40 bg-[#f8fafc]/60 backdrop-blur-sm relative overflow-hidden group">
+              <div className="absolute inset-0 bg-gradient-to-br from-[#f8fafc] to-[#e2e8f0] opacity-50 z-0" />
+              <div className="absolute top-0 left-0 w-32 h-32 bg-primary/10 rounded-full blur-3xl -ml-10 -mt-10 transition-transform duration-700 group-hover:scale-150" />
+              <CardHeader className="pb-2 relative z-10 flex flex-row items-center justify-between">
+                <div className="space-y-1">
+                  <CardTitle className="text-[11px] uppercase tracking-widest font-black text-primary/80 flex items-center gap-2">
+                    <Droplet className="h-3.5 w-3.5" /> Total Liters
+                  </CardTitle>
+                </div>
+              </CardHeader>
+              <CardContent className="relative z-10">
+                <div className="text-3xl font-black tracking-tighter text-primary">
+                  {dailyTotalLiters.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+                  <span className="text-base text-primary/60 ml-1 font-medium tracking-normal">L</span>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="shadow-sm border-white/40 bg-gradient-to-br from-slate-900 to-slate-800 text-white relative overflow-hidden group">
+              <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 mix-blend-overlay z-0" />
+              <div className="absolute bottom-0 right-0 w-32 h-32 bg-primary/40 rounded-full blur-3xl -mr-10 -mb-10 transition-transform duration-700 group-hover:scale-150" />
+              <CardHeader className="pb-2 relative z-10 flex flex-row items-center justify-between">
+                <div className="space-y-1">
+                  <CardTitle className="text-[11px] uppercase tracking-widest font-black text-slate-300 flex items-center gap-2">
+                    <TrendingUp className="h-3.5 w-3.5" /> Total Sale Amount
+                  </CardTitle>
+                </div>
+              </CardHeader>
+              <CardContent className="relative z-10">
+                <div className="text-4xl font-black tracking-tighter drop-shadow-sm flex items-end gap-1">
+                  <span className="text-lg text-slate-300 font-medium tracking-normal mb-1.5">PKR</span>
+                  {dailyTotalAmount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card className="shadow-sm border-border/40 overflow-hidden">
+            <div className="overflow-x-auto">
+              {loading ? (
+                <div className="h-48 flex items-center justify-center">
+                  <BrandLoader size="sm" />
+                </div>
+              ) : (
                 <Table>
-                  <TableHeader>
+                  <TableHeader className="bg-muted/30">
                     <TableRow>
-                      <TableHead>Pump / Nozzle</TableHead>
-                      <TableHead>Product</TableHead>
-                      <TableHead className="text-right">Opening</TableHead>
-                      <TableHead className="text-right w-[150px]">Closing</TableHead>
-                      <TableHead className="text-right">Price</TableHead>
-                      <TableHead className="text-right">Liters</TableHead>
-                      <TableHead className="text-right">Amount</TableHead>
-                      <TableHead className="text-center w-[120px]">Payment</TableHead>
-                      <TableHead className="text-center w-[50px]">Status</TableHead>
+                      <TableHead className="font-bold text-xs uppercase tracking-wider h-11">Dispenser</TableHead>
+                      <TableHead className="font-bold text-xs uppercase tracking-wider">Product</TableHead>
+                      <TableHead className="font-bold text-xs uppercase tracking-wider text-right">Liters</TableHead>
+                      <TableHead className="font-bold text-xs uppercase tracking-wider text-right">Amount (PKR)</TableHead>
+                      <TableHead className="font-bold text-xs uppercase tracking-wider text-center">Payment Method</TableHead>
+                      <TableHead className="font-bold text-xs uppercase tracking-wider text-center">Status</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {nozzles.map((nozzle) => {
-                      const reading = nozzleReadings.find(r => r.nozzle_id === nozzle.id) || {
-                        nozzle_id: nozzle.id, opening_reading: 0, closing_reading: "", liters_sold: 0, sales_amount: 0, payment_method: "cash", bank_account_id: ""
-                      }
-                      const isLocked = reading.id && !unlockedNozzles.has(nozzle.id)
-
-                      return (
-                        <TableRow key={nozzle.id}>
-                          <TableCell>
-                            <div className="font-medium">Nozzle {nozzle.nozzle_number}</div>
-                            {/* <div className="text-xs text-muted-foreground">Pump {nozzle.pumps?.pump_name}</div> */}
+                    {sales.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-center h-24 text-muted-foreground">
+                          No sales recorded for this date.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      sales.map((sale) => (
+                        <TableRow key={sale.id} className="hover:bg-muted/10 transition-colors">
+                          <TableCell className="font-medium">
+                            {sale.dispensers.name}
+                            <div className="text-[10px] text-muted-foreground uppercase">Nozzle {sale.nozzles.nozzle_number}</div>
                           </TableCell>
                           <TableCell>
-                            <Badge variant="outline">{nozzle.products?.product_name}</Badge>
+                            <Badge variant="outline" className="bg-white">{sale.products.name}</Badge>
                           </TableCell>
-                          <TableCell className="text-right font-mono">
-                            {reading.opening_reading.toFixed(2)}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <div className="relative flex items-center justify-end gap-2">
-                              {isLocked && <Lock className="h-4 w-4 text-muted-foreground" />}
-                              <Input
-                                type="number"
-                                className="w-24 text-right font-mono h-8"
-                                value={reading.closing_reading}
-                                onChange={(e) => handleReadingChange(nozzle.id, e.target.value)}
-                                disabled={!!isLocked}
-                              />
-                              {/* Unlock Button Context */}
-                              {isLocked && (
-                                <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => handleUnlockRequest(nozzle.id)}>
-                                  <Unlock className="h-3 w-3" />
-                                </Button>
-                              )}
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-right text-muted-foreground">
-                            {nozzle.products?.selling_price}
-                          </TableCell>
-                          <TableCell className="text-right font-bold">
-                            {reading.liters_sold > 0 ? reading.liters_sold.toFixed(2) : "-"}
-                          </TableCell>
-                          <TableCell className="text-right font-bold">
-                            {reading.sales_amount > 0 ? reading.sales_amount.toLocaleString() : "-"}
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center justify-center min-w-[120px]">
-                              <Badge variant="secondary" className="bg-green-100 text-green-700 hover:bg-green-100 uppercase text-[10px] font-bold">
-                                Cash Only
-                              </Badge>
-                            </div>
+                          <TableCell className="text-right font-black tracking-tight">{Number(sale.liters_sold).toFixed(2)}</TableCell>
+                          <TableCell className="text-right font-black text-primary tracking-tight">{Number(sale.total_amount).toLocaleString()}</TableCell>
+                          <TableCell className="text-center">
+                            <span className="text-xs font-bold bg-muted px-2 py-1 rounded-md">
+                              {sale.payment_methods.name}
+                            </span>
                           </TableCell>
                           <TableCell className="text-center">
-                            {reading.id ? (
-                              <CheckCircle2 className="h-4 w-4 text-green-500 mx-auto" />
+                            {sale.hold_status === 'none' ? (
+                              <Badge className="bg-green-100 text-green-700 hover:bg-green-100 border-none">Completed</Badge>
+                            ) : sale.hold_status === 'pending' ? (
+                              <Badge className="bg-orange-100 text-orange-700 hover:bg-orange-100 border-none flex items-center gap-1 w-fit mx-auto">
+                                <AlertCircle className="h-3 w-3" /> On Hold
+                              </Badge>
                             ) : (
-                              <div className="h-2 w-2 rounded-full bg-slate-200 mx-auto" />
+                              <Badge variant="outline" className="text-muted-foreground border-dashed">Released</Badge>
                             )}
                           </TableCell>
                         </TableRow>
-                      )
-                    })}
+                      ))
+                    )}
                   </TableBody>
                 </Table>
+              )}
+            </div>
+          </Card>
+        </TabsContent>
+
+        {/* TAB: METER READINGS */}
+        <TabsContent value="readings" className="mt-6 space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+          <Card className="shadow-sm border-border/40 overflow-hidden">
+            <CardHeader className="bg-muted/10 pb-4">
+              <CardTitle className="text-lg">Daily Meter Readings</CardTitle>
+              <CardDescription>Opening and closing readings recorded for the day.</CardDescription>
+            </CardHeader>
+            <div className="overflow-x-auto">
+              {loading ? (
+                <div className="h-48 flex items-center justify-center">
+                  <BrandLoader size="sm" />
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/30 hover:bg-muted/30">
+                      <TableHead className="font-bold text-xs uppercase tracking-wider h-11">Dispenser</TableHead>
+                      <TableHead className="font-bold text-xs uppercase tracking-wider text-right">Opening</TableHead>
+                      <TableHead className="font-bold text-xs uppercase tracking-wider text-right">Closing</TableHead>
+                      <TableHead className="font-bold text-xs uppercase tracking-wider text-right">Liters Sold</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {readings.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={4} className="text-center h-24 text-muted-foreground">
+                          No meter readings for this date.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      readings.map((reading) => (
+                        <TableRow key={reading.id} className="hover:bg-muted/10">
+                          <TableCell className="font-medium">
+                            <span className="flex items-center gap-2">
+                              <div className="h-1.5 w-1.5 rounded-full bg-primary" />
+                              {reading.dispensers.name} - Nozzle {reading.nozzles.nozzle_number}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-right font-mono text-muted-foreground">
+                            {Number(reading.opening_reading).toFixed(2)}
+                          </TableCell>
+                          <TableCell className="text-right font-mono font-bold">
+                            {Number(reading.closing_reading).toFixed(2)}
+                          </TableCell>
+                          <TableCell className="text-right font-black tracking-tight text-primary bg-primary/5">
+                            {Number(reading.liters_sold).toFixed(2)} L
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+          </Card>
+        </TabsContent>
+
+        {/* TAB: CARD HOLDS */}
+        <TabsContent value="holds" className="mt-6 space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+          <div className="p-4 rounded-xl bg-orange-500/10 border border-orange-500/20 text-orange-800 flex items-start gap-4">
+            <div className="mt-0.5">
+              <AlertCircle className="h-5 w-5 text-orange-600" />
+            </div>
+            <div className="space-y-1">
+              <h4 className="font-bold tracking-tight">Pending Card Reconcialiations</h4>
+              <p className="text-sm opacity-80 leading-snug">
+                These are amounts recorded via Cards that are currently "On Hold". When the bank or supplier clears the payment to your company account, mark them as Released here. This credits your system's company account.
+              </p>
+            </div>
+          </div>
+
+          <Card className="shadow-sm border-border/40 overflow-hidden">
+            <div className="overflow-x-auto">
+              {loading ? (
+                <div className="h-48 flex items-center justify-center">
+                  <BrandLoader size="sm" />
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/30">
+                      <TableHead className="font-bold text-[10px] uppercase tracking-wider w-[120px]">Sale Date</TableHead>
+                      <TableHead className="font-bold text-[10px] uppercase tracking-wider">Payment Method</TableHead>
+                      <TableHead className="font-bold text-[10px] uppercase tracking-wider text-right">Amount (PKR)</TableHead>
+                      <TableHead className="font-bold text-[10px] uppercase tracking-wider">Expected Release</TableHead>
+                      <TableHead className="font-bold text-[10px] uppercase tracking-wider text-center">Status</TableHead>
+                      <TableHead className="font-bold text-[10px] uppercase tracking-wider text-right">Action</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {holds.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-center h-24 text-muted-foreground">
+                          No pending card holds.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      holds.map((hold) => (
+                        <TableRow key={hold.id} className="hover:bg-muted/10 transition-colors">
+                          <TableCell className="font-mono text-xs">{format(new Date(hold.sale_date), 'dd MMM yyyy')}</TableCell>
+                          <TableCell>
+                            <div className="font-medium text-sm">{hold.payment_methods.name}</div>
+                            {hold.payment_type === 'supplier_card' && hold.suppliers && (
+                              <div className="text-[10px] text-muted-foreground">via {hold.suppliers.name}</div>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right font-black tracking-tight text-[#1a1a1a]">
+                            {Number(hold.hold_amount).toLocaleString()}
+                          </TableCell>
+                          <TableCell>
+                            <div className="font-medium text-sm">
+                              {hold.expected_release_date ? format(new Date(hold.expected_release_date), 'dd MMM yyyy') : '-'}
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <HoldStatusBadge hold={hold} />
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {hold.status !== 'released' && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-green-200 text-green-700 hover:bg-green-50 shadow-sm"
+                                onClick={() => setHoldToRelease(hold)}
+                              >
+                                <CheckCircle2 className="mr-2 h-3.5 w-3.5" />
+                                Release
+                              </Button>
+                            )}
+                            {hold.status === 'released' && hold.actual_release_date && (
+                              <div className="text-[10px] text-muted-foreground px-2">
+                                Cleared on<br />{format(new Date(hold.actual_release_date), 'dd MMM')}
+                              </div>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+          </Card>
+        </TabsContent>
+
+        {/* TAB: REPORTS */}
+        <TabsContent value="reports" className="mt-6 space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+          <Card className="border-primary/20 bg-primary/5 shadow-sm">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-primary">
+                <FileText className="h-5 w-5" /> Reporting Center
+              </CardTitle>
+              <CardDescription>View detailed summaries and generate consolidated reports.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                <div className="p-5 rounded-xl bg-white border shadow-sm flex flex-col items-center text-center gap-3 hover:border-primary/50 transition-colors cursor-pointer group">
+                  <div className="h-12 w-12 rounded-full bg-blue-50 flex items-center justify-center text-blue-600 group-hover:scale-110 transition-transform">
+                    <Receipt className="h-6 w-6" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold">Daily Summary Report</h4>
+                    <p className="text-xs text-muted-foreground mt-1 px-4 leading-snug">Product wise, payment wise, and nozzle wise breakdown of today's sales.</p>
+                  </div>
+                  <Button variant="ghost" size="sm" className="mt-2 w-full text-primary hover:text-primary hover:bg-primary/5">View Report</Button>
+                </div>
+
+                <div className="p-5 rounded-xl bg-white border shadow-sm flex flex-col items-center text-center gap-3 hover:border-orange-500/50 transition-colors cursor-pointer group">
+                  <div className="h-12 w-12 rounded-full bg-orange-50 flex items-center justify-center text-orange-600 group-hover:scale-110 transition-transform">
+                    <CreditCard className="h-6 w-6" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold">Card Hold Pending Report</h4>
+                    <p className="text-xs text-muted-foreground mt-1 px-4 leading-snug">Detailed view of all pending bank and supplier card reconciliations.</p>
+                  </div>
+                  <Button variant="ghost" size="sm" className="mt-2 w-full text-orange-600 hover:text-orange-700 hover:bg-orange-50">View Report</Button>
+                </div>
+
+                <div className="p-5 rounded-xl bg-white border shadow-sm flex flex-col items-center text-center gap-3 hover:border-slate-800 transition-colors cursor-pointer group">
+                  <div className="h-12 w-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-700 group-hover:scale-110 transition-transform">
+                    <CalendarIcon className="h-6 w-6" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold">Monthly Summary</h4>
+                    <p className="text-xs text-muted-foreground mt-1 px-4 leading-snug">Week by week aggregation of liters sold, cash received, and cards.</p>
+                  </div>
+                  <Button variant="ghost" size="sm" className="mt-2 w-full">View Report</Button>
+                </div>
               </div>
             </CardContent>
           </Card>
         </TabsContent>
-
-        {/* PRODUCTS TAB */}
-        <TabsContent value="products" className="space-y-6 mt-4">
-          <div className="grid gap-6 md:grid-cols-2">
-            <Card>
-              <CardHeader>
-                <CardTitle>Add Product Sale</CardTitle>
-                <CardDescription>Record sale of lubricants or other items</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label>Product</Label>
-                    <Select value={newProductSale.product_id} onValueChange={(v) => setNewProductSale(prev => ({ ...prev, product_id: v }))}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select Product" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {oilProducts.map(p => (
-                          <SelectItem key={p.id} value={p.id}>
-                            {p.product_name} ({p.current_stock} {p.unit}) - Rs.{p.selling_price}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  {newProductSale.product_id && (
-                    <div className="text-xs text-muted-foreground font-medium px-1">
-                      Available Stock: <span className={
-                        (oilProducts.find(p => p.id === newProductSale.product_id)?.current_stock || 0) < parseFloat(newProductSale.quantity || "0")
-                          ? "text-destructive font-bold"
-                          : "text-primary font-bold"
-                      }>
-                        {oilProducts.find(p => p.id === newProductSale.product_id)?.current_stock} {oilProducts.find(p => p.id === newProductSale.product_id)?.unit}
-                      </span>
-                    </div>
-                  )}
-
-                  <div className="space-y-2">
-                    <Label>Quantity</Label>
-                    <Input
-                      type="number"
-                      value={newProductSale.quantity}
-                      onChange={(e) => {
-                        const qty = e.target.value;
-                        const product = oilProducts.find(p => p.id === newProductSale.product_id);
-                        const total = product ? (product.selling_price * parseFloat(qty || "0")).toString() : "0";
-                        setNewProductSale(prev => ({
-                          ...prev,
-                          quantity: qty,
-                          total_amount: total,
-                          paid_amount: total // Default paid to total
-                        }))
-                      }}
-                      placeholder="0"
-                      className={
-                        newProductSale.product_id &&
-                          (oilProducts.find(p => p.id === newProductSale.product_id)?.current_stock || 0) < parseFloat(newProductSale.quantity || "0")
-                          ? "border-destructive focus-visible:ring-destructive"
-                          : ""
-                      }
-                    />
-                    {newProductSale.product_id && newProductSale.quantity &&
-                      (oilProducts.find(p => p.id === newProductSale.product_id)?.current_stock || 0) < parseFloat(newProductSale.quantity) && (
-                        <p className="text-[10px] text-destructive font-bold">
-                          Exceeds available stock!
-                        </p>
-                      )}
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-4">
-                    <div className="space-y-2">
-                      <Label>Retail Total</Label>
-                      <Input
-                        type="number"
-                        value={newProductSale.total_amount}
-                        readOnly
-                        placeholder="0"
-                        className="bg-muted font-bold"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label className="text-destructive font-bold">Discount</Label>
-                      <Input
-                        type="number"
-                        value={newProductSale.discount_amount}
-                        onChange={(e) => {
-                          const discount = e.target.value;
-                          const total = parseFloat(newProductSale.total_amount || "0");
-                          const paid = (total - parseFloat(discount || "0")).toString();
-                          setNewProductSale(prev => ({
-                            ...prev,
-                            discount_amount: discount,
-                            paid_amount: paid
-                          }))
-                        }}
-                        placeholder="0"
-                        className="border-destructive/30"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label className="text-primary font-bold">Paid Amt</Label>
-                      <Input
-                        type="number"
-                        value={newProductSale.paid_amount}
-                        onChange={(e) => {
-                          const paid = e.target.value;
-                          const total = parseFloat(newProductSale.total_amount || "0");
-                          const discount = (total - parseFloat(paid || "0")).toString();
-                          setNewProductSale(prev => ({
-                            ...prev,
-                            paid_amount: paid,
-                            discount_amount: discount
-                          }))
-                        }}
-                        placeholder="0"
-                        className="border-primary focus-visible:ring-primary font-black"
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-4">
-                    <div className="space-y-2">
-                      <Label>Payment Method</Label>
-                      <Select value={newProductSale.payment_method} onValueChange={(v) => setNewProductSale(prev => ({ ...prev, payment_method: v }))}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select Payment" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="cash">Cash</SelectItem>
-                          <SelectItem value="bank">Bank Transfer</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    {newProductSale.payment_method === "bank" && (
-                      <div className="space-y-2 animate-in slide-in-from-top-2">
-                        <Label>Select Bank Account</Label>
-                        <Select value={newProductSale.bank_account_id || ""} onValueChange={(v) => setNewProductSale(prev => ({ ...prev, bank_account_id: v }))}>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Choose Bank..." />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {bankAccounts.map(bank => (
-                              <SelectItem key={bank.id} value={bank.id}>
-                                {bank.account_name} (Rs. {bank.current_balance.toLocaleString()})
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    )}
-                  </div>
-                  <Button
-                    className="w-full"
-                    onClick={handleAddProductSale}
-                    disabled={
-                      saving ||
-                      !newProductSale.product_id ||
-                      !newProductSale.quantity ||
-                      !newProductSale.paid_amount ||
-                      (oilProducts.find(p => p.id === newProductSale.product_id)?.current_stock || 0) < parseFloat(newProductSale.quantity || "0")
-                    }
-                  >
-                    {saving ? <BrandLoader size="xs" /> : "Record Sale"}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Today's Sales</CardTitle>
-                <CardDescription>{productSales.length} items sold</CardDescription>
-              </CardHeader>
-              <CardContent className="p-0 sm:p-6">
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Product</TableHead>
-                        <TableHead className="text-right">Qty</TableHead>
-                        <TableHead className="text-right">Retail</TableHead>
-                        <TableHead className="text-right text-destructive">Disc.</TableHead>
-                        <TableHead className="text-right">Paid</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {productSales.length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={5} className="text-center text-muted-foreground h-24">No sales yet</TableCell>
-                        </TableRow>
-                      ) : (
-                        productSales.map(sale => (
-                          <TableRow key={sale.id}>
-                            <TableCell className="font-medium">{sale.products?.product_name}</TableCell>
-                            <TableCell className="text-right font-medium">{sale.quantity}</TableCell>
-                            <TableCell className="text-right text-muted-foreground font-medium">Rs. {sale.total_amount?.toLocaleString()}</TableCell>
-                            <TableCell className="text-right text-destructive font-medium">Rs. {(sale.total_amount - sale.paid_amount).toLocaleString()}</TableCell>
-                            <TableCell className="text-right font-bold text-primary">Rs. {sale.paid_amount?.toLocaleString()}</TableCell>
-                          </TableRow>
-                        ))
-                      )}
-                    </TableBody>
-                  </Table>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </TabsContent>
-
-        {/* CARD PAYMENTS TAB - STANDARDIZED PROFESSIONAL DESIGN */}
-        <TabsContent value="cards" className="animate-in fade-in slide-in-from-bottom-2 duration-400 mt-4 space-y-6">
-          <Tabs value={cardSubTab} onValueChange={(v) => setCardSubTab(v as any)} className="w-full">
-            <div className="border-b border-border/10 mb-6">
-              <TabsList className="bg-slate-100/50 p-1 gap-1 h-10 w-fit justify-start rounded-xl border border-slate-200/50">
-                <TabsTrigger
-                  value="manage"
-                  className="Lato font-black uppercase text-[10px] tracking-widest px-6 rounded-lg data-[state=active]:bg-white data-[state=active]:text-primary data-[state=active]:shadow-sm transition-all h-8"
-                >
-                  Reconciliation
-                </TabsTrigger>
-                <TabsTrigger
-                  value="totals"
-                  className="Lato font-black uppercase text-[10px] tracking-widest px-6 rounded-lg data-[state=active]:bg-white data-[state=active]:text-primary data-[state=active]:shadow-sm transition-all h-8"
-                >
-                  Daily Entry
-                </TabsTrigger>
-              </TabsList>
-            </div>
-
-            <TabsContent value="totals" className="mt-6 space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-6 border-b border-border/10">
-                  <div className="space-y-1">
-                    <CardTitle className="text-lg font-black Lato uppercase tracking-wider flex items-center gap-2">
-                      <CreditCard className="h-5 w-5 text-primary" />
-                      Card Sales Entry
-                    </CardTitle>
-                    <CardDescription className="text-xs font-medium Lato">
-                      Enter daily card totals to be deducted from shift net cash.
-                    </CardDescription>
-                  </div>
-                  <Button
-                    onClick={handleSubmitCardPayments}
-                    disabled={saving}
-                    className="Lato font-black uppercase text-[10px] tracking-widest px-8"
-                  >
-                    {saving ? <BrandLoader size="xs" /> : <><Save className="mr-2 h-4 w-4" /> Save Totals</>}
-                  </Button>
-                </CardHeader>
-                <CardContent className="pt-8">
-                  <div className="grid gap-x-8 gap-y-10 md:grid-cols-2 lg:grid-cols-3">
-                    {activeCardTypes.length === 0 ? (
-                      <div className="col-span-full py-12 text-center text-muted-foreground italic bg-muted/20 rounded-xl border border-dashed Lato text-xs uppercase tracking-widest">
-                        No active card channels integrated
-                      </div>
-                    ) : (
-                      activeCardTypes.map(ct => (
-                        <div key={ct.id} className="space-y-2.5 group">
-                          <Label htmlFor={`card_${ct.id}`} className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-muted-foreground transition-colors group-hover:text-primary Lato">
-                            {ct.card_name.toLowerCase().includes("shell") ? (
-                              <img src="https://www.shell.com.pk/etc.clientlibs/shell/clientlibs/clientlib-site/resources/resources/favicons/favicon-32x32.png" alt="S" className="h-3.5 w-3.5" />
-                            ) : <CreditCard className="h-3.5 w-3.5" />}
-                            {ct.card_name}
-                          </Label>
-                          <div className="relative">
-                            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground font-black text-xs Lato">Rs.</div>
-                            <Input
-                              id={`card_${ct.id}`}
-                              type="number"
-                              className="pl-9 h-11 Lato font-black text-lg focus-visible:ring-1 focus-visible:ring-primary/20 transition-all"
-                              value={cardAmounts[ct.id] || ""}
-                              onChange={(e) => setCardAmounts(prev => ({ ...prev, [ct.id]: e.target.value }))}
-                              placeholder="0"
-                            />
-                            {parseFloat(cardAmounts[ct.id] || "0") > 0 && (
-                              <div className="absolute -bottom-5 right-2 flex items-center gap-1.5 animate-in slide-in-from-top-1 duration-300">
-                                <div className="h-1.5 w-1.5 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.4)]" />
-                                <span className="text-[9px] font-bold text-green-600 uppercase Lato">Updated</span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </CardContent>
-                <CardFooter className="mt-8 bg-muted/20 py-5 border-t flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div className="flex items-center gap-2 text-muted-foreground font-medium text-[10px] Lato">
-                    <AlertCircle className="h-4 w-4" />
-                    Pending settlement reconciliation
-                  </div>
-                  <div className="flex items-center gap-6 px-5 py-2.5 bg-white rounded-lg border shadow-sm">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground Lato">Card Summary Total</span>
-                    <span className="text-2xl font-black text-primary tracking-tighter Lato">
-                      <span className="text-sm font-medium mr-1 text-muted-foreground">Rs.</span>
-                      {Object.values(cardAmounts).reduce((sum, val) => sum + (parseFloat(val) || 0), 0).toLocaleString()}
-                    </span>
-                  </div>
-                </CardFooter>
-              </Card>
-            </TabsContent>
-
-            <TabsContent value="manage" className="mt-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-              <CardManagement />
-            </TabsContent>
-          </Tabs>
-        </TabsContent>
       </Tabs>
 
-      {/* Auth Dialog */}
-      <Dialog open={authDialogOpen} onOpenChange={setAuthDialogOpen}>
+      {/* Release Hold Dialog */}
+      <Dialog open={!!holdToRelease} onOpenChange={(open) => !open && setHoldToRelease(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Unlock Reading</DialogTitle>
-            <DialogDescription>Enter Admin PIN to edit this locked reading.</DialogDescription>
+            <DialogTitle>Release Card Hold</DialogTitle>
+            <DialogDescription>
+              Confirm that you have received the funds for this hold.
+            </DialogDescription>
           </DialogHeader>
-          <div className="py-4">
-            <Input
-              type="password"
-              placeholder="PIN Code"
-              value={unlockPin}
-              onChange={(e) => setUnlockPin(e.target.value)}
-            />
-            {error && <p className="text-destructive text-sm mt-2">{error}</p>}
-          </div>
+          {holdToRelease && (
+            <div className="py-4 space-y-4">
+              <div className="p-4 rounded-lg bg-slate-50 border">
+                <div className="flex justify-between items-center mb-2">
+                  <div className="text-sm text-muted-foreground">Original Sale Date</div>
+                  <div className="font-bold">{format(new Date(holdToRelease.sale_date), 'dd MMM yyyy')}</div>
+                </div>
+                <div className="flex justify-between items-center mb-2">
+                  <div className="text-sm text-muted-foreground">Payment Method</div>
+                  <div className="font-bold">{holdToRelease.payment_methods.name}</div>
+                </div>
+                <div className="flex justify-between items-center pt-2 border-t mt-2">
+                  <div className="font-bold text-slate-700 uppercase text-xs tracking-widest">Amount to Release</div>
+                  <div className="text-xl font-black text-primary">PKR {Number(holdToRelease.hold_amount).toLocaleString()}</div>
+                </div>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Releasing this hold will update the transaction status.
+                {holdToRelease.payment_type === 'supplier_card' && holdToRelease.suppliers && (
+                  <span className="block mt-2 text-green-700 font-medium p-2 bg-green-50 rounded">
+                    ✓ Funds will be automatically credited to your {holdToRelease.suppliers.name} company account.
+                  </span>
+                )}
+              </p>
+            </div>
+          )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setAuthDialogOpen(false)}>Cancel</Button>
-            <Button onClick={confirmUnlock}>Unlock</Button>
+            <Button variant="outline" onClick={() => setHoldToRelease(null)} disabled={releasing}>Cancel</Button>
+            <Button onClick={handleReleaseHold} disabled={releasing} className="bg-green-600 hover:bg-green-700">
+              {releasing ? <BrandLoader size="xs" /> : <><CheckCircle2 className="mr-2 h-4 w-4" /> Confirm Receipt</>}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {saving && (
-        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-background/80 backdrop-blur-md animate-in fade-in duration-300">
-          <BrandLoader size="xl" className="mb-6" />
-          <div className="text-center space-y-2">
-            <h3 className="text-xl font-bold tracking-tight text-[#DD1D21]">Syncing Sales Data...</h3>
-            <p className="text-muted-foreground animate-pulse font-bold">Updating inventory and account balances</p>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

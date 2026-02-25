@@ -1,7 +1,6 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { createClient } from "@/lib/supabase/client"
 import {
     FileText,
     BarChart3,
@@ -77,8 +76,6 @@ export type ReportFilter = {
 }
 
 export default function ReportsPage() {
-    const supabase = createClient()
-
     // Filter State
     const [filters, setFilters] = useState<ReportFilter>({
         dateRange: { from: startOfToday(), to: startOfToday() },
@@ -101,17 +98,8 @@ export default function ReportsPage() {
 
     // Fetch suppliers for filter
     useEffect(() => {
-        async function fetchListData() {
-            const [supRes, prodRes] = await Promise.all([
-                supabase.from("suppliers").select("id, supplier_name").eq("status", "active"),
-                supabase.from("products").select("id, product_name, product_type").eq("status", "active").order("product_name")
-            ])
-
-            if (supRes.data) setSuppliers(supRes.data)
-            if (prodRes.data) setProducts(prodRes.data)
-        }
-        fetchListData()
-    }, [supabase])
+        // Backend logic removed for system recreation
+    }, [])
 
     // Trigger global loader on filter change
     useEffect(() => {

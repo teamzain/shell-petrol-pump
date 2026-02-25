@@ -16,10 +16,8 @@ import Link from "next/link"
 
 export default function SignUpPage() {
   const [formData, setFormData] = useState({
-    fullName: "",
     username: "",
     email: "",
-    mobile: "",
     password: "",
     confirmPassword: "",
   })
@@ -48,10 +46,6 @@ export default function SignUpPage() {
       setError("Please enter a valid email address")
       return false
     }
-    if (formData.mobile && !/^\+?[\d\s-]{10,}$/.test(formData.mobile)) {
-      setError("Please enter a valid mobile number")
-      return false
-    }
     return true
   }
 
@@ -59,7 +53,7 @@ export default function SignUpPage() {
     const checkLock = async () => {
       const supabase = createClient()
       const { count, error } = await supabase
-        .from("users")
+        .from("profiles")
         .select("*", { count: 'exact', head: true })
 
       if (!error && count && count > 0) {
@@ -76,7 +70,7 @@ export default function SignUpPage() {
     setError(null)
 
     if (isLocked) {
-      setError("Registration is locked. Only one administrator is allowed.")
+      setError("If there is already one user consult the system developer to add new user")
       return
     }
 
@@ -89,12 +83,12 @@ export default function SignUpPage() {
 
       // Double check before submission
       const { count } = await supabase
-        .from("users")
+        .from("profiles")
         .select("*", { count: 'exact', head: true })
 
       if (count && count > 0) {
         setIsLocked(true)
-        setError("A user account already exists. This system is restricted to a single user.")
+        setError("If there is already one user consult the system developer to add new user")
         setIsLoading(false)
         return
       }
@@ -106,9 +100,7 @@ export default function SignUpPage() {
           emailRedirectTo: process.env.NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL ||
             `${window.location.origin}/dashboard`,
           data: {
-            full_name: formData.fullName,
             username: formData.username,
-            mobile: formData.mobile,
             role: "admin",
           },
         },
@@ -196,24 +188,6 @@ export default function SignUpPage() {
               )}
 
               <div className="space-y-2">
-                <Label htmlFor="fullName">Full Name</Label>
-                <div className="relative">
-                  <User className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    id="fullName"
-                    name="fullName"
-                    type="text"
-                    placeholder="John Doe"
-                    value={formData.fullName}
-                    onChange={handleChange}
-                    className="pl-10"
-                    required
-                    disabled={isLoading}
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-2">
                 <Label htmlFor="username">Username</Label>
                 <div className="relative">
                   <User className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -241,24 +215,6 @@ export default function SignUpPage() {
                     type="email"
                     placeholder="admin@example.com"
                     value={formData.email}
-                    onChange={handleChange}
-                    className="pl-10"
-                    required
-                    disabled={isLoading}
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="mobile">Mobile Number</Label>
-                <div className="relative">
-                  <Phone className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    id="mobile"
-                    name="mobile"
-                    type="tel"
-                    placeholder="+1234567890"
-                    value={formData.mobile}
                     onChange={handleChange}
                     className="pl-10"
                     required

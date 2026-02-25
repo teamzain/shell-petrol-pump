@@ -11,7 +11,6 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table"
-import { createClient } from "@/lib/supabase/client"
 import { Badge } from "@/components/ui/badge"
 import { Users, Search, MoreVertical, Shield, ShieldAlert, UserCog } from "lucide-react"
 import { Input } from "@/components/ui/input"
@@ -50,7 +49,7 @@ interface UserProfile {
 
 export default function UsersPage() {
     const [users, setUsers] = useState<UserProfile[]>([])
-    const [loading, setLoading] = useState(true)
+    const [loading, setLoading] = useState(false)
     const [searchQuery, setSearchQuery] = useState("")
     const [error, setError] = useState("")
     const [success, setSuccess] = useState("")
@@ -61,35 +60,8 @@ export default function UsersPage() {
     const [formData, setFormData] = useState({ role: "", status: "" })
     const [saving, setSaving] = useState(false)
 
-    const supabase = createClient()
-
-    const fetchUsers = async () => {
-        setLoading(true)
-        setError("")
-
-        const { data: { user: currentUser } } = await supabase.auth.getUser()
-        if (!currentUser) return // Should redirect
-
-        // Only allow view if admin or manager? 
-        // RLS policies should handle this, but good to check UI side too ideally.
-        // For now we trust RLS.
-
-        const { data, error } = await supabase
-            .from("users")
-            .select("*")
-            .order("full_name")
-
-        if (error) {
-            setError("Failed to load users")
-            setUsers([])
-        } else {
-            setUsers(data as UserProfile[])
-        }
-        setLoading(false)
-    }
-
     useEffect(() => {
-        fetchUsers()
+        // Backend logic removed for system recreation
     }, [])
 
     const handleEditClick = (user: UserProfile) => {
@@ -100,29 +72,9 @@ export default function UsersPage() {
 
     const handleUpdateUser = async () => {
         if (!selectedUser) return
-        setSaving(true)
-        setError("")
-        setSuccess("")
-
-        try {
-            const { error } = await supabase
-                .from("users")
-                .update({
-                    role: formData.role,
-                    status: formData.status
-                })
-                .eq("id", selectedUser.id)
-
-            if (error) throw error
-
-            setSuccess(`User ${selectedUser.full_name} updated successfully`)
-            setEditDialogOpen(false)
-            fetchUsers()
-        } catch (err) {
-            setError(err instanceof Error ? err.message : "Failed to update user")
-        } finally {
-            setSaving(false)
-        }
+        setSuccess(`User ${selectedUser.full_name} updated (UI Only mode)`)
+        setEditDialogOpen(false)
+        setTimeout(() => setSuccess(""), 3000)
     }
 
     const filteredUsers = users.filter(user =>
