@@ -15,7 +15,6 @@ Any changes you make to your deployed app will be automatically pushed to this r
 
 Your project is live at:
 
-**[https://vercel.com/muhammadyahyak01-gmailcoms-projects/v0-petrol-pump-management-system](https://vercel.com/muhammadyahyak01-gmailcoms-projects/v0-petrol-pump-management-system)**
 
 ## Build your app
 
