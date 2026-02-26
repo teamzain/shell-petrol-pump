@@ -128,9 +128,47 @@ BEGIN
 
     -- Update Stock (if product exists)
     IF v_product_id IS NOT NULL THEN
-        UPDATE products 
-        SET current_stock = current_stock + p_received_qty
-        WHERE id = v_product_id;
+        DECLARE
+            v_prev_stock NUMERIC;
+            v_prev_wac NUMERIC;
+            v_new_stock NUMERIC;
+            v_new_wac NUMERIC;
+        BEGIN
+            -- Get current stock and WAC
+            SELECT current_stock, COALESCE(weighted_avg_cost, 0) 
+            INTO v_prev_stock, v_prev_wac 
+            FROM products WHERE id = v_product_id;
+
+            v_new_stock := v_prev_stock + p_received_qty;
+            
+            -- Calculate new Weighted Average Cost
+            IF v_new_stock > 0 THEN
+                v_new_wac := ((v_prev_stock * v_prev_wac) + (p_received_qty * v_rate_per_liter)) / v_new_stock;
+            ELSE
+                v_new_wac := v_rate_per_liter; -- Fallback
+            END IF;
+
+            -- Update Product
+            UPDATE products 
+            SET current_stock = v_new_stock,
+                weighted_avg_cost = v_new_wac,
+                stock_value = v_new_stock * v_new_wac,
+                updated_at = now()
+            WHERE id = v_product_id;
+
+            -- Record Stock Movement
+            INSERT INTO stock_movements (
+                product_id, movement_type, quantity, 
+                ordered_quantity, previous_stock, 
+                balance_after, unit_price, weighted_avg_after, 
+                notes, reference_number, supplier_id
+            ) VALUES (
+                v_product_id, 'purchase', p_received_qty,
+                v_ordered_qty, v_prev_stock,
+                v_new_stock, v_rate_per_liter, v_new_wac,
+                p_notes, p_delivery_number, v_po.supplier_id
+            );
+        END;
     END IF;
 
     -- 4. Debit Company Account (only the delivered amount)
@@ -170,11 +208,11 @@ BEGIN
         COALESCE(v_item->>'product_category', 'other'), 
         p_delivery_date, 
         p_received_qty, 
-        COALESCE((SELECT current_stock FROM products WHERE id = v_product_id), 0)
+        (SELECT current_stock FROM products WHERE id = v_product_id)
     )
     ON CONFLICT (product_type, register_date) DO UPDATE SET
         total_deliveries = stock_daily_register.total_deliveries + EXCLUDED.total_deliveries,
-        closing_stock = COALESCE((SELECT current_stock FROM products WHERE id = v_product_id), 0);
+        closing_stock = (SELECT current_stock FROM products WHERE id = v_product_id);
 
     RETURN v_delivery_id;
 END;

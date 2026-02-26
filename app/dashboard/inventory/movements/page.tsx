@@ -38,6 +38,7 @@ interface StockMovement {
   movement_date: string
   movement_type: string
   quantity: number
+  ordered_quantity: number | null
   previous_stock: number
   balance_after: number
   notes: string | null
@@ -68,12 +69,17 @@ export default function StockMovementsPage() {
   const fetchMovements = useCallback(async () => {
     setLoading(true)
     // Fetch products for filter
-    const { data: prodData } = await supabase.from("products").select("id, product_name").order("product_name")
-    if (prodData) setProducts(prodData)
+    const { data: prodData } = await supabase.from("products").select("id, name").order("name")
+    if (prodData) {
+      setProducts(prodData.map(p => ({
+        id: p.id,
+        product_name: p.name
+      })))
+    }
 
     let query = supabase
       .from("stock_movements")
-      .select("*, products(product_name, product_type), suppliers(supplier_name)")
+      .select("*, products(name, type), suppliers(name)")
       .order("movement_date", { ascending: false })
       .limit(200)
 
@@ -114,18 +120,9 @@ export default function StockMovementsPage() {
         startStr = start.toISOString()
         endStr = end.toISOString()
       } else if (dateRange === "custom" && customStart && customEnd) {
-        // Create dates from "YYYY-MM-DD" which defaults to UTC if passed directly to new Date()
-        // Instead, valid approach: split and construct local date
-        const s = new Date(customStart)
-        s.setHours(0, 0, 0, 0) // Force local midnight
-        // If input "2026-02-10" is parsed as UTC midnight, converting to local might shift it.
-        // Better: new Date(year, index, day)
-        // input type="date" returns "YYYY-MM-DD".
-
         const startParts = customStart.split('-').map(Number)
         const endParts = customEnd.split('-').map(Number)
 
-        // Month is 0-indexed in Date constructor
         const start = new Date(startParts[0], startParts[1] - 1, startParts[2], 0, 0, 0, 0)
         const end = new Date(endParts[0], endParts[1] - 1, endParts[2], 23, 59, 59, 999)
 
@@ -134,29 +131,25 @@ export default function StockMovementsPage() {
       }
 
       if (startStr && endStr) {
-        // Supabase/Postgres expects ISO string (UTC)
         query = query.gte("movement_date", startStr).lte("movement_date", endStr)
       }
     }
 
-    // Search Filter
-    if (searchQuery.trim()) {
-      // Note: This relies on Supabase ability to filter on joined tables or local columns
-      // Filtering on joined 'products.product_name' is hard with simple OR.
-      // Easiest strategies: 
-      // 1. Client-side filter (if data small). 
-      // 2. RPC. 
-      // 3. Simple text search on notes/reference.
-      // Let's try text search on notes/reference first, maybe product name if possible.
-      // But standard PostgREST doesn't support easy deep filtering on joined relations in OR.
-      // We will perform client-side filtering for search to be safe and searching joined data.
-    }
-
     const { data } = await query
 
-    let result = data as StockMovement[] || []
+    // Map result to match interface
+    let result = (data || []).map((m: any) => ({
+      ...m,
+      products: {
+        product_name: m.products?.name || 'Unknown',
+        product_type: m.products?.type || 'other'
+      },
+      suppliers: m.suppliers ? {
+        supplier_name: m.suppliers.name
+      } : null
+    })) as StockMovement[]
 
-    // Client-side search filtering to handle joined product names
+    // Client-side search filtering
     if (searchQuery.trim() && result) {
       const q = searchQuery.toLowerCase()
       result = result.filter(m =>
@@ -300,7 +293,8 @@ export default function StockMovementsPage() {
                   <TableHead>Product</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead className="text-right">Previous Stock</TableHead>
-                  <TableHead className="text-right">Change</TableHead>
+                  <TableHead className="text-right">Order Qty</TableHead>
+                  <TableHead className="text-right">Received Qty</TableHead>
                   <TableHead className="text-right">Current Stock</TableHead>
                   <TableHead>Reference / Note</TableHead>
                 </TableRow>
@@ -345,6 +339,9 @@ export default function StockMovementsPage() {
                         </TableCell>
                         <TableCell className="text-right font-mono">
                           {Number(m.previous_stock || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-muted-foreground">
+                          {m.ordered_quantity !== null ? Number(m.ordered_quantity).toLocaleString(undefined, { minimumFractionDigits: 2 }) : "-"}
                         </TableCell>
                         <TableCell className="text-right">
                           <span className={`font-bold ${isIncrease ? "text-green-600" : "text-destructive"}`}>

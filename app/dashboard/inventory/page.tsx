@@ -27,6 +27,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { createClient } from "@/lib/supabase/client"
 
 interface Product {
   id: string
@@ -46,6 +47,8 @@ interface StockMovement {
   movement_date: string
   movement_type: string
   quantity: number
+  ordered_quantity: number | null
+  previous_stock: number
   unit_price: number | null
   balance_after: number
   notes: string | null
@@ -57,7 +60,59 @@ interface StockMovement {
 export default function InventoryPage() {
   const [products, setProducts] = useState<Product[]>([])
   const [movements, setMovements] = useState<StockMovement[]>([])
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
+
+  const supabase = createClient()
+
+  useEffect(() => {
+    async function fetchData() {
+      setLoading(true)
+      try {
+        // Fetch products
+        const { data: prodData, error: prodError } = await supabase
+          .from("products")
+          .select("*")
+          .order("name")
+
+        if (prodError) throw prodError
+
+        // Map to match interface
+        const mappedProducts = (prodData || []).map(p => ({
+          ...p,
+          product_name: p.name,
+          product_type: p.type === 'oil' ? 'oil_lubricant' : p.type,
+          minimum_stock_level: p.min_stock_level,
+          // Fallback to purchase_price if weighted_avg_cost is null or 0
+          weighted_avg_cost: p.weighted_avg_cost || p.purchase_price || 0
+        }))
+        setProducts(mappedProducts)
+
+        // Fetch recent movements
+        const { data: moveData, error: moveError } = await supabase
+          .from("stock_movements")
+          .select("*, products(name)")
+          .order("movement_date", { ascending: false })
+          .limit(20)
+
+        if (moveError) throw moveError
+
+        // Map movements to ensure product_name is available
+        const mappedMovements = (moveData || []).map(m => ({
+          ...m,
+          products: {
+            product_name: (m.products as any)?.name || 'Unknown'
+          }
+        }))
+        setMovements(mappedMovements)
+      } catch (error) {
+        console.error("Error fetching inventory data:", error)
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchData()
+  }, [supabase])
 
   const fuelProducts = products.filter(p => p.product_type === "fuel")
   const oilProducts = products.filter(p => p.product_type === "oil_lubricant")
@@ -366,7 +421,9 @@ export default function InventoryPage() {
                         <TableHead>Date</TableHead>
                         <TableHead>Product</TableHead>
                         <TableHead>Type</TableHead>
-                        <TableHead className="text-right">Change</TableHead>
+                        <TableHead className="text-right">Previous</TableHead>
+                        <TableHead className="text-right">Ordered</TableHead>
+                        <TableHead className="text-right">Received</TableHead>
                         <TableHead className="text-right">Current</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -408,6 +465,12 @@ export default function InventoryPage() {
                               <Badge variant="outline" className="text-xs font-normal">
                                 {typeLabel}
                               </Badge>
+                            </TableCell>
+                            <TableCell className="text-right text-xs font-mono">
+                              {Number(movement.previous_stock || 0).toLocaleString()}
+                            </TableCell>
+                            <TableCell className="text-right text-xs text-muted-foreground">
+                              {movement.ordered_quantity !== null ? movement.ordered_quantity.toLocaleString() : "-"}
                             </TableCell>
                             <TableCell className="text-right">
                               <span className={`font-bold ${isPositive ? "text-green-600" : "text-destructive"}`}>

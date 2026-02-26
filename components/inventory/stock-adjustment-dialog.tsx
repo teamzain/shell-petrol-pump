@@ -91,9 +91,10 @@ export function StockAdjustmentDialog({
           product_id: product.id,
           movement_type: "adjustment",
           quantity: adjustmentQty,
+          previous_stock: product.current_stock,
+          balance_after: newStock,
           unit_price: product.weighted_avg_cost,
           weighted_avg_after: product.weighted_avg_cost,
-          balance_after: newStock,
           notes: reason,
         })
 
