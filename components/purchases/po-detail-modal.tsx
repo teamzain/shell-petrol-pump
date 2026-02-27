@@ -103,7 +103,7 @@ export function PODetailModal({
 
     const totalDeliveredAmount = hasItems
         ? po.items.reduce((acc: number, item: any) =>
-            acc + (Number(item.delivered_quantity || 0) * Number(item.rate_per_liter)), 0)
+            acc + (Math.min(Number(item.delivered_quantity || 0), Number(item.ordered_quantity || 0)) * Number(item.rate_per_liter)), 0)
         : Number(po?.delivered_amount || 0)
 
     const totalHoldAmount = hasItems
@@ -138,7 +138,7 @@ export function PODetailModal({
                             ...item,
                             original_index: idx,
                             delivered_quantity: recordedInThisTrans.delivered_quantity,
-                            total_amount: Number(recordedInThisTrans.delivered_quantity) * Number(item.rate_per_liter)
+                            total_amount: Math.min(Number(recordedInThisTrans.delivered_quantity), Number(item.ordered_quantity)) * Number(item.rate_per_liter)
                         };
                     }
                     return {

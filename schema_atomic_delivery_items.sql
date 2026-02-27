@@ -73,12 +73,16 @@ BEGIN
     END IF;
 
     -- Calculate amounts
+    v_delivered_amount := LEAST(p_received_qty, v_ordered_qty) * v_rate_per_liter;
     v_remaining_qty := v_ordered_qty - p_received_qty;
-    v_delivered_amount := p_received_qty * v_rate_per_liter;
     v_hold_amount := 0;
 
     IF v_remaining_qty > 0 THEN
         v_hold_amount := v_remaining_qty * v_rate_per_liter;
+    ELSE
+        -- Over-delivery or exact delivery
+        v_remaining_qty := 0;
+        v_hold_amount := 0;
     END IF;
 
     -- 2. Insert Delivery Record
@@ -171,25 +175,7 @@ BEGIN
         END;
     END IF;
 
-    -- 4. Debit Company Account (only the delivered amount)
-    SELECT id INTO v_account_id FROM company_accounts WHERE supplier_id = v_po.supplier_id;
-    
-    IF v_account_id IS NOT NULL THEN
-        UPDATE company_accounts 
-        SET current_balance = current_balance - v_delivered_amount,
-            updated_at = now()
-        WHERE id = v_account_id;
-
-        INSERT INTO company_account_transactions (
-            company_account_id, transaction_type, transaction_source, amount, transaction_date,
-            reference_number, purchase_order_id, delivery_id, note, created_by
-        ) VALUES (
-            v_account_id, 'debit', 'delivery', v_delivered_amount, p_delivery_date,
-            p_invoice_number, p_po_id, v_delivery_id, 
-            'Delivery - PO# ' || v_po.po_number || ' | ' || p_received_qty || ' ' || COALESCE((v_item->>'unit_type'), 'units') || ' of ' || v_product_name || ' | Invoice# ' || COALESCE(p_invoice_number, 'N/A'),
-            p_user_id
-        );
-    END IF;
+    -- 4. Credit/Debit logic removed from here as balance is now deducted upfront during PO creation.
 
     -- 5. Handle Hold (if applicable)
     IF v_hold_amount > 0 THEN

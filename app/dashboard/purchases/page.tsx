@@ -40,7 +40,7 @@ export default function PurchasesPage() {
   })
 
   const [dateRange, setDateRange] = useState({
-    from: getTodayPKT(),
+    from: "2024-01-01",
     to: getTodayPKT()
   })
 

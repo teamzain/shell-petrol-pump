@@ -143,6 +143,7 @@ export function ActiveHoldsTab({ dateFilters }: { dateFilters?: { from: string; 
                                 <TableHead className="font-black text-[10px] uppercase tracking-widest">PO Number</TableHead>
                                 <TableHead className="font-black text-[10px] uppercase tracking-widest">Order Date</TableHead>
                                 <TableHead className="font-black text-[10px] uppercase tracking-widest">Supplier</TableHead>
+                                <TableHead className="font-black text-[10px] uppercase tracking-widest text-center">Days Due</TableHead>
                                 <TableHead className="font-black text-[10px] uppercase tracking-widest text-right">Hold Amount</TableHead>
                                 <TableHead className="font-black text-[10px] uppercase tracking-widest text-center">Urgency / Status</TableHead>
                                 <TableHead className="font-black text-[10px] uppercase tracking-widest text-right">Action</TableHead>
@@ -171,6 +172,15 @@ export function ActiveHoldsTab({ dateFilters }: { dateFilters?: { from: string; 
                                             </TableCell>
                                             <TableCell className="font-semibold text-sm">
                                                 {po.suppliers?.name || "-"}
+                                            </TableCell>
+                                            <TableCell className="text-center font-bold text-xs">
+                                                <Badge variant="secondary" className={`${isResolved ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-700'} hover:opacity-80 border-none whitespace-nowrap`}>
+                                                    {isResolved && hold.actual_return_date ? (
+                                                        `Received in ${differenceInDays(new Date(hold.actual_return_date), new Date(hold.created_at))} Days`
+                                                    ) : (
+                                                        `${differenceInDays(new Date(), new Date(hold.created_at))} Days`
+                                                    )}
+                                                </Badge>
                                             </TableCell>
                                             <TableCell className="text-right font-black font-mono text-amber-700">
                                                 {formatCurrency(hold.hold_amount)}

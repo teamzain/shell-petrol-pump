@@ -70,10 +70,22 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
                 debited_value: 0,
                 hold_value: 0,
                 release_value: 0,
+                short_qty: 0,
+                extra_qty: 0,
+                unit_type: del.unit_type || poData?.unit_type
             }
         }
         acc[key].debited_value += Number(del.delivered_amount || 0)
         acc[key].hold_value += Number(del.hold_amount || 0)
+
+        // Calculate short/extra for this specific delivery item
+        const ordered = Number(del.quantity_ordered || 0)
+        const received = Number(del.delivered_quantity || 0)
+        if (received < ordered) {
+            acc[key].short_qty += (ordered - received)
+        } else if (received > ordered) {
+            acc[key].extra_qty += (received - ordered)
+        }
 
         // Sum release values from hold records (if any)
         if (del.po_hold_records) {
@@ -123,6 +135,8 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
                             <TableHead className="font-bold">Supplier</TableHead>
                             <TableHead className="font-bold">Order Date</TableHead>
                             <TableHead className="font-bold">Received Date</TableHead>
+                            <TableHead className="font-bold text-right text-amber-600">Short Qty</TableHead>
+                            <TableHead className="font-bold text-right text-emerald-600">Extra Qty</TableHead>
                             <TableHead className="font-bold text-right text-slate-700">Order Value</TableHead>
                             <TableHead className="font-bold text-right text-blue-700 font-black">Debited</TableHead>
                             <TableHead className="font-bold text-right text-amber-700">Hold</TableHead>
@@ -133,7 +147,7 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
                     <TableBody>
                         {loading ? (
                             <TableRow>
-                                <TableCell colSpan={10} className="h-48">
+                                <TableCell colSpan={12} className="h-48">
                                     <div className="flex items-center justify-center w-full h-full">
                                         <BrandLoader size="lg" />
                                     </div>
@@ -141,7 +155,7 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
                             </TableRow>
                         ) : filteredDeliveries.length === 0 ? (
                             <TableRow>
-                                <TableCell colSpan={10} className="h-24 text-center text-muted-foreground">
+                                <TableCell colSpan={12} className="h-24 text-center text-muted-foreground">
                                     No delivery records found.
                                 </TableCell>
                             </TableRow>
@@ -156,6 +170,12 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
                                     </TableCell>
                                     <TableCell className="text-[10px] whitespace-nowrap">
                                         {del.receiving_date ? new Date(del.receiving_date).toLocaleDateString('en-PK') : '-'}
+                                    </TableCell>
+                                    <TableCell className="text-right font-bold text-xs text-amber-600">
+                                        {del.short_qty > 0 ? `${del.short_qty.toLocaleString()} ${del.unit_type === 'liter' ? 'L' : 'U'}` : '-'}
+                                    </TableCell>
+                                    <TableCell className="text-right font-bold text-xs text-emerald-600">
+                                        {del.extra_qty > 0 ? `${del.extra_qty.toLocaleString()} ${del.unit_type === 'liter' ? 'L' : 'U'}` : '-'}
                                     </TableCell>
                                     <TableCell className="text-right font-bold text-xs text-slate-500">
                                         Rs. {Number(del.total_order_value || 0).toLocaleString()}

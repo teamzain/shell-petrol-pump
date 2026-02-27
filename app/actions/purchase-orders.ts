@@ -70,6 +70,47 @@ export async function createPurchaseOrder(formData: {
         throw poError
     }
 
+    // 2. Deduct Balance from Supplier's Account
+    const { data: account, error: accountError } = await supabase
+        .from("company_accounts")
+        .select("id, current_balance")
+        .eq("supplier_id", formData.supplier_id)
+        .single()
+
+    if (accountError) {
+        console.error("Account Fetch Error:", accountError)
+    } else if (account) {
+        // Update balance
+        const { error: balanceError } = await supabase
+            .from("company_accounts")
+            .update({
+                current_balance: Number(account.current_balance) - estimatedTotal,
+                updated_at: new Date().toISOString()
+            })
+            .eq("id", account.id)
+
+        if (balanceError) {
+            console.error("Balance Update Error:", balanceError)
+        } else {
+            // Record transaction
+            const { error: txError } = await supabase
+                .from("company_account_transactions")
+                .insert({
+                    company_account_id: account.id,
+                    transaction_type: 'debit',
+                    transaction_source: 'purchase_order',
+                    amount: estimatedTotal,
+                    transaction_date: formData.order_date,
+                    reference_number: po.po_number,
+                    purchase_order_id: po.id,
+                    note: `Balance deducted for Purchase Order #${po.po_number}`,
+                    created_by: (await supabase.auth.getUser()).data.user?.id
+                })
+
+            if (txError) console.error("Transaction Record Error:", txError)
+        }
+    }
+
     // 3. Create Notification Reminder
     await supabase.from("notifications").insert({
         type: 'delivery_expected',
@@ -219,6 +260,53 @@ export async function cancelPurchaseOrder(poId: string) {
 
     if (error) throw error
 
+    // Revert Balance
+    const nonDeliveredItems = items.filter((item: any) => item.status !== 'delivered')
+    const revertAmount = nonDeliveredItems.reduce((acc: number, item: any) => acc + (item.total_amount || (item.ordered_quantity * item.rate_per_liter)), 0)
+
+    if (revertAmount > 0) {
+        // Find supplier and account
+        const { data: poFull } = await supabase
+            .from("purchase_orders")
+            .select("supplier_id, po_number")
+            .eq("id", poId)
+            .single()
+
+        if (poFull) {
+            const { data: account } = await supabase
+                .from("company_accounts")
+                .select("id, current_balance")
+                .eq("supplier_id", poFull.supplier_id)
+                .single()
+
+            if (account) {
+                // Update balance
+                await supabase
+                    .from("company_accounts")
+                    .update({
+                        current_balance: Number(account.current_balance) + revertAmount,
+                        updated_at: new Date().toISOString()
+                    })
+                    .eq("id", account.id)
+
+                // Record transaction
+                await supabase
+                    .from("company_account_transactions")
+                    .insert({
+                        company_account_id: account.id,
+                        transaction_type: 'credit',
+                        transaction_source: 'purchase_order_cancellation',
+                        amount: revertAmount,
+                        transaction_date: new Date().toISOString().split('T')[0],
+                        reference_number: poFull.po_number,
+                        purchase_order_id: poId,
+                        note: `Balance reverted for cancelled Purchase Order #${poFull.po_number}`,
+                        created_by: (await supabase.auth.getUser()).data.user?.id
+                    })
+            }
+        }
+    }
+
     // Also update notification
     await supabase.from("notifications")
         .update({ is_read: true })
@@ -272,6 +360,54 @@ export async function cancelPurchaseOrderItem(poId: string, itemId: string) {
         .eq("id", poId)
 
     if (updateErr) throw updateErr
+
+    // Revert Balance for this specific item
+    const cancelledItem = items.find((i: any) => i.product_id === itemId && i.status === 'cancelled')
+    if (cancelledItem) {
+        const revertAmount = Number(cancelledItem.total_amount || (cancelledItem.ordered_quantity * cancelledItem.rate_per_liter))
+
+        if (revertAmount > 0) {
+            const { data: poFull } = await supabase
+                .from("purchase_orders")
+                .select("supplier_id, po_number")
+                .eq("id", poId)
+                .single()
+
+            if (poFull) {
+                const { data: account } = await supabase
+                    .from("company_accounts")
+                    .select("id, current_balance")
+                    .eq("supplier_id", poFull.supplier_id)
+                    .single()
+
+                if (account) {
+                    // Update balance
+                    await supabase
+                        .from("company_accounts")
+                        .update({
+                            current_balance: Number(account.current_balance) + revertAmount,
+                            updated_at: new Date().toISOString()
+                        })
+                        .eq("id", account.id)
+
+                    // Record transaction
+                    await supabase
+                        .from("company_account_transactions")
+                        .insert({
+                            company_account_id: account.id,
+                            transaction_type: 'credit',
+                            transaction_source: 'purchase_order_cancellation',
+                            amount: revertAmount,
+                            transaction_date: new Date().toISOString().split('T')[0],
+                            reference_number: poFull.po_number,
+                            purchase_order_id: poId,
+                            note: `Balance reverted for cancelled item in PO #${poFull.po_number}`,
+                            created_by: (await supabase.auth.getUser()).data.user?.id
+                        })
+                }
+            }
+        }
+    }
 
     revalidatePath("/dashboard/purchases")
     return { success: true, allCancelled }

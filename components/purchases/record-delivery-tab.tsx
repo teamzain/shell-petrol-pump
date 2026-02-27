@@ -147,7 +147,8 @@ export function RecordDeliveryTab({ initialPO, onSuccess }: RecordDeliveryTabPro
 
     const watchQty = form.watch("delivered_quantity")
     const watchPrice = form.watch("rate_per_liter")
-    const totalAmount = (Number(watchQty) || 0) * (Number(watchPrice) || 0)
+    // Cap total amount at remaining quantity value for over-delivery scenarios
+    const totalAmount = (Math.min(Number(watchQty) || 0, remainingQty)) * (Number(watchPrice) || 0)
 
     // Calculate holds
     const isPartial = selectedPO && Number(watchQty) > 0 && Number(watchQty) < remainingQty;
@@ -157,11 +158,6 @@ export function RecordDeliveryTab({ initialPO, onSuccess }: RecordDeliveryTabPro
     const availableItems = selectedPO && Array.isArray(selectedPO.items) ? selectedPO.items : []
 
     async function onSubmit(values: z.infer<typeof deliverySchema>) {
-        if (values.delivered_quantity > remainingQty) {
-            toast.error(`Quantity delivered (${values.delivered_quantity}) cannot exceed remaining quantity (${remainingQty})`)
-            return
-        }
-
         if (isPartial) {
             setPendingSubmitValues(values)
             setShowWarning(true)
@@ -346,9 +342,35 @@ export function RecordDeliveryTab({ initialPO, onSuccess }: RecordDeliveryTabPro
                                 <span className="text-muted-foreground">Already Delivered:</span>
                                 <span className="font-bold text-blue-600">{alreadyDelivered} {shortUnitLabel}</span>
                             </div>
+                            <div className="flex justify-between items-center text-sm">
+                                <span className="text-muted-foreground">To be Delivered:</span>
+                                <span className="font-bold">{remainingQty} {shortUnitLabel}</span>
+                            </div>
+
+                            {Number(watchQty) > 0 && (
+                                <div className="space-y-2 border-t border-slate-200 pt-3">
+                                    {Number(watchQty) < remainingQty ? (
+                                        <div className="flex justify-between items-center text-sm">
+                                            <span className="text-amber-600 font-bold uppercase text-[10px]">Short Quantity:</span>
+                                            <span className="font-black text-amber-600">{(remainingQty - Number(watchQty)).toFixed(2)} {shortUnitLabel}</span>
+                                        </div>
+                                    ) : Number(watchQty) > remainingQty ? (
+                                        <div className="flex justify-between items-center text-sm">
+                                            <span className="text-emerald-600 font-bold uppercase text-[10px]">Extra Quantity:</span>
+                                            <span className="font-black text-emerald-600">{(Number(watchQty) - remainingQty).toFixed(2)} {shortUnitLabel}</span>
+                                        </div>
+                                    ) : (
+                                        <div className="flex justify-between items-center text-sm">
+                                            <span className="text-blue-600 font-bold uppercase text-[10px]">Status:</span>
+                                            <span className="font-black text-blue-600">Exact Match</span>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
                             <div className="flex justify-between items-center text-base font-black border-t border-slate-300 pt-3">
-                                <span>Remaining:</span>
-                                <span className="text-primary">{remainingQty} {shortUnitLabel}</span>
+                                <span>Net Remaining:</span>
+                                <span className="text-primary">{Math.max(0, remainingQty - Number(watchQty)).toFixed(2)} {shortUnitLabel}</span>
                             </div>
                         </CardContent>
                     </Card>
