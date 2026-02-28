@@ -75,7 +75,7 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
                 unit_type: del.unit_type || poData?.unit_type
             }
         }
-        acc[key].debited_value += Number(del.delivered_amount || 0)
+        acc[key].debited_value += Number(del.delivered_amount || (Math.min(Number(del.delivered_quantity || 0), Number(del.quantity_ordered || 0)) * Number(poData?.rate_per_liter || 0)))
         acc[key].hold_value += Number(del.hold_amount || 0)
 
         // Calculate short/extra for this specific delivery item

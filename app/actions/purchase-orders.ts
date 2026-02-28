@@ -448,13 +448,13 @@ export async function getPurchaseSummary(filters?: { date_from?: string; date_to
     // 2. Total Settled (Sum of all deliveries)
     let delQuery = supabase
         .from("deliveries")
-        .select("total_amount")
+        .select("delivered_amount") // use capped amount
 
     if (filters?.date_from) delQuery = delQuery.gte("delivery_date", filters.date_from)
     if (filters?.date_to) delQuery = delQuery.lte("delivery_date", filters.date_to)
 
     const { data: settledData } = await delQuery
-    const totalSettled = settledData?.reduce((acc, d) => acc + Number(d.total_amount), 0) || 0
+    const totalSettled = settledData?.reduce((acc, d) => acc + Number(d.delivered_amount || 0), 0) || 0
 
     // 3. New Specific Hold Stats
     let holdQuery = supabase

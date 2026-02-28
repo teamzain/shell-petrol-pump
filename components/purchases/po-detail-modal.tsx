@@ -126,7 +126,7 @@ export function PODetailModal({
             const invoiceNum = focusedDel.company_invoice_number;
             displayDeliveries = invoiceNum
                 ? po.deliveries.filter((d: any) => d.company_invoice_number === invoiceNum)
-                : [focusedDel];
+                : po.deliveries.filter((d: any) => !d.company_invoice_number || d.company_invoice_number === "" || d.company_invoice_number === "N/A");
 
             // Scope items to what was actually in these deliveries
             if (hasItems) {
@@ -138,7 +138,7 @@ export function PODetailModal({
                             ...item,
                             original_index: idx,
                             delivered_quantity: recordedInThisTrans.delivered_quantity,
-                            total_amount: Math.min(Number(recordedInThisTrans.delivered_quantity), Number(item.ordered_quantity)) * Number(item.rate_per_liter)
+                            total_amount: Number(recordedInThisTrans.delivered_amount || (Math.min(Number(recordedInThisTrans.delivered_quantity), Number(item.ordered_quantity)) * Number(item.rate_per_liter)))
                         };
                     }
                     return {
@@ -397,8 +397,12 @@ export function PODetailModal({
                                 <span className="font-mono font-bold text-green-400">-{formatCurrency(displayDeliveredValue)}</span>
                             </div>
                             <div className="flex justify-between items-center text-lg mt-2 pt-2">
-                                <span className="uppercase text-amber-500 text-xs font-bold tracking-tight self-center">= Amount On Hold</span>
-                                <span className="font-mono font-black text-amber-500">{formatCurrency(Math.max(0, displayEstimatedTotal - displayDeliveredValue))}</span>
+                                <span className="uppercase text-amber-500 text-xs font-bold tracking-tight self-center">
+                                    {deliveryId ? "= Transaction Total" : "= Amount On Hold"}
+                                </span>
+                                <span className="font-mono font-black text-amber-500">
+                                    {deliveryId ? formatCurrency(displayDeliveredValue) : formatCurrency(Math.max(0, displayEstimatedTotal - displayDeliveredValue))}
+                                </span>
                             </div>
 
                             {po.po_hold_records?.some((h: any) => h.status === 'released') && (
