@@ -394,57 +394,133 @@ export async function getTransactionDetail(transactionId: string) {
 
     let resultTx = { ...transaction }
 
-    // If source = delivery or purchase, also fetch delivery details
-    if (transaction.transaction_source === 'delivery' || transaction.transaction_source === 'purchase') {
+    // 1. Resolve Purchase Order ID
+    const poId = transaction.purchase_order_id || transaction.deliveries?.purchase_order_id || transaction.po_hold_records?.purchase_order_id
+
+    // 2. Fetch all related deliveries if a PO exists
+    if (poId) {
+        const { data: allDeliveries } = await supabase
+            .from('deliveries')
+            .select(`
+                *,
+                purchase_orders(
+                    po_number,
+                    items,
+                    products(name)
+                )
+            `)
+            .eq('purchase_order_id', poId)
+            .order('delivery_date', { ascending: false })
+
+        resultTx.all_related_deliveries = allDeliveries || []
+
+        // Fetch the main PO object if we don't have it
+        const { data: po } = await supabase
+            .from('purchase_orders')
+            .select(`
+                *,
+                products(
+                    name,
+                    category,
+                    unit
+                )
+            `)
+            .eq('id', poId)
+            .single()
+
+        if (po) resultTx.purchase_orders = po
+
+        // Fetch all hold records for this PO
+        const { data: allHolds } = await supabase
+            .from('po_hold_records')
+            .select('*')
+            .eq('purchase_order_id', poId)
+            .order('created_at', { ascending: false })
+
+        resultTx.all_related_holds = allHolds || []
+    }
+
+    // 3. Helper to map product names for any PO object's items
+    const mapPOItems = async (poObj: any) => {
+        if (!poObj || !poObj.items || !Array.isArray(poObj.items)) return poObj;
+        const productIds = Array.from(new Set(poObj.items.filter((i: any) => i.product_id).map((i: any) => i.product_id)));
+        if (productIds.length > 0) {
+            const { data: products } = await supabase
+                .from("products")
+                .select("id, name, category")
+                .in("id", productIds);
+            if (products) {
+                const productMap = new Map(products.map((p: any) => [p.id, p]));
+                poObj.items = poObj.items.map((item: any) => {
+                    const product = productMap.get(item.product_id);
+                    return {
+                        ...item,
+                        product_name: product ? product.name : "Unknown Product",
+                        product_category: product ? product.category : item.product_type
+                    };
+                });
+            }
+        }
+        return poObj;
+    };
+
+    // Map main PO items
+    if (resultTx.purchase_orders) {
+        resultTx.purchase_orders = await mapPOItems(resultTx.purchase_orders);
+
+        // Populate product names for holds now that PO items are mapped
+        if (resultTx.all_related_holds?.length > 0 && resultTx.purchase_orders.items) {
+            resultTx.all_related_holds = resultTx.all_related_holds.map((h: any) => {
+                if (!h.product_name && h.po_item_index !== undefined) {
+                    const item = resultTx.purchase_orders.items[h.po_item_index];
+                    if (item) return { ...h, product_name: item.product_name };
+                }
+                return h;
+            });
+        }
+    }
+
+    // Map items in all related deliveries
+    if (resultTx.all_related_deliveries) {
+        for (let del of resultTx.all_related_deliveries) {
+            if (del.purchase_orders) {
+                del.purchase_orders = await mapPOItems(del.purchase_orders);
+                // Also populate product_name from items if missing
+                if (!del.product_name && del.purchase_orders.items && del.po_item_index !== undefined) {
+                    const item = del.purchase_orders.items[del.po_item_index];
+                    if (item) del.product_name = item.product_name;
+                }
+            }
+        }
+    }
+
+    // 4. Fetch specific delivery details if this transaction is linked to ONE delivery
+    if (transaction.delivery_id) {
         const { data: delivery } = await supabase
             .from('deliveries')
             .select(`
                 *,
                 purchase_orders!inner(
+                    id,
                     po_number,
-                    ordered_quantity,
-                    product_type,
-                    unit_type,
-                    estimated_total,
-                    rate_per_liter,
-                    quantity_remaining,
-                    created_at,
-                    expected_delivery_date,
-                    products(
-                        name,
-                        category,
-                        unit
-                    )
+                    items
                 )
             `)
             .eq('id', transaction.delivery_id)
             .single()
 
         if (delivery) {
-            // Map specific item details if it's a multi-item PO
-            if (delivery.purchase_orders?.items && Array.isArray(delivery.purchase_orders.items)) {
-                const itemIdx = delivery.item_index;
-                const specificItem = delivery.purchase_orders.items[itemIdx];
-
-                if (specificItem) {
-                    delivery.purchase_orders = {
-                        ...delivery.purchase_orders,
-                        ordered_quantity: specificItem.ordered_quantity,
-                        quantity_remaining: specificItem.quantity_remaining,
-                        rate_per_liter: specificItem.rate_per_liter,
-                        product_type: specificItem.product_type,
-                        unit_type: specificItem.unit_type,
-                        estimated_total: specificItem.total_amount,
-                        // Priority for product name
-                        product_name_override: specificItem.product_name || (delivery.purchase_orders.products?.name)
-                    };
-                }
+            delivery.purchase_orders = await mapPOItems(delivery.purchase_orders);
+            // Also populate product_name here
+            if (!delivery.product_name && delivery.purchase_orders.items && delivery.po_item_index !== undefined) {
+                const item = delivery.purchase_orders.items[delivery.po_item_index];
+                if (item) delivery.product_name = item.product_name;
             }
-            resultTx.deliveries = delivery
+            resultTx.deliveries = delivery;
         }
     }
 
-    // If source = hold_release, fetch hold details
+    // 5. If source = hold_release, fetch hold details
     if (transaction.transaction_source === 'hold_release') {
         const { data: hold } = await supabase
             .from('po_hold_records')
@@ -452,40 +528,16 @@ export async function getTransactionDetail(transactionId: string) {
                 *,
                 purchase_orders!inner(
                     po_number,
-                    product_type,
-                    rate_per_liter,
-                    unit_type,
-                    products(
-                        name,
-                        category,
-                        unit
-                    )
+                    items,
+                    products(name)
                 )
             `)
             .eq('id', transaction.hold_record_id)
             .single()
 
         if (hold) {
-            // Map specific item details for hold release
-            if (hold.purchase_orders?.items && Array.isArray(hold.purchase_orders.items)) {
-                // Find by item_index if exists, otherwise by product_id
-                const specificItem = hold.item_index !== undefined ?
-                    hold.purchase_orders.items[hold.item_index] :
-                    hold.purchase_orders.items.find((i: any) => i.product_id === hold.product_id);
-
-                if (specificItem) {
-                    hold.purchase_orders = {
-                        ...hold.purchase_orders,
-                        ordered_quantity: specificItem.ordered_quantity,
-                        quantity_remaining: specificItem.quantity_remaining,
-                        rate_per_liter: specificItem.rate_per_liter,
-                        product_type: specificItem.product_type,
-                        unit_type: specificItem.unit_type,
-                        estimated_total: specificItem.total_amount
-                    };
-                }
-            }
-            resultTx.po_hold_records = hold
+            hold.purchase_orders = await mapPOItems(hold.purchase_orders);
+            resultTx.po_hold_records = hold;
         }
     }
 

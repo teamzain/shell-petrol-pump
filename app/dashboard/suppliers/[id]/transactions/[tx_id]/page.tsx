@@ -57,15 +57,15 @@ export default function TransactionDetailPage() {
     let sourceLabel = "Manual Transaction"
     if (transaction.transaction_source === 'opening_balance') sourceLabel = "Opening Balance"
     if (transaction.transaction_source === 'manual_transfer') sourceLabel = "Fund Transfer"
-    if (transaction.transaction_source === 'delivery' || transaction.transaction_source === 'purchase') sourceLabel = "Purchase"
+    if (transaction.transaction_source === 'delivery' || transaction.transaction_source === 'purchase' || transaction.transaction_source === 'purchase_order') sourceLabel = "Purchase"
     if (transaction.transaction_source === 'hold_release') sourceLabel = "Hold Released"
     if (transaction.transaction_source === 'reversal') sourceLabel = "Reversal"
 
     const txDate = new Date(transaction.transaction_date).toLocaleDateString('en-GB').replace(/\//g, '-')
 
-    const isPurchase = transaction.transaction_source === 'purchase' || transaction.transaction_source === 'delivery'
+    const isPurchase = transaction.transaction_source === 'purchase' || transaction.transaction_source === 'delivery' || transaction.transaction_source === 'purchase_order'
     const d = transaction.deliveries
-    const po = isPurchase ? transaction.deliveries?.purchase_orders : undefined
+    const po = isPurchase ? (transaction.deliveries?.purchase_orders || transaction.purchase_orders) : undefined
 
     const hr = transaction.po_hold_records
     const hrPo = hr?.purchase_orders
@@ -160,7 +160,7 @@ export default function TransactionDetailPage() {
 
                 {/* Sidebar Cards */}
                 <div className="space-y-6">
-                    {(transaction.transaction_source === 'delivery' || transaction.transaction_source === 'purchase') && po && (
+                    {(transaction.transaction_source === 'delivery' || transaction.transaction_source === 'purchase' || transaction.transaction_source === 'purchase_order') && po && (
                         <>
                             {/* Section 3: Purchase Order Information */}
                             <Card className="border-indigo-100 bg-indigo-50/30">
@@ -186,72 +186,128 @@ export default function TransactionDetailPage() {
                                             <p className="text-[10px] font-bold uppercase text-muted-foreground">Category</p>
                                             <p className="font-medium capitalize">{po.products?.category || "Unknown"}</p>
                                         </div>
-                                        <div className="col-span-2 space-y-1 border-t pt-2">
-                                            <p className="text-[10px] font-bold uppercase text-muted-foreground">Product Name</p>
-                                            <p className="font-semibold text-blue-700">{d?.product_name || po?.product_name_override || po?.products?.name || "-"}</p>
+                                        <div className="col-span-2 space-y-3 border-t pt-3">
+                                            <p className="text-[10px] font-bold uppercase text-muted-foreground flex items-center gap-2">
+                                                <Package className="h-3 w-3" /> Order Items
+                                            </p>
+                                            <div className="space-y-2">
+                                                {po.items && Array.isArray(po.items) ? (
+                                                    po.items.map((item: any, idx: number) => (
+                                                        <div key={idx} className="flex justify-between items-center bg-white p-2 rounded border border-slate-100 text-xs">
+                                                            <div>
+                                                                <p className="font-bold text-slate-700">{item.product_name || "Unknown Product"}</p>
+                                                                <p className="text-[10px] text-muted-foreground">{item.ordered_quantity} {item.unit_type === 'unit' ? 'Units' : 'Liters'} @ PKR {Number(item.rate_per_liter || 0).toLocaleString()}</p>
+                                                            </div>
+                                                            <p className="font-black text-indigo-700">PKR {Number(item.total_amount || 0).toLocaleString()}</p>
+                                                        </div>
+                                                    ))
+                                                ) : (
+                                                    <p className="font-semibold text-blue-700">{d?.product_name || po?.product_name_override || po?.products?.name || "-"}</p>
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
                                 </CardContent>
                             </Card>
 
-                            {/* Section 4: Delivery Information */}
-                            <Card className="border-blue-100 bg-blue-50/30">
-                                <CardHeader className="pb-2 flex flex-row items-center justify-between">
-                                    <CardTitle className="text-[10px] font-black uppercase tracking-widest text-blue-700">Delivery Information</CardTitle>
-                                    <Package className="h-4 w-4 text-blue-500 opacity-50" />
-                                </CardHeader>
-                                <CardContent className="space-y-4 text-sm mt-2">
-                                    <div className="grid grid-cols-2 gap-y-3">
-                                        <div className="space-y-1">
-                                            <p className="text-[10px] font-bold uppercase text-muted-foreground">Delivery Number</p>
-                                            <p className="font-mono text-xs font-semibold">{d?.delivery_number || "Pending"}</p>
-                                        </div>
-                                        <div className="space-y-1 text-right">
-                                            <p className="text-[10px] font-bold uppercase text-muted-foreground">Actual Delivery Date</p>
-                                            <p className="font-mono text-xs font-semibold">{d?.delivery_date ? new Date(d.delivery_date).toLocaleDateString('en-GB').replace(/\//g, '-') : "-"}</p>
-                                        </div>
-                                        <div className="space-y-1 mt-2 border-t pt-2">
-                                            <p className="text-[10px] font-bold uppercase text-muted-foreground">Qty Ordered</p>
-                                            <p className="font-semibold">{po.ordered_quantity || "0"} {po.unit_type === 'unit' ? 'Units' : 'Liters'}</p>
-                                        </div>
-                                        <div className="space-y-1 mt-2 border-t pt-2 text-right">
-                                            <p className="text-[10px] font-bold uppercase text-muted-foreground">Qty Received</p>
-                                            <p className="font-semibold text-blue-700">{d?.delivered_quantity || "0"} {po.unit_type === 'unit' ? 'Units' : 'Liters'}</p>
-                                        </div>
-                                        {(Number(po.quantity_remaining) > 0) && (
-                                            <div className="col-span-2 space-y-1 bg-amber-50 p-2 rounded border border-amber-200 mt-2 text-amber-800">
+                            {/* Section 4: Related Deliveries History */}
+                            {transaction.all_related_deliveries && transaction.all_related_deliveries.length > 0 && (
+                                <Card className="border-blue-100 bg-blue-50/30">
+                                    <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                                        <CardTitle className="text-[10px] font-black uppercase tracking-widest text-blue-700">Related Deliveries</CardTitle>
+                                        <Clock className="h-4 w-4 text-blue-500 opacity-50" />
+                                    </CardHeader>
+                                    <CardContent className="space-y-3 text-sm mt-2">
+                                        {transaction.all_related_deliveries.map((relDel: any, idx: number) => (
+                                            <div key={relDel.id} className="flex flex-col gap-1 border-b border-blue-100/50 pb-2 last:border-0 last:pb-0">
+                                                <div className="flex justify-between items-start">
+                                                    <p className="font-mono text-[10px] font-black text-blue-800">#{relDel.delivery_number || "DEL-PENDING"}</p>
+                                                    <p className="text-[10px] font-medium text-slate-500">{new Date(relDel.delivery_date).toLocaleDateString('en-GB').replace(/\//g, '-')}</p>
+                                                </div>
                                                 <div className="flex justify-between items-center">
-                                                    <p className="text-[10px] font-bold uppercase text-amber-700/70">Qty Remaining (Short)</p>
-                                                    <p className="font-black text-sm">{po.quantity_remaining} {po.unit_type === 'unit' ? 'Units' : 'Liters'}</p>
+                                                    <p className="text-xs font-semibold">{relDel.product_name || "Fuel/Item"}</p>
+                                                    <p className="text-xs font-black text-blue-700">{relDel.delivered_quantity} {po.unit_type === 'unit' ? 'Units' : 'Liters'}</p>
+                                                </div>
+                                                {relDel.company_invoice_number && (
+                                                    <p className="text-[9px] text-muted-foreground italic">Inv# {relDel.company_invoice_number}</p>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </CardContent>
+                                </Card>
+                            )}
+
+                            {/* Section 4.5: On-Hold Payments */}
+                            {transaction.all_related_holds && transaction.all_related_holds.length > 0 && (
+                                <Card className="border-amber-100 bg-amber-50/30">
+                                    <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                                        <CardTitle className="text-[10px] font-black uppercase tracking-widest text-amber-700">On-Hold Payments</CardTitle>
+                                        <ShieldCheck className="h-4 w-4 text-amber-500 opacity-50" />
+                                    </CardHeader>
+                                    <CardContent className="space-y-3 text-sm mt-2">
+                                        {transaction.all_related_holds.map((hold: any, idx: number) => (
+                                            <div key={hold.id} className="flex flex-col gap-1 border-b border-amber-100/50 pb-2 last:border-0 last:pb-0">
+                                                <div className="flex justify-between items-start">
+                                                    <Badge variant="outline" className={`text-[9px] px-1 py-0 h-4 ${hold.status === 'released' ? 'border-green-500 text-green-700 bg-green-50' : 'border-amber-500 text-amber-700 bg-amber-50'}`}>
+                                                        {hold.status === 'released' ? 'Released' : 'On Hold'}
+                                                    </Badge>
+                                                    <p className="text-[10px] font-medium text-slate-500">{new Date(hold.created_at).toLocaleDateString('en-GB').replace(/\//g, '-')}</p>
+                                                </div>
+                                                <div className="flex justify-between items-center">
+                                                    <p className="text-xs font-semibold">{hold.product_name || "Fuel/Item"}</p>
+                                                    <p className="text-xs font-black text-amber-700">PKR {Number(hold.hold_amount || 0).toLocaleString()}</p>
+                                                </div>
+                                                <p className="text-[9px] text-muted-foreground italic">Qty: {hold.hold_quantity} {po.unit_type === 'unit' ? 'Units' : 'Liters'}</p>
+                                            </div>
+                                        ))}
+                                    </CardContent>
+                                </Card>
+                            )}
+
+                            {/* Section 5: Specific Delivery Details (If this tx is a delivery) */}
+                            {d && (
+                                <Card className="border-slate-200 bg-slate-50/50">
+                                    <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                                        <CardTitle className="text-[10px] font-black uppercase tracking-widest text-slate-700">This Delivery Detail</CardTitle>
+                                        <Package className="h-4 w-4 text-slate-400 opacity-50" />
+                                    </CardHeader>
+                                    <CardContent className="space-y-4 text-sm mt-2">
+                                        <div className="grid grid-cols-2 gap-y-3">
+                                            <div className="space-y-1">
+                                                <p className="text-[10px] font-bold uppercase text-muted-foreground">Delivery Number</p>
+                                                <p className="font-mono text-xs font-semibold">{d?.delivery_number || "Pending"}</p>
+                                            </div>
+                                            <div className="space-y-1 text-right">
+                                                <p className="text-[10px] font-bold uppercase text-muted-foreground">Actual Delivery Date</p>
+                                                <p className="font-mono text-xs font-semibold">{d?.delivery_date ? new Date(d.delivery_date).toLocaleDateString('en-GB').replace(/\//g, '-') : "-"}</p>
+                                            </div>
+                                            <div className="space-y-1 mt-2 border-t pt-2">
+                                                <p className="text-[10px] font-bold uppercase text-muted-foreground">Qty Ordered</p>
+                                                <p className="font-semibold">{po.ordered_quantity || "0"} {po.unit_type === 'unit' ? 'Units' : 'Liters'}</p>
+                                            </div>
+                                            <div className="space-y-1 mt-2 border-t pt-2 text-right">
+                                                <p className="text-[10px] font-bold uppercase text-muted-foreground">Qty Received</p>
+                                                <p className="font-semibold text-blue-700">{d?.delivered_quantity || "0"} {po.unit_type === 'unit' ? 'Units' : 'Liters'}</p>
+                                            </div>
+
+                                            <div className="col-span-2 space-y-1 mt-2 pt-3 border-t">
+                                                <div className="flex justify-between mb-2">
+                                                    <span className="text-[10px] font-bold uppercase text-muted-foreground">Company Invoice Number</span>
+                                                    <span className="font-mono text-sm">{d?.company_invoice_number || "-"}</span>
+                                                </div>
+                                                <div className="flex justify-between mt-1">
+                                                    <span className="text-[10px] font-bold uppercase text-muted-foreground">Vehicle Number</span>
+                                                    <span className="font-mono text-sm">{d?.vehicle_number || "-"}</span>
+                                                </div>
+                                                <div className="flex justify-between mt-1">
+                                                    <span className="text-[10px] font-bold uppercase text-muted-foreground">Driver Name</span>
+                                                    <span className="font-mono text-sm">{d?.driver_name || "-"}</span>
                                                 </div>
                                             </div>
-                                        )}
-                                        <div className="col-span-2 space-y-1 mt-2 pt-3 border-t">
-                                            <div className="flex justify-between mb-2">
-                                                <span className="text-[10px] font-bold uppercase text-muted-foreground">Price Per Unit</span>
-                                                <span className="font-mono text-sm">PKR {Number(po.rate_per_liter || 0).toLocaleString()}</span>
-                                            </div>
-                                            <div className="flex justify-between mb-4">
-                                                <span className="text-[10px] font-bold uppercase text-muted-foreground">Total Amount Charged</span>
-                                                <span className="font-mono font-black text-blue-700 text-sm">PKR {Number(transaction.amount || 0).toLocaleString()}</span>
-                                            </div>
-
-                                            <div className="flex justify-between pt-3 border-t">
-                                                <span className="text-[10px] font-bold uppercase text-muted-foreground">Company Invoice Number</span>
-                                                <span className="font-mono text-sm">{d?.company_invoice_number || "-"}</span>
-                                            </div>
-                                            <div className="flex justify-between mt-2">
-                                                <span className="text-[10px] font-bold uppercase text-muted-foreground">Vehicle / Tanker Number</span>
-                                                <span className="font-mono text-sm">{d?.vehicle_number || "-"}</span>
-                                            </div>
-                                            <div className="flex justify-between mt-2">
-                                                <span className="text-[10px] font-bold uppercase text-muted-foreground">Driver Name</span>
-                                                <span className="font-mono text-sm">{d?.driver_name || "-"}</span>
-                                            </div>
                                         </div>
-                                    </div>
-                                </CardContent>
-                            </Card>
+                                    </CardContent>
+                                </Card>
+                            )}
 
                             {/* Section 5: Hold Information */}
                             {(Number(hr?.hold_amount) > 0) && (

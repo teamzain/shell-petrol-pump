@@ -260,13 +260,12 @@ export default function SupplierTransactionsPage() {
                                     } else if (tx.transaction_source === 'manual_transfer') {
                                         description = "Fund Transfer"
                                         if (tx.reference_number) description += ` | Ref# ${tx.reference_number}`
-                                    } else if (tx.transaction_source === 'delivery' || tx.transaction_source === 'purchase') {
-                                        const isPurchase = tx.transaction_source === 'purchase' || tx.transaction_source === 'delivery'
+                                    } else if (tx.transaction_source === 'delivery' || tx.transaction_source === 'purchase' || tx.transaction_source === 'purchase_order') {
                                         const poObj = tx.purchase_orders || tx.deliveries?.purchase_orders
 
                                         // Product name might come from product_name or name
                                         const prodName = poObj?.products?.product_name || poObj?.products?.name || "Product"
-                                        description = "Purchase Delivery"
+                                        description = tx.transaction_source === 'purchase_order' ? "Purchase Order" : "Purchase Delivery"
                                         if (poObj?.po_number) description += ` | PO# ${poObj.po_number}`
 
                                         const qty = tx.deliveries?.delivered_quantity || poObj?.ordered_quantity
