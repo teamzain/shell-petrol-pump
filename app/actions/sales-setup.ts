@@ -9,6 +9,7 @@ export async function getDispensers() {
         .from('dispensers')
         .select(`
       *,
+      tanks (name),
       nozzles (
         *,
         products (
@@ -31,6 +32,7 @@ export async function saveDispenser(dispenser: any) {
         .upsert({
             id: dispenser.id || undefined,
             name: dispenser.name,
+            tank_id: dispenser.tank_id || null,
             status: dispenser.status || 'active'
         })
         .select()

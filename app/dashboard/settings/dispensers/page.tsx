@@ -35,16 +35,19 @@ import { BrandLoader as Loader } from "@/components/ui/brand-loader"
 import { toast } from "sonner"
 import { getDispensers, saveDispenser, deleteDispenser, saveNozzle, deleteNozzle } from "@/app/actions/sales-setup"
 import { getProducts } from "@/app/actions/products"
+import { getTanks } from "@/app/actions/tanks"
 import { Badge } from "@/components/ui/badge"
 
 export default function DispensersPage() {
     const [loading, setLoading] = useState(true)
     const [dispensers, setDispensers] = useState<any[]>([])
     const [products, setProducts] = useState<any[]>([])
+    const [tanks, setTanks] = useState<any[]>([])
 
     const [isDispenserDialogOpen, setIsDispenserDialogOpen] = useState(false)
     const [editingDispenser, setEditingDispenser] = useState<any>(null)
     const [dispenserName, setDispenserName] = useState("")
+    const [tankId, setTankId] = useState("")
 
     const [isNozzleDialogOpen, setIsNozzleDialogOpen] = useState(false)
     const [editingNozzle, setEditingNozzle] = useState<any>(null)
@@ -62,12 +65,14 @@ export default function DispensersPage() {
     const fetchData = async () => {
         setLoading(true)
         try {
-            const [dispData, prodData] = await Promise.all([
+            const [dispData, prodData, tankData] = await Promise.all([
                 getDispensers(),
-                getProducts('fuel')
+                getProducts('fuel'),
+                getTanks()
             ])
             setDispensers(dispData || [])
             setProducts(prodData || [])
+            setTanks(tankData || [])
         } catch (error) {
             console.error("Error fetching data:", error)
             toast.error("Failed to load dispensers and nozzles")
@@ -81,7 +86,8 @@ export default function DispensersPage() {
         try {
             await saveDispenser({
                 id: editingDispenser?.id,
-                name: dispenserName
+                name: dispenserName,
+                tank_id: tankId
             })
             toast.success("Dispenser saved successfully")
             setIsDispenserDialogOpen(false)
@@ -148,6 +154,7 @@ export default function DispensersPage() {
                 <Button onClick={() => {
                     setEditingDispenser(null)
                     setDispenserName("")
+                    setTankId("")
                     setIsDispenserDialogOpen(true)
                 }} className="h-12 px-6 rounded-xl font-bold shadow-lg shadow-primary/20 transition-all hover:scale-105 active:scale-95">
                     <Plus className="w-5 h-5 mr-2" /> Add Dispenser
@@ -162,13 +169,14 @@ export default function DispensersPage() {
                             <div>
                                 <CardTitle className="text-xl font-black">{dispenser.name}</CardTitle>
                                 <CardDescription className="text-xs uppercase font-bold tracking-widest text-muted-foreground">
-                                    {dispenser.nozzles?.length || 0} Nozzles Configured
+                                    {dispenser.tanks?.name || "No Tank Linked"} • {dispenser.nozzles?.length || 0} Nozzles
                                 </CardDescription>
                             </div>
                             <div className="flex items-center gap-2">
                                 <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg" onClick={() => {
                                     setEditingDispenser(dispenser)
                                     setDispenserName(dispenser.name)
+                                    setTankId(dispenser.tank_id || "")
                                     setIsDispenserDialogOpen(true)
                                 }}>
                                     <Pencil className="w-4 h-4" />
@@ -266,6 +274,21 @@ export default function DispensersPage() {
                                     required
                                     className="h-12 rounded-xl border-2 focus-visible:ring-primary/20 font-bold"
                                 />
+                            </div>
+                            <div className="space-y-2">
+                                <Label className="text-xs font-black uppercase tracking-widest ml-1 text-muted-foreground">Linked Tank</Label>
+                                <Select value={tankId} onValueChange={setTankId}>
+                                    <SelectTrigger className="h-12 rounded-xl border-2 font-bold">
+                                        <SelectValue placeholder="Select a tank..." />
+                                    </SelectTrigger>
+                                    <SelectContent className="rounded-xl border-2 shadow-xl">
+                                        {tanks.map(t => (
+                                            <SelectItem key={t.id} value={t.id} className="font-bold rounded-lg focus:bg-primary/10">
+                                                {t.name}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
                             </div>
                         </div>
                         <DialogFooter>

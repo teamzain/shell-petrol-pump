@@ -85,6 +85,15 @@ export default function BalanceMovementPage() {
         fetchData()
     }, [typeFilter])
 
+    if (loading) {
+        return (
+            <div className="flex flex-col items-center justify-center min-h-[60vh]">
+                <BrandLoader size="lg" className="mb-4" />
+                <p className="text-muted-foreground animate-pulse font-black uppercase tracking-widest text-[10px]">Loading Transaction Ledger...</p>
+            </div>
+        )
+    }
+
     return (
         <div className="flex flex-col gap-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -200,67 +209,79 @@ export default function BalanceMovementPage() {
                                     <TableHead className="font-black uppercase text-[10px]">Reference</TableHead>
                                     <TableHead className="font-black uppercase text-[10px]">Entity</TableHead>
                                     <TableHead className="font-black uppercase text-[10px]">Description</TableHead>
-                                    <TableHead className="font-black uppercase text-[10px] text-right">Inflow (+)</TableHead>
-                                    <TableHead className="font-black uppercase text-[10px] text-right">Outflow (-)</TableHead>
+                                    <TableHead className="font-black uppercase text-[10px] text-right">Balance Before</TableHead>
+                                    <TableHead className="font-black uppercase text-[10px] text-right">Amount</TableHead>
+                                    <TableHead className="font-black uppercase text-[10px] text-right">Balance After</TableHead>
                                     <TableHead className="font-black uppercase text-[10px] text-center">Type</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {loading ? (
+                                {transactions.length === 0 ? (
                                     <TableRow>
-                                        <TableCell colSpan={7} className="h-32 text-center">
-                                            <BrandLoader size="sm" />
-                                        </TableCell>
-                                    </TableRow>
-                                ) : transactions.length === 0 ? (
-                                    <TableRow>
-                                        <TableCell colSpan={7} className="h-32 text-center text-muted-foreground italic">
+                                        <TableCell colSpan={8} className="h-32 text-center text-muted-foreground italic">
                                             No transactions found matching your filters.
                                         </TableCell>
                                     </TableRow>
                                 ) : (
-                                    transactions.map((tx) => (
-                                        <TableRow key={tx.id} className="hover:bg-slate-50/50 transition-colors">
-                                            <TableCell className="font-medium text-xs whitespace-nowrap">
-                                                {new Date(tx.created_at).toLocaleDateString('en-PK', {
-                                                    day: '2-digit',
-                                                    month: 'short',
-                                                    year: 'numeric',
-                                                    hour: '2-digit',
-                                                    minute: '2-digit'
-                                                })}
-                                            </TableCell>
-                                            <TableCell className="font-mono text-[10px] font-bold text-slate-500 uppercase flex flex-col gap-1">
-                                                <span>{tx.reference_number || "N/A"}</span>
-                                                {tx.transaction_source && (
-                                                    <Badge variant="outline" className="text-[8px] w-fit">
-                                                        {tx.transaction_source.replace("_", " ")}
-                                                    </Badge>
-                                                )}
-                                            </TableCell>
-                                            <TableCell className="font-bold text-xs">
-                                                {tx.suppliers?.name || tx.customers?.name || "General"}
-                                            </TableCell>
-                                            <TableCell className="text-xs max-w-xs truncate">
-                                                {tx.description}
-                                            </TableCell>
-                                            <TableCell className="text-right font-black text-green-600 text-sm">
-                                                {tx.transaction_type === 'credit' ? `Rs. ${Number(tx.amount).toLocaleString()}` : "-"}
-                                            </TableCell>
-                                            <TableCell className="text-right font-black text-red-600 text-sm">
-                                                {tx.transaction_type === 'debit' ? `Rs. ${Number(tx.amount).toLocaleString()}` : "-"}
-                                            </TableCell>
-                                            <TableCell className="text-center">
-                                                {tx.is_hold ? (
-                                                    <Badge className="bg-amber-100 text-amber-700 border-amber-200">HOLD</Badge>
-                                                ) : tx.transaction_type === 'credit' ? (
-                                                    <Badge className="bg-green-100 text-green-700 border-green-200">INFLOW</Badge>
-                                                ) : (
-                                                    <Badge className="bg-red-100 text-red-700 border-red-200">OUTFLOW</Badge>
-                                                )}
-                                            </TableCell>
-                                        </TableRow>
-                                    ))
+                                    transactions.map((tx) => {
+                                        const isCredit = tx.transaction_type === 'credit';
+
+                                        // Generate a detailed description similar to Supplier Ledger
+                                        let displayDescription = tx.note || "General Transaction";
+                                        if (tx.transaction_source === 'purchase_order') {
+                                            displayDescription = `Purchase Order #${tx.reference_number || 'N/A'}`;
+                                        } else if (tx.transaction_source === 'delivery') {
+                                            displayDescription = `Purchase Delivery | Ref# ${tx.reference_number || 'N/A'}`;
+                                        } else if (tx.transaction_source === 'opening_balance') {
+                                            displayDescription = "Opening Balance Initialization";
+                                        }
+
+                                        return (
+                                            <TableRow key={tx.id} className="hover:bg-slate-50/50 transition-colors">
+                                                <TableCell className="font-medium text-xs whitespace-nowrap">
+                                                    {new Date(tx.created_at).toLocaleDateString('en-PK', {
+                                                        day: '2-digit',
+                                                        month: 'short',
+                                                        year: 'numeric',
+                                                        hour: '2-digit',
+                                                        minute: '2-digit'
+                                                    })}
+                                                </TableCell>
+                                                <TableCell className="font-mono text-[10px] font-bold text-slate-500 uppercase flex flex-col gap-1">
+                                                    <span>{tx.reference_number || "N/A"}</span>
+                                                    {tx.transaction_source && (
+                                                        <Badge variant="outline" className="text-[8px] w-fit">
+                                                            {tx.transaction_source.replace("_", " ")}
+                                                        </Badge>
+                                                    )}
+                                                </TableCell>
+                                                <TableCell className="font-bold text-xs">
+                                                    {tx.company_accounts?.suppliers?.name || "General"}
+                                                </TableCell>
+                                                <TableCell className="text-xs max-w-xs truncate font-semibold">
+                                                    {displayDescription}
+                                                </TableCell>
+                                                <TableCell className="text-right text-slate-500 font-medium text-xs">
+                                                    Rs. {Number(tx.balance_before || 0).toLocaleString()}
+                                                </TableCell>
+                                                <TableCell className={`text-right font-black text-sm ${isCredit ? 'text-green-600' : 'text-red-600'}`}>
+                                                    {isCredit ? '+' : '-'} Rs. {Number(tx.amount).toLocaleString()}
+                                                </TableCell>
+                                                <TableCell className={`text-right font-black text-sm ${Number(tx.balance_after || 0) >= 0 ? 'text-slate-900' : 'text-red-600'}`}>
+                                                    Rs. {Number(tx.balance_after || 0).toLocaleString()}
+                                                </TableCell>
+                                                <TableCell className="text-center">
+                                                    {tx.is_hold ? (
+                                                        <Badge className="bg-amber-100 text-amber-700 border-amber-200">HOLD</Badge>
+                                                    ) : isCredit ? (
+                                                        <Badge className="bg-green-100 text-green-700 border-green-200">INFLOW</Badge>
+                                                    ) : (
+                                                        <Badge className="bg-red-100 text-red-700 border-red-200">OUTFLOW</Badge>
+                                                    )}
+                                                </TableCell>
+                                            </TableRow>
+                                        );
+                                    })
                                 )}
                             </TableBody>
                         </Table>

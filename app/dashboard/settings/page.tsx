@@ -22,7 +22,9 @@ import {
     ArrowRightLeft,
     PlusCircle,
     Fuel,
-    CreditCard
+    CreditCard,
+    Database,
+    Droplet
 } from "lucide-react"
 import { BrandLoader as Loader } from "@/components/ui/brand-loader"
 
@@ -283,6 +285,34 @@ export default function SettingsPage() {
                             <CardFooter>
                                 <Link href="/dashboard/settings/dispensers" className="w-full">
                                     <Button variant="outline" className="w-full">Manage Equipment</Button>
+                                </Link>
+                            </CardFooter>
+                        </Card>
+
+                        <Card className="hover:border-primary/50 transition-colors">
+                            <CardHeader className="pb-2">
+                                <CardTitle className="text-lg flex items-center gap-2">
+                                    <Database className="w-5 h-5 text-primary" /> Fuel Tanks
+                                </CardTitle>
+                                <CardDescription>Manage storage tanks, capacity and dry levels.</CardDescription>
+                            </CardHeader>
+                            <CardFooter>
+                                <Link href="/dashboard/settings/tanks" className="w-full">
+                                    <Button variant="outline" className="w-full">Manage Tanks</Button>
+                                </Link>
+                            </CardFooter>
+                        </Card>
+
+                        <Card className="hover:border-primary/50 transition-colors">
+                            <CardHeader className="pb-2">
+                                <CardTitle className="text-lg flex items-center gap-2">
+                                    <Droplet className="w-5 h-5 text-primary" /> Lubricants
+                                </CardTitle>
+                                <CardDescription>Manage engine oils and packed lubricant inventory.</CardDescription>
+                            </CardHeader>
+                            <CardFooter>
+                                <Link href="/dashboard/settings/lubricants" className="w-full">
+                                    <Button variant="outline" className="w-full">Manage Lubricants</Button>
                                 </Link>
                             </CardFooter>
                         </Card>

@@ -178,6 +178,8 @@ export async function addLedgerTransaction(payload: {
             transaction_type: payload.transaction_type,
             transaction_source: txSource,
             amount: payload.amount,
+            balance_before: Number(account.current_balance),
+            balance_after: newBalance,
             transaction_date: payload.transaction_date,
             reference_number: payload.reference_number,
             note: payload.note || (txSource === 'opening_balance' ? "Initial Account Balance" : undefined)

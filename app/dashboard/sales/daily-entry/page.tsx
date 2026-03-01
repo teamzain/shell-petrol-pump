@@ -1,563 +1,590 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { format } from "date-fns"
-import { getTodayPKT } from "@/lib/utils"
-import { createClient } from "@/lib/supabase/client"
 import { useRouter } from "next/navigation"
-import { ArrowLeft, Save, AlertCircle, Calendar as CalendarIcon, Droplet, CheckCircle } from "lucide-react"
-import Link from "next/link"
+import { format } from "date-fns"
+import { getTodayPKT, cn } from "@/lib/utils"
+import { createClient } from "@/lib/supabase/client"
+import {
+  ArrowLeft, ArrowRight, Save, Droplet, CreditCard,
+  Receipt, Wallet, Calculator, AlertCircle, Plus, Trash2, CheckCircle2
+} from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
 import { useToast } from "@/components/ui/use-toast"
 import { BrandLoader } from "@/components/ui/brand-loader"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Separator } from "@/components/ui/separator"
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow
+} from "@/components/ui/table"
 
-// --- Interfaces ---
-interface Product {
-  id: string
-  name: string
-  selling_price: number
-}
+import { saveLubricantSale, saveDailyExpense, finalizeDailySummary, getOpeningBalances } from "@/app/actions/sales-daily"
 
-interface Dispenser {
-  id: string
-  name: string
-  status: string
-}
-
-interface Nozzle {
-  id: string
-  nozzle_number: number
-  dispenser_id: string
-  product_id: string
-  status: string
-  dispensers: Dispenser
-  products: Product
-  opening_reading: number
-  closing_reading: string
-  liters_sold: number
-  amount: number
-  payment_method_id: string
-  expected_release_date: string
-}
-
-interface PaymentMethod {
-  id: string
-  name: string
-  type: string
-  hold_days: number
-}
-
-export default function DailySaleEntry() {
+export default function DailyEntryPage() {
   const router = useRouter()
   const { toast } = useToast()
   const supabase = createClient()
 
-  // State
-  const [selectedDate, setSelectedDate] = useState<string>(getTodayPKT())
+  // --- State ---
+  const [step, setStep] = useState(1)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [date, setDate] = useState(getTodayPKT())
+  const [user, setUser] = useState<string | null>(null)
 
-  // Data
-  const [nozzles, setNozzles] = useState<Nozzle[]>([])
-  const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([])
+  // Master Data
+  const [nozzles, setNozzles] = useState<any[]>([])
+  const [lubricants, setLubricants] = useState<any[]>([])
+  const [paymentMethods, setPaymentMethods] = useState<any[]>([])
+  const [tanks, setTanks] = useState<any[]>([])
 
-  // Dispenser Payment Splits (Dispenser ID -> { Method ID -> Amount })
-  const [dispenserPayments, setDispenserPayments] = useState<Record<string, Record<string, string>>>({})
-
-  // Hold configuration state
-  const [holdDetails, setHoldDetails] = useState<Record<string, { expected_release_date: string }>>({})
-  const [holdDialogOpen, setHoldDialogOpen] = useState(false)
+  // Form Data
+  const [readings, setReadings] = useState<Record<string, { opening: number, closing: number, price: number }>>({})
+  const [lubeSales, setLubeSales] = useState<any[]>([])
+  const [cardPayments, setCardPayments] = useState({ shell: 0, bank: 0 })
+  const [expenses, setExpenses] = useState<{ description: string, amount: number }[]>([{ description: "", amount: 0 }])
+  const [dailyStatus, setDailyStatus] = useState({ openingCash: 0, openingBank: 0 })
 
   useEffect(() => {
-    loadData(selectedDate)
-  }, [selectedDate])
+    init()
+  }, [])
 
-  const loadData = async (date: string) => {
+  useEffect(() => {
+    if (date) {
+      fetchOpeningData()
+    }
+  }, [date])
+
+  const init = async () => {
     setLoading(true)
     try {
-      // 1. Get payment methods
-      const { data: methods, error: mErr } = await supabase
-        .from('payment_methods')
-        .select('*')
-        .eq('is_active', true)
+      const { data: { session } } = await supabase.auth.getSession()
+      setUser(session?.user?.id || null)
 
-      if (mErr) throw mErr
-      setPaymentMethods(methods || [])
+      // Parallel fetch master data
+      const [nozzlesRes, productsRes, paymentsRes, tanksRes] = await Promise.all([
+        supabase.from('nozzles').select('*, dispensers(name, tank_id), products(name, selling_price)').eq('status', 'active'),
+        supabase.from('products').select('*').eq('type', 'oil').eq('status', 'active'),
+        supabase.from('payment_methods').select('*').eq('is_active', true),
+        supabase.from('tanks').select('*')
+      ])
 
-      // 2. Get active nozzles with dispenser and product info
-      const { data: nData, error: nErr } = await supabase
-        .from('nozzles')
-        .select(`
-          id, nozzle_number, status, dispenser_id, product_id,
-          dispensers(id, name, status),
-          products(id, name, type, selling_price, current_stock)
-        `)
-        .eq('status', 'active')
-        .order('nozzle_number')
-
-      if (nErr) throw nErr
-
-      // 3. Get opening reading for each nozzle via RPC
-      const defaultMethod = methods?.find(m => m.type === 'cash')?.id || ''
-      const nozzlesWithOpenings = await Promise.all(
-        (nData || []).map(async (nozzle: any) => {
-          const { data: opening } = await supabase.rpc('get_opening_reading', {
-            p_nozzle_id: nozzle.id,
-            p_date: date
-          })
-          return {
-            ...nozzle,
-            opening_reading: parseFloat(opening || '0'),
-            closing_reading: '',
-            liters_sold: 0,
-            amount: 0,
-            payment_method_id: defaultMethod,
-            expected_release_date: ''
-          } as Nozzle
-        })
-      )
-
-      setNozzles(nozzlesWithOpenings)
+      setNozzles(nozzlesRes.data || [])
+      setLubricants(productsRes.data || [])
+      setPaymentMethods(paymentsRes.data || [])
+      setTanks(tanksRes.data || [])
 
     } catch (err: any) {
-      console.error(err)
-      toast({ title: "Error loading data", description: err.message, variant: "destructive" })
+      toast({ title: "Initialization Error", description: err.message, variant: "destructive" })
     } finally {
       setLoading(false)
     }
   }
 
-  // --- Handlers ---
-  const handleClosingChange = (nozzleId: string, value: string) => {
-    setNozzles(prev => prev.map(n => {
-      if (n.id !== nozzleId) return n
-
-      const closing = parseFloat(value) || 0
-      const opening = n.opening_reading
-      const liters = closing >= opening ? closing - opening : 0
-      const amount = liters * (n.products?.selling_price || 0)
-
-      return {
-        ...n,
-        closing_reading: value,
-        liters_sold: liters,
-        amount: amount
-      }
-    }))
-  }
-
-  const handleDispenserPaymentChange = (dispenserId: string, methodId: string, amount: string) => {
-    setDispenserPayments(prev => ({
-      ...prev,
-      [dispenserId]: {
-        ...(prev[dispenserId] || {}),
-        [methodId]: amount
-      }
-    }))
-  }
-
-  const validatePayments = () => {
-    // 1. Check closing >= opening
-    for (const n of nozzles) {
-      if (n.closing_reading && parseFloat(n.closing_reading) < n.opening_reading) {
-        toast({
-          title: "Invalid Reading",
-          description: `Closing reading for Nozzle ${n.nozzle_number} cannot be less than opening.`,
-          variant: "destructive"
+  const fetchOpeningData = async () => {
+    try {
+      // Fetch opening readings for each nozzle
+      const newReadings: Record<string, any> = {}
+      for (const nozzle of nozzles) {
+        const { data: opening } = await supabase.rpc('get_opening_reading', {
+          p_nozzle_id: nozzle.id,
+          p_date: date
         })
-        return false
-      }
-    }
-
-    // 2. Validate Dispenser Payment Totals
-    const dispensersList = Array.from(new Set(nozzles.map(n => n.dispenser_id)))
-    for (const dId of dispensersList) {
-      const dNozzles = nozzles.filter(n => n.dispenser_id === dId)
-      const dispenserTotal = dNozzles.reduce((sum, n) => sum + n.amount, 0)
-
-      if (dispenserTotal > 0) {
-        const pbs = dispenserPayments[dId] || {}
-        const paymentTotal = Object.values(pbs).reduce((sum, val) => sum + (parseFloat(val) || 0), 0)
-
-        if (Math.abs(dispenserTotal - paymentTotal) > 0.01) {
-          const dName = dNozzles[0].dispensers.name
-          toast({
-            title: "Payment Mismatch",
-            description: `Payment breakdown for ${dName} (Rs. ${paymentTotal.toFixed(2)}) must equal sales total (Rs. ${dispenserTotal.toFixed(2)}).`,
-            variant: "destructive"
-          })
-          return false
+        newReadings[nozzle.id] = {
+          opening: opening || 0,
+          closing: opening || 0,
+          price: nozzle.products?.selling_price || 0
         }
       }
-    }
+      setReadings(newReadings)
 
-    return true
-  }
-
-  const checkHoldsAndPrompt = () => {
-    if (!validatePayments()) return
-
-    // Find all card payments across dispensers that need hold dates
-    const cardPayments = []
-    const dispensersList = Array.from(new Set(nozzles.map(n => n.dispenser_id)))
-
-    for (const dId of dispensersList) {
-      const pbs = dispenserPayments[dId] || {}
-      for (const mId in pbs) {
-        const amt = parseFloat(pbs[mId] || '0')
-        const method = paymentMethods.find(m => m.id === mId)
-        if (amt > 0 && method && method.type !== 'cash') {
-          // Calculate default expected release date based on method hold_days
-          const d = new Date(selectedDate)
-          d.setDate(d.getDate() + method.hold_days)
-          const defaultDate = format(d, 'yyyy-MM-dd')
-
-          cardPayments.push({
-            dispenserId: dId,
-            methodId: mId,
-            methodName: method.name,
-            amount: amt,
-            defaultDate
-          })
-        }
-      }
-    }
-
-    if (cardPayments.length > 0) {
-      // Initialize hold details if not set
-      const initialHolds = { ...holdDetails }
-      let updated = false
-      cardPayments.forEach(cp => {
-        const key = `${cp.dispenserId}_${cp.methodId}`
-        if (!initialHolds[key]) {
-          initialHolds[key] = { expected_release_date: cp.defaultDate }
-          updated = true
-        }
+      // Fetch opening balances
+      const balances = await getOpeningBalances(date)
+      setDailyStatus({
+        openingCash: Number(balances.opening_cash),
+        openingBank: Number(balances.opening_bank)
       })
-      if (updated) setHoldDetails(initialHolds)
-      setHoldDialogOpen(true)
-    } else {
-      saveAllSales()
+
+    } catch (err) {
+      console.error("Error fetching opening data", err)
     }
   }
 
-  const saveAllSales = async () => {
-    setHoldDialogOpen(false)
+  // --- Handlers ---
+  const handleReadingChange = (id: string, val: string) => {
+    const num = parseFloat(val) || 0
+    setReadings(prev => ({
+      ...prev,
+      [id]: { ...prev[id], closing: num }
+    }))
+  }
+
+  const addExpenseRow = () => setExpenses([...expenses, { description: "", amount: 0 }])
+  const removeExpenseRow = (idx: number) => setExpenses(expenses.filter((_, i) => i !== idx))
+  const updateExpense = (idx: number, field: string, val: any) => {
+    const newExpenses = [...expenses]
+    newExpenses[idx] = { ...newExpenses[idx], [field]: val }
+    setExpenses(newExpenses)
+  }
+
+  const addLubeSale = (product: any) => {
+    setLubeSales([...lubeSales, {
+      product_id: product.id,
+      name: product.name,
+      is_loose: product.lubricant_type === 'loose',
+      quantity: 1,
+      rate: product.selling_price,
+      total_amount: product.selling_price
+    }])
+  }
+
+  const updateLubeSale = (idx: number, qty: number) => {
+    const newSales = [...lubeSales]
+    const sale = newSales[idx]
+    sale.quantity = qty
+    sale.total_amount = qty * sale.rate
+    setLubeSales(newSales)
+  }
+
+  const removeLubeSale = (idx: number) => setLubeSales(lubeSales.filter((_, i) => i !== idx))
+
+  // --- Calculations ---
+  const fuelTotalAmount = Object.values(readings).reduce((sum, r) => sum + (r.closing - r.opening) * r.price, 0)
+  const lubeTotalAmount = lubeSales.reduce((sum, s) => sum + s.total_amount, 0)
+  const grossSale = fuelTotalAmount + lubeTotalAmount
+  const totalExpenses = expenses.reduce((sum, e) => sum + (e.amount || 0), 0)
+  const netCashSale = grossSale - cardPayments.shell - cardPayments.bank - totalExpenses
+  const closingCash = dailyStatus.openingCash + netCashSale
+
+  // Final Save
+  const handleFinish = async () => {
     setSaving(true)
     try {
-      const { data: session } = await supabase.auth.getSession()
-      const userId = session?.session?.user?.id
+      // 1. Save Nozzle Readings / Sales
+      const cashMethod = paymentMethods.find(m => m.type === 'cash')?.id
+      const shellMethod = paymentMethods.find(m => m.name.toLowerCase().includes('shell'))?.id
+      const bankMethod = paymentMethods.find(m => m.type === 'bank_card')?.id
 
-      const salesEntries = []
-
-      for (const dId of Array.from(new Set(nozzles.map(n => n.dispenser_id)))) {
-        const dNozzles = nozzles.filter(n => n.dispenser_id === dId && n.liters_sold > 0)
-        let availablePayments = Object.entries(dispenserPayments[dId] || {})
-          .map(([mId, amt]) => ({ mId, amount: parseFloat(amt || '0') }))
-          .filter(p => p.amount > 0)
-
-        for (const n of dNozzles) {
-          let nAmountRemaining = n.amount
-          // We just take the dominant payment method for this nozzle as a workaround 
-          const methodToUse = availablePayments.length > 0 ? availablePayments[0].mId : paymentMethods[0].id
-          const methodType = paymentMethods.find(m => m.id === methodToUse)?.type
-          let rDate = null
-
-          if (methodType !== 'cash') {
-            const key = `${dId}_${methodToUse}`
-            rDate = holdDetails[key]?.expected_release_date || null
-          }
-
-          salesEntries.push({
-            p_sale_date: selectedDate,
-            p_nozzle_id: n.id,
-            p_closing_reading: parseFloat(n.closing_reading),
-            p_payment_method_id: methodToUse,
-            p_expected_release_date: rDate,
-            p_user_id: userId || '00000000-0000-0000-0000-000000000000'
+      for (const nozzleId in readings) {
+        const item = readings[nozzleId]
+        if (item.closing > item.opening) {
+          // In a real app, you might want to split by payment type if recorded per nozzle
+          // Here we assume cash for nozzle if not specified, then deduct card payments at summary
+          await supabase.rpc('save_daily_sale_v2', {
+            p_sale_date: date,
+            p_nozzle_id: nozzleId,
+            p_closing_reading: item.closing,
+            p_payment_method_id: cashMethod,
+            p_expected_release_date: null,
+            p_user_id: user
           })
-
-          // reduce available for next
-          if (availablePayments.length > 0) {
-            availablePayments[0].amount -= nAmountRemaining
-            if (availablePayments[0].amount <= 0) availablePayments.shift()
-          }
         }
       }
 
-      for (const entry of salesEntries) {
-        const { error } = await supabase.rpc('save_daily_sale', entry)
-        if (error) throw error
+      // 2. Save Lubricant Sales
+      for (const sale of lubeSales) {
+        await saveLubricantSale({
+          sale_date: date,
+          product_id: sale.product_id,
+          is_loose: sale.is_loose,
+          quantity: sale.quantity,
+          rate: sale.rate,
+          total_amount: sale.total_amount
+        })
       }
 
-      toast({ title: "Success", description: "Daily sales saved successfully." })
-      router.push('/dashboard/sales')
+      // 3. Save Expenses
+      for (const exp of expenses) {
+        if (exp.description && exp.amount > 0) {
+          await saveDailyExpense({
+            expense_date: date,
+            description: exp.description,
+            amount: exp.amount
+          })
+        }
+      }
+
+      // 4. Finalize Daily Status (Carry Forward)
+      await finalizeDailySummary(date)
+
+      toast({ title: "Success", description: "Daily records saved and finalized!" })
+      router.push("/dashboard/sales")
 
     } catch (err: any) {
-      console.error(err)
-      toast({ title: "Error saving sales", description: err.message || "Failed to save records.", variant: "destructive" })
+      toast({ title: "Save Failed", description: err.message, variant: "destructive" })
     } finally {
       setSaving(false)
     }
   }
 
-  // --- Render Helpers ---
-  const dispensersList = Array.from(new Set(nozzles.map(n => n.dispenser_id)))
-    .map(dId => nozzles.find(n => n.dispenser_id === dId)?.dispensers)
-    .filter(Boolean) as Dispenser[]
-
-  const grandTotalLiters = nozzles.reduce((s, n) => s + n.liters_sold, 0)
-  const grandTotalAmount = nozzles.reduce((s, n) => s + n.amount, 0)
-
-  let grandTotalCash = 0
-  let grandTotalCards = 0
-
-  dispensersList.forEach(d => {
-    const pbs = dispenserPayments[d.id] || {}
-    paymentMethods.forEach(m => {
-      const amt = parseFloat(pbs[m.id] || '0')
-      if (m.type === 'cash') grandTotalCash += amt
-      else grandTotalCards += amt
-    })
-  })
-
-  const getNozzlesForDispenser = (dId: string) => nozzles.filter(n => n.dispenser_id === dId)
-
-  if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh]">
-        <BrandLoader size="lg" className="mb-4" />
-        <p className="text-muted-foreground font-medium animate-pulse">Loading daily openings...</p>
-      </div>
-    )
-  }
+  if (loading) return <div className="h-screen flex items-center justify-center"><BrandLoader /></div>
 
   return (
-    <div className="flex flex-col gap-6 max-w-5xl mx-auto pb-10">
+    <div className="max-w-5xl mx-auto pb-20">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <Link href="/dashboard/sales" legacyBehavior>
-              <Button variant="ghost" size="icon" className="h-8 w-8">
-                <ArrowLeft className="h-4 w-4" />
-              </Button>
-            </Link>
-            <h1 className="text-3xl font-bold tracking-tight">Daily Sale Entry</h1>
-          </div>
-          <p className="text-muted-foreground ml-10">Enter closing readings and payment breakdown per dispenser.</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="relative">
-            <CalendarIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="pl-10 w-[180px] font-bold"
-            />
-          </div>
-        </div>
-      </div>
-
-      <div className="grid gap-6">
-        {dispensersList.map((dispenser) => {
-          const dNozzles = getNozzlesForDispenser(dispenser.id)
-          const dSalesTotal = dNozzles.reduce((sum, n) => sum + n.amount, 0)
-
-          return (
-            <Card key={dispenser.id} className="overflow-hidden border-primary/10 shadow-sm">
-              <div className="bg-primary/5 px-6 py-3 border-b flex justify-between items-center">
-                <h3 className="font-bold text-lg flex items-center gap-2">
-                  <Droplet className="h-4 w-4 text-primary" />
-                  {dispenser.name}
-                </h3>
-              </div>
-              <CardContent className="p-0">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-muted/30 border-b">
-                      <tr>
-                        <th className="py-3 px-4 text-left font-medium text-muted-foreground">Nozzle</th>
-                        <th className="py-3 px-4 text-right font-medium text-muted-foreground w-32">Opening</th>
-                        <th className="py-3 px-4 text-right font-medium text-primary w-40">Closing</th>
-                        <th className="py-3 px-4 text-right font-medium text-muted-foreground w-32">Liters Sold</th>
-                        <th className="py-3 px-4 text-right font-medium text-muted-foreground w-32">Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y">
-                      {dNozzles.map((nozzle) => (
-                        <tr key={nozzle.id} className="hover:bg-muted/10 transition-colors">
-                          <td className="py-3 px-4">
-                            <div className="font-medium text-base">Nozzle {nozzle.nozzle_number}</div>
-                            <div className="text-xs text-muted-foreground">{nozzle.products?.name} @ Rs. {nozzle.products?.selling_price}</div>
-                          </td>
-                          <td className="py-3 px-4 text-right font-mono text-muted-foreground">
-                            {nozzle.opening_reading.toFixed(2)}
-                            <div className="text-[10px] uppercase tracking-wider">(Auto)</div>
-                          </td>
-                          <td className="py-3 px-4 text-right">
-                            <Input
-                              type="number"
-                              className="w-full text-right font-mono border-primary/20 focus-visible:ring-primary shadow-inner"
-                              value={nozzle.closing_reading}
-                              onChange={(e) => handleClosingChange(nozzle.id, e.target.value)}
-                              placeholder="0.00"
-                            />
-                          </td>
-                          <td className="py-3 px-4 text-right font-bold">
-                            {nozzle.liters_sold > 0 ? nozzle.liters_sold.toFixed(2) : "-"} L
-                          </td>
-                          <td className="py-3 px-4 text-right font-bold text-primary">
-                            {nozzle.amount > 0 ? `PKR ${nozzle.amount.toLocaleString()}` : "-"}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                {dSalesTotal > 0 && (
-                  <div className="bg-slate-50/50 p-6 border-t mt-4">
-                    <h4 className="font-bold text-sm uppercase tracking-wider text-muted-foreground mb-4">
-                      PAYMENT BREAKDOWN - {dispenser.name}
-                    </h4>
-                    <div className="grid gap-4 md:grid-cols-4 items-end">
-                      {paymentMethods.map(method => (
-                        <div key={method.id} className="space-y-2">
-                          <Label className="text-xs">{method.name}</Label>
-                          <div className="relative">
-                            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground font-medium text-xs">PKR</div>
-                            <Input
-                              type="number"
-                              className="pl-9 font-mono"
-                              value={dispenserPayments[dispenser.id]?.[method.id] || ""}
-                              onChange={(e) => handleDispenserPaymentChange(dispenser.id, method.id, e.target.value)}
-                              placeholder="0"
-                            />
-                          </div>
-                        </div>
-                      ))}
-
-                      <div className="flex items-center h-10 px-4 rounded-md border bg-white shadow-sm gap-2">
-                        <span className="text-sm font-medium text-muted-foreground w-12">Total:</span>
-                        <span className={`text-lg font-bold flex-1 text-right ${Math.abs(dSalesTotal - paymentMethods.reduce((sum, m) => sum + parseFloat(dispenserPayments[dispenser.id]?.[m.id] || '0'), 0)) > 0.01
-                          ? 'text-destructive'
-                          : 'text-green-600'
-                          }`}>
-                          PKR {dSalesTotal.toLocaleString()}
-                        </span>
-                        {Math.abs(dSalesTotal - paymentMethods.reduce((sum, m) => sum + parseFloat(dispenserPayments[dispenser.id]?.[m.id] || '0'), 0)) < 0.01 && (
-                          <CheckCircle className="h-4 w-4 text-green-500" />
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          )
-        })}
-      </div>
-
-      {/* Daily Summary & Save */}
-      <Card className="mt-4 bg-primary/5 border-primary/20">
-        <CardContent className="p-6 flex flex-col md:flex-row justify-between items-center gap-6">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
-            <div>
-              <p className="text-xs uppercase tracking-wider text-muted-foreground font-medium mb-1">Total Liters</p>
-              <p className="text-2xl font-black">{grandTotalLiters.toFixed(2)} L</p>
-            </div>
-            <div>
-              <p className="text-xs uppercase tracking-wider text-muted-foreground font-medium mb-1">Total Sale</p>
-              <p className="text-2xl font-black text-primary">PKR {grandTotalAmount.toLocaleString()}</p>
-            </div>
-            <div>
-              <p className="text-xs uppercase tracking-wider text-muted-foreground font-medium mb-1">Cash</p>
-              <p className="text-2xl font-black text-green-600">PKR {grandTotalCash.toLocaleString()}</p>
-            </div>
-            <div>
-              <p className="text-xs uppercase tracking-wider text-muted-foreground font-medium mb-1">Cards (On Hold)</p>
-              <p className="text-2xl font-black text-orange-500 flex items-center gap-2">
-                PKR {grandTotalCards.toLocaleString()}
-                {grandTotalCards > 0 && <span className="h-2 w-2 rounded-full bg-orange-500 animate-pulse" />}
-              </p>
-            </div>
-          </div>
-
-          <Button
-            size="lg"
-            className="w-full md:w-auto font-bold tracking-wide shadow-lg"
-            onClick={checkHoldsAndPrompt}
-            disabled={saving || grandTotalAmount === 0}
-          >
-            {saving ? <BrandLoader size="xs" className="mr-2" /> : <Save className="mr-2 h-5 w-5" />}
-            Save All Sales
+      <div className="flex items-center justify-between mb-8 border-b pb-4">
+        <div className="flex items-center gap-4">
+          <Button variant="ghost" size="icon" onClick={() => router.back()}>
+            <ArrowLeft className="h-4 w-4" />
           </Button>
-        </CardContent>
-      </Card>
+          <div>
+            <h1 className="text-2xl font-black tracking-tight">Daily <span className="text-primary">Workflow</span></h1>
+            <p className="text-muted-foreground text-sm">Follow steps to record today's sales and accounts.</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 bg-muted/30 p-2 rounded-lg border">
+          <Label className="text-[10px] uppercase font-bold text-muted-foreground ml-2">Record Date</Label>
+          <Input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            className="w-[160px] h-8 text-sm font-bold border-0 bg-transparent"
+          />
+        </div>
+      </div>
 
-      {/* Card Hold Prompt Dialog */}
-      <Dialog open={holdDialogOpen} onOpenChange={setHoldDialogOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-orange-600">
-              <span className="h-2 w-2 rounded-full bg-orange-500" />
-              Card Payment Hold
-            </DialogTitle>
-            <DialogDescription>
-              Please confirm the expected release dates for the card amounts.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="py-4 space-y-4">
-            {Object.keys(holdDetails).map(key => {
-              const [dId, mId] = key.split('_')
-              const method = paymentMethods.find(m => m.id === mId)
-              const dispenser = dispensersList.find(d => d?.id === dId)
-              const amount = parseFloat(dispenserPayments[dId]?.[mId] || '0')
+      {/* Stepper Header */}
+      <div className="flex justify-between mb-8 px-4">
+        {[1, 2, 3, 4, 5].map((s) => (
+          <div key={s} className="flex flex-col items-center gap-2 relative z-10">
+            <div className={cn(
+              "h-10 w-10 rounded-full flex items-center justify-center font-bold transition-all",
+              step === s ? "bg-primary text-white scale-110 shadow-lg" :
+                step > s ? "bg-green-100 text-green-600" : "bg-muted text-muted-foreground"
+            )}>
+              {step > s ? <CheckCircle2 className="h-6 w-6" /> : s}
+            </div>
+            <span className={cn("text-[10px] font-bold uppercase tracking-widest", step === s ? "text-primary" : "text-muted-foreground")}>
+              {s === 1 && "Nozzles"}
+              {s === 2 && "Lubricants"}
+              {s === 3 && "Cards"}
+              {s === 4 && "Expenses"}
+              {s === 5 && "Summary"}
+            </span>
+          </div>
+        ))}
+        {/* Progress Line */}
+        <div className="absolute left-0 top-[148px] w-full h-[2px] bg-muted -z-0" />
+      </div>
 
-              if (amount <= 0 || !method) return null
+      <div className="min-h-[400px]">
+        {/* STEP 1: NOZZLE READINGS */}
+        {step === 1 && (
+          <Card className="animate-in fade-in slide-in-from-right-4">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Droplet className="h-5 w-5 text-blue-500" /> Step 1: Nozzle Meter Readings
+              </CardTitle>
+              <CardDescription>Enter the closing meter reading for each nozzle. Opening is auto-filled.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Dispenser / Nozzle</TableHead>
+                    <TableHead>Product</TableHead>
+                    <TableHead className="text-right">Opening</TableHead>
+                    <TableHead className="text-right">Closing</TableHead>
+                    <TableHead className="text-right">Sales (L)</TableHead>
+                    <TableHead className="text-right">Amount (PKR)</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {nozzles.map(n => {
+                    const r = readings[n.id] || { opening: 0, closing: 0, price: 0 }
+                    const liters = Math.max(0, r.closing - r.opening)
+                    const amount = liters * r.price
 
-              return (
-                <div key={key} className="space-y-2 p-3 bg-muted/50 rounded-lg border">
-                  <div className="flex justify-between items-center mb-2">
-                    <span className="font-bold">{method.name} ({dispenser?.name})</span>
-                    <span className="font-mono text-primary font-bold">PKR {amount.toLocaleString()}</span>
+                    return (
+                      <TableRow key={n.id}>
+                        <TableCell>
+                          <div className="font-bold">{n.dispensers?.name}</div>
+                          <div className="text-[10px] text-muted-foreground uppercase">Nozzle {n.nozzle_number}</div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline">{n.products?.name}</Badge>
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-muted-foreground">
+                          {r.opening.toFixed(2)}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Input
+                            type="number"
+                            step="0.01"
+                            value={r.closing || ""}
+                            onChange={(e) => handleReadingChange(n.id, e.target.value)}
+                            className="w-32 text-right ml-auto font-bold"
+                          />
+                        </TableCell>
+                        <TableCell className="text-right font-bold text-blue-600">
+                          {liters.toFixed(2)}
+                        </TableCell>
+                        <TableCell className="text-right font-black">
+                          {amount.toLocaleString()}
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            </CardContent>
+            <CardFooter className="flex justify-between bg-muted/20">
+              <div className="font-bold">Total Fuel Sale: <span className="text-primary text-xl ml-2">PKR {fuelTotalAmount.toLocaleString()}</span></div>
+              <Button onClick={() => setStep(2)}>Next Step <ArrowRight className="ml-2 h-4 w-4" /></Button>
+            </CardFooter>
+          </Card>
+        )}
+
+        {/* STEP 2: LUBRICANT SALES */}
+        {step === 2 && (
+          <Card className="animate-in fade-in slide-in-from-right-4">
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <Droplet className="h-5 w-5 text-orange-500" /> Step 2: Lubricant Sales
+                </CardTitle>
+                <CardDescription>Select lubricant and enter quantity sold.</CardDescription>
+              </div>
+              <div className="flex items-center gap-2">
+                <select
+                  className="h-9 px-3 rounded-md border bg-background text-sm"
+                  onChange={(e) => {
+                    const p = lubricants.find(l => l.id === e.target.value)
+                    if (p) addLubeSale(p)
+                  }}
+                  defaultValue=""
+                >
+                  <option value="" disabled>Add Lubricant...</option>
+                  {lubricants.map(l => (
+                    <option key={l.id} value={l.id}>{l.name} - {l.unit}</option>
+                  ))}
+                </select>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Product</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead className="text-right">Rate</TableHead>
+                    <TableHead className="text-right">Qty (L/Unit)</TableHead>
+                    <TableHead className="text-right">Total</TableHead>
+                    <TableHead></TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {lubeSales.length === 0 ? (
+                    <TableRow><TableCell colSpan={6} className="text-center py-10 text-muted-foreground italic">No lubricants added yet.</TableCell></TableRow>
+                  ) : lubeSales.map((s, idx) => (
+                    <TableRow key={idx}>
+                      <TableCell className="font-bold">{s.name}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className={s.is_loose ? "text-blue-600" : "text-purple-600"}>
+                          {s.is_loose ? "Loose" : "Packed"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right font-mono">{s.rate.toLocaleString()}</TableCell>
+                      <TableCell className="text-right">
+                        <Input
+                          type="number"
+                          value={s.quantity}
+                          onChange={(e) => updateLubeSale(idx, parseFloat(e.target.value) || 0)}
+                          className="w-24 text-right ml-auto"
+                        />
+                      </TableCell>
+                      <TableCell className="text-right font-bold">{s.total_amount.toLocaleString()}</TableCell>
+                      <TableCell>
+                        <Button variant="ghost" size="icon" onClick={() => removeLubeSale(idx)}>
+                          <Trash2 className="h-4 w-4 text-red-500" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+            <CardFooter className="flex justify-between bg-muted/20">
+              <Button variant="outline" onClick={() => setStep(1)}><ArrowLeft className="mr-2 h-4 w-4" /> Back</Button>
+              <div className="font-bold">Lube Total: <span className="text-orange-600 text-xl ml-2">PKR {lubeTotalAmount.toLocaleString()}</span></div>
+              <Button onClick={() => setStep(3)}>Next Step <ArrowRight className="ml-2 h-4 w-4" /></Button>
+            </CardFooter>
+          </Card>
+        )}
+
+        {/* STEP 3: CARD PAYMENTS */}
+        {step === 3 && (
+          <Card className="animate-in fade-in slide-in-from-right-4 max-w-2xl mx-auto">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <CreditCard className="h-5 w-5 text-indigo-500" /> Step 3: Card Payments
+              </CardTitle>
+              <CardDescription>Enter total amount received via Shell Card and Bank Cards today.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="space-y-2">
+                <Label className="text-lg font-bold">Shell Card Total</Label>
+                <div className="relative">
+                  <Input
+                    type="number"
+                    className="text-2xl h-14 pl-12 font-black text-primary"
+                    value={cardPayments.shell || ""}
+                    onChange={(e) => setCardPayments({ ...cardPayments, shell: parseFloat(e.target.value) || 0 })}
+                  />
+                  <div className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground font-bold">PKR</div>
+                </div>
+                <p className="text-xs text-muted-foreground">This amount will be held in Shell Account balance.</p>
+              </div>
+
+              <Separator />
+
+              <div className="space-y-2">
+                <Label className="text-lg font-bold">Bank Card Total</Label>
+                <div className="relative">
+                  <Input
+                    type="number"
+                    className="text-2xl h-14 pl-12 font-black text-blue-700"
+                    value={cardPayments.bank || ""}
+                    onChange={(e) => setCardPayments({ ...cardPayments, bank: parseFloat(e.target.value) || 0 })}
+                  />
+                  <div className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground font-bold">PKR</div>
+                </div>
+                <p className="text-xs text-muted-foreground">This amount will be added to bank balance once released.</p>
+              </div>
+            </CardContent>
+            <CardFooter className="flex justify-between">
+              <Button variant="outline" onClick={() => setStep(2)}><ArrowLeft className="mr-2 h-4 w-4" /> Back</Button>
+              <Button onClick={() => setStep(4)}>Next Step <ArrowRight className="ml-2 h-4 w-4" /></Button>
+            </CardFooter>
+          </Card>
+        )}
+
+        {/* STEP 4: EXPENSES */}
+        {step === 4 && (
+          <Card className="animate-in fade-in slide-in-from-right-4">
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <Receipt className="h-5 w-5 text-red-500" /> Step 4: Daily Expenses
+                </CardTitle>
+                <CardDescription>Record any cash expenses paid today.</CardDescription>
+              </div>
+              <Button onClick={addExpenseRow} variant="outline" size="sm">
+                <Plus className="h-4 w-4 mr-2" /> Add Expense
+              </Button>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {expenses.map((exp, idx) => (
+                  <div key={idx} className="flex gap-4 items-end">
+                    <div className="flex-1 space-y-2">
+                      <Label>Description</Label>
+                      <Input
+                        placeholder="e.g. Electricity Bill, Staff Meal"
+                        value={exp.description}
+                        onChange={(e) => updateExpense(idx, 'description', e.target.value)}
+                      />
+                    </div>
+                    <div className="w-[200px] space-y-2">
+                      <Label>Amount (PKR)</Label>
+                      <Input
+                        type="number"
+                        value={exp.amount || ""}
+                        onChange={(e) => updateExpense(idx, 'amount', parseFloat(e.target.value) || 0)}
+                      />
+                    </div>
+                    <Button variant="ghost" size="icon" className="mb-0.5" onClick={() => removeExpenseRow(idx)}>
+                      <Trash2 className="h-4 w-4 text-red-500" />
+                    </Button>
                   </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs">Expected Release Date</Label>
-                    <Input
-                      type="date"
-                      value={holdDetails[key].expected_release_date}
-                      onChange={(e) => setHoldDetails(prev => ({
-                        ...prev, [key]: { expected_release_date: e.target.value }
-                      }))}
-                    />
-                    <p className="text-[10px] text-muted-foreground">
-                      {method.type === 'bank_card'
-                        ? "(Bank will credit your account on this date)"
-                        : "(Company will credit account on this date)"}
-                    </p>
+                ))}
+              </div>
+            </CardContent>
+            <CardFooter className="flex justify-between bg-muted/20">
+              <Button variant="outline" onClick={() => setStep(3)}><ArrowLeft className="mr-2 h-4 w-4" /> Back</Button>
+              <div className="font-bold">Total Expenses: <span className="text-red-600 text-xl ml-2">PKR {totalExpenses.toLocaleString()}</span></div>
+              <Button onClick={() => setStep(5)}>Next Step <ArrowRight className="ml-2 h-4 w-4" /></Button>
+            </CardFooter>
+          </Card>
+        )}
+
+        {/* STEP 5: SUMMARY & FINALIZE */}
+        {step === 5 && (
+          <Card className="animate-in fade-in zoom-in-95 duration-300">
+            <CardHeader className="text-center bg-slate-900 text-white rounded-t-xl py-8">
+              <CardTitle className="text-3xl font-black tracking-tighter uppercase italic">Daily Cash Flow Summary</CardTitle>
+              <CardDescription className="text-slate-400">Review all figures carefully before finalizing the day.</CardDescription>
+            </CardHeader>
+            <CardContent className="pt-8">
+              <div className="grid md:grid-cols-2 gap-8">
+                {/* Sales Breakdown */}
+                <div className="space-y-4">
+                  <h4 className="font-black text-xs uppercase tracking-[0.2em] text-muted-foreground mb-4">Sales & Revenue</h4>
+                  <div className="flex justify-between items-center py-2 border-b">
+                    <span>Total Fuel Sale</span>
+                    <span className="font-bold">PKR {fuelTotalAmount.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between items-center py-2 border-b text-orange-600">
+                    <span>Total Lubricant Sale</span>
+                    <span className="font-bold">+ {lubeTotalAmount.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between items-center py-3 border-b-2 border-slate-900 font-black text-lg">
+                    <span>GROSS SALES</span>
+                    <span>PKR {grossSale.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between items-center py-2 border-b text-indigo-600">
+                    <span>Shell Card Payments</span>
+                    <span className="font-bold">- {cardPayments.shell.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between items-center py-2 border-b text-blue-600">
+                    <span>Bank Card Payments</span>
+                    <span className="font-bold">- {cardPayments.bank.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between items-center py-2 border-b text-red-600">
+                    <span>Total Expenses</span>
+                    <span className="font-bold">- {totalExpenses.toLocaleString()}</span>
                   </div>
                 </div>
-              )
-            })}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setHoldDialogOpen(false)}>Cancel</Button>
-            <Button onClick={saveAllSales} disabled={saving}>
-              {saving ? <BrandLoader size="xs" /> : "Confirm & Save"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+
+                {/* Cash Reconciliation */}
+                <div className="space-y-4 bg-muted/20 p-6 rounded-xl border-dashed border-2">
+                  <h4 className="font-black text-xs uppercase tracking-[0.2em] text-muted-foreground mb-4">Cash Reconciliation</h4>
+                  <div className="flex justify-between items-center py-2 border-b">
+                    <span>Net Cash Sale (Today)</span>
+                    <span className="font-bold text-green-700">PKR {netCashSale.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between items-center py-2 border-b">
+                    <span>Opening Cash (From Yesterday)</span>
+                    <span className="font-bold">PKR {dailyStatus.openingCash.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between items-center pt-8 font-black text-2xl text-slate-900">
+                    <div className="flex flex-col">
+                      <span>CLOSING CASH</span>
+                      <span className="text-[10px] text-muted-foreground uppercase tracking-widest font-bold">Tomorrow's Opening</span>
+                    </div>
+                    <span>PKR {closingCash.toLocaleString()}</span>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+            <CardFooter className="flex justify-between bg-slate-100 py-6 rounded-b-xl border-t mt-4">
+              <Button variant="outline" onClick={() => setStep(4)} disabled={saving}><ArrowLeft className="mr-2 h-4 w-4" /> Edit Details</Button>
+              <Button
+                size="lg"
+                className="bg-slate-900 hover:bg-slate-800 text-white px-8 h-14 text-xl font-black rounded-xl shadow-xl hover:scale-105 transition-all"
+                onClick={handleFinish}
+                disabled={saving}
+              >
+                {saving ? <BrandLoader size="sm" /> : <><Save className="mr-3 h-6 w-6" /> FINALIZE DAY</>}
+              </Button>
+            </CardFooter>
+          </Card>
+        )}
+      </div>
     </div>
   )
 }

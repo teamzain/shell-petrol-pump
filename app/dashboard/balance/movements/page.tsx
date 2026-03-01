@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import {
     Table,
@@ -28,10 +29,7 @@ import {
     Filter,
     Wallet,
     ArrowLeft,
-    Eye,
-    TrendingUp,
-    TrendingDown,
-    ArrowRightLeft
+    Eye
 } from "lucide-react"
 import { getBalanceMovement, getBalanceMovementSummary } from "@/app/actions/balance-movement"
 import { BrandLoader } from "@/components/ui/brand-loader"
@@ -40,13 +38,15 @@ import { Badge } from "@/components/ui/badge"
 import Link from "next/link"
 
 export default function BalanceMovementsPage() {
+    const router = useRouter()
     const [loading, setLoading] = useState(true)
     const [transactions, setTransactions] = useState<any[]>([])
     const [summary, setSummary] = useState<any>({
         totalCredits: 0,
         totalDebits: 0,
         netMovement: 0,
-        currentBalance: 0
+        currentBalance: 0,
+        totalHolds: 0
     })
     const [searchQuery, setSearchQuery] = useState("")
     const [typeFilter, setTypeFilter] = useState("all")
@@ -84,7 +84,17 @@ export default function BalanceMovementsPage() {
     }, [typeFilter])
 
     const formatCurrency = (val: number) => {
+        if (val === undefined || val === null) return "Rs. 0.00"
         return `Rs. ${Number(val).toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    }
+
+    if (loading) {
+        return (
+            <div className="flex flex-col items-center justify-center min-h-[60vh]">
+                <BrandLoader size="lg" className="mb-4" />
+                <p className="text-muted-foreground animate-pulse font-black uppercase tracking-widest text-[10px]">Loading Transaction Ledger...</p>
+            </div>
+        )
     }
 
     return (
@@ -105,7 +115,7 @@ export default function BalanceMovementsPage() {
             </div>
 
             {/* Summary Cards */}
-            <div className="grid gap-4 md:grid-cols-4">
+            <div className="grid gap-4 md:grid-cols-5">
                 <Card className="bg-slate-900 text-white border-0 shadow-xl overflow-hidden relative">
                     <div className="absolute top-0 right-0 p-4 opacity-10">
                         <Wallet size={80} />
@@ -114,8 +124,19 @@ export default function BalanceMovementsPage() {
                         <CardTitle className="text-[10px] font-black uppercase tracking-widest text-slate-400">Net Exposure</CardTitle>
                     </CardHeader>
                     <CardContent>
-                        <div className="text-3xl font-black">{formatCurrency(summary.currentBalance)}</div>
+                        <div className="text-2xl font-black">{formatCurrency(summary.currentBalance)}</div>
                         <p className="text-[10px] text-slate-400 uppercase font-bold mt-1">Total combined balance</p>
+                    </CardContent>
+                </Card>
+
+                <Card className="border-l-4 border-l-amber-500">
+                    <CardHeader className="pb-2 flex flex-row items-center justify-between space-y-0">
+                        <CardTitle className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Total On Hold</CardTitle>
+                        <Wallet className="h-4 w-4 text-amber-500" />
+                    </CardHeader>
+                    <CardContent>
+                        <div className="text-xl font-black text-amber-600">{formatCurrency(summary.totalHolds || 0)}</div>
+                        <p className="text-[10px] text-muted-foreground uppercase font-bold mt-1">Pending Missing Deliveries</p>
                     </CardContent>
                 </Card>
 
@@ -125,7 +146,7 @@ export default function BalanceMovementsPage() {
                         <ArrowDownLeft className="h-4 w-4 text-green-600" />
                     </CardHeader>
                     <CardContent>
-                        <div className="text-2xl font-black text-green-600">{formatCurrency(summary.totalCredits)}</div>
+                        <div className="text-xl font-black text-green-600">{formatCurrency(summary.totalCredits)}</div>
                         <p className="text-[10px] text-muted-foreground uppercase font-bold mt-1">Total Credits (Sales/Income)</p>
                     </CardContent>
                 </Card>
@@ -136,7 +157,7 @@ export default function BalanceMovementsPage() {
                         <ArrowUpRight className="h-4 w-4 text-red-600" />
                     </CardHeader>
                     <CardContent>
-                        <div className="text-2xl font-black text-red-600">{formatCurrency(summary.totalDebits)}</div>
+                        <div className="text-xl font-black text-red-600">{formatCurrency(summary.totalDebits)}</div>
                         <p className="text-[10px] text-muted-foreground uppercase font-bold mt-1">Total Debits (Purchases/Exp)</p>
                     </CardContent>
                 </Card>
@@ -147,7 +168,7 @@ export default function BalanceMovementsPage() {
                         <Scale className="h-4 w-4 text-primary" />
                     </CardHeader>
                     <CardContent>
-                        <div className="text-2xl font-black text-primary">
+                        <div className="text-xl font-black text-primary">
                             {summary.netMovement > 0 ? "+" : ""}
                             {formatCurrency(summary.netMovement)}
                         </div>
@@ -197,70 +218,100 @@ export default function BalanceMovementsPage() {
                                 <TableRow className="bg-slate-50">
                                     <TableHead className="font-black uppercase text-[10px]">Date</TableHead>
                                     <TableHead className="font-black uppercase text-[10px]">Reference</TableHead>
-                                    <TableHead className="font-black uppercase text-[10px]">Supplier/Entity</TableHead>
-                                    <TableHead className="font-black uppercase text-[10px]">Notes</TableHead>
-                                    <TableHead className="font-black uppercase text-[10px] text-right">Inflow (+)</TableHead>
-                                    <TableHead className="font-black uppercase text-[10px] text-right">Outflow (-)</TableHead>
-                                    <TableHead className="font-black uppercase text-[10px] text-center">Status</TableHead>
+                                    <TableHead className="font-black uppercase text-[10px]">Entity</TableHead>
+                                    <TableHead className="font-black uppercase text-[10px]">Description</TableHead>
+                                    <TableHead className="font-black uppercase text-[10px] text-right">Balance Before</TableHead>
+                                    <TableHead className="font-black uppercase text-[10px] text-right">Amount</TableHead>
+                                    <TableHead className="font-black uppercase text-[10px] text-right">Balance After</TableHead>
+                                    <TableHead className="font-black uppercase text-[10px] text-center">Type</TableHead>
+                                    <TableHead className="font-black uppercase text-[10px] text-center">Action</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {loading ? (
+                                {transactions.length === 0 ? (
                                     <TableRow>
-                                        <TableCell colSpan={7} className="h-64 text-center">
-                                            <BrandLoader size="sm" />
-                                        </TableCell>
-                                    </TableRow>
-                                ) : transactions.length === 0 ? (
-                                    <TableRow>
-                                        <TableCell colSpan={7} className="h-64 text-center text-muted-foreground italic">
+                                        <TableCell colSpan={9} className="h-64 text-center text-muted-foreground italic">
                                             No transactions found matching your filters.
                                         </TableCell>
                                     </TableRow>
                                 ) : (
-                                    transactions.map((tx) => (
-                                        <TableRow key={tx.id} className="hover:bg-slate-50/50 transition-colors">
-                                            <TableCell className="font-medium text-xs whitespace-nowrap">
-                                                {new Date(tx.created_at).toLocaleDateString('en-PK', {
-                                                    day: '2-digit',
-                                                    month: 'short',
-                                                    year: 'numeric'
-                                                })}
-                                                <span className="block text-[10px] text-muted-foreground">
-                                                    {new Date(tx.created_at).toLocaleTimeString('en-PK', {
-                                                        hour: '2-digit',
-                                                        minute: '2-digit'
+                                    transactions.map((tx) => {
+                                        const isCredit = tx.transaction_type === 'credit';
+                                        const supplierId = tx.company_accounts?.suppliers?.id;
+
+                                        // Generate a detailed description similar to Supplier Ledger
+                                        let displayDescription = tx.note || "General Transaction";
+                                        if (tx.transaction_source === 'purchase_order') {
+                                            displayDescription = `Purchase Order #${tx.reference_number || 'N/A'}`;
+                                        } else if (tx.transaction_source === 'delivery') {
+                                            displayDescription = `Purchase Delivery | Ref# ${tx.reference_number || 'N/A'}`;
+                                        } else if (tx.transaction_source === 'opening_balance') {
+                                            displayDescription = "Opening Balance Initialization";
+                                        }
+
+                                        const handleRowClick = () => {
+                                            router.push(`/dashboard/balance/movements/${tx.id}`);
+                                        };
+
+                                        return (
+                                            <TableRow
+                                                key={tx.id}
+                                                className="hover:bg-slate-50/50 transition-colors cursor-pointer"
+                                                onClick={handleRowClick}
+                                            >
+                                                <TableCell className="font-medium text-xs whitespace-nowrap">
+                                                    {new Date(tx.created_at).toLocaleDateString('en-PK', {
+                                                        day: '2-digit',
+                                                        month: 'short',
+                                                        year: 'numeric'
                                                     })}
-                                                </span>
-                                            </TableCell>
-                                            <TableCell className="font-mono text-[10px] font-bold text-slate-500 uppercase">
-                                                {tx.reference_number || "N/A"}
-                                            </TableCell>
-                                            <TableCell className="font-bold text-xs">
-                                                {tx.company_accounts?.suppliers?.name || "General Account"}
-                                            </TableCell>
-                                            <TableCell className="text-xs max-w-xs truncate">
-                                                {tx.note}
-                                            </TableCell>
-                                            <TableCell className="text-right">
-                                                {tx.transaction_type === 'credit' ? (
-                                                    <span className="font-black text-green-600 text-sm">{formatCurrency(tx.amount)}</span>
-                                                ) : <span className="text-slate-300">-</span>}
-                                            </TableCell>
-                                            <TableCell className="text-right">
-                                                {tx.transaction_type === 'debit' ? (
-                                                    <span className="font-black text-red-600 text-sm">{formatCurrency(tx.amount)}</span>
-                                                ) : <span className="text-slate-300">-</span>}
-                                            </TableCell>
-                                            <TableCell className="text-center">
-                                                {tx.transaction_type === 'credit' ? (
-                                                    <Badge className="bg-green-100 text-green-700 border-green-200 uppercase text-[9px] font-black">Credit</Badge>
-                                                ) : (
-                                                    <Badge className="bg-red-100 text-red-700 border-red-200 uppercase text-[9px] font-black">Debit</Badge>
-                                                )}
-                                            </TableCell>
-                                        </TableRow>
-                                    ))
+                                                    <span className="block text-[10px] text-muted-foreground">
+                                                        {new Date(tx.created_at).toLocaleTimeString('en-PK', {
+                                                            hour: '2-digit',
+                                                            minute: '2-digit'
+                                                        })}
+                                                    </span>
+                                                </TableCell>
+                                                <TableCell className="font-mono text-[10px] font-bold text-slate-500 uppercase flex flex-col gap-1">
+                                                    <span>{tx.reference_number || "N/A"}</span>
+                                                    {tx.transaction_source && (
+                                                        <Badge variant="outline" className="text-[8px] w-fit">
+                                                            {tx.transaction_source.replace("_", " ")}
+                                                        </Badge>
+                                                    )}
+                                                </TableCell>
+                                                <TableCell className="font-bold text-xs">
+                                                    {tx.company_accounts?.suppliers?.name || "General"}
+                                                </TableCell>
+                                                <TableCell className="text-xs max-w-xs truncate font-semibold">
+                                                    {displayDescription}
+                                                </TableCell>
+                                                <TableCell className="text-right text-slate-500 font-medium text-xs">
+                                                    {formatCurrency(tx.balance_before)}
+                                                </TableCell>
+                                                <TableCell className={`text-right font-black text-sm ${isCredit ? 'text-green-600' : 'text-red-600'}`}>
+                                                    {isCredit ? '+' : '-'} {formatCurrency(tx.amount)}
+                                                </TableCell>
+                                                <TableCell className={`text-right font-black text-sm ${Number(tx.balance_after || 0) >= 0 ? 'text-slate-900' : 'text-red-600'}`}>
+                                                    {formatCurrency(tx.balance_after)}
+                                                </TableCell>
+                                                <TableCell className="text-center">
+                                                    {tx.is_hold ? (
+                                                        <Badge className="bg-amber-100 text-amber-700 border-amber-200 uppercase text-[9px] font-black">Hold</Badge>
+                                                    ) : isCredit ? (
+                                                        <Badge className="bg-green-100 text-green-700 border-green-200 uppercase text-[9px] font-black">Inflow</Badge>
+                                                    ) : (
+                                                        <Badge className="bg-red-100 text-red-700 border-red-200 uppercase text-[9px] font-black">Outflow</Badge>
+                                                    )}
+                                                </TableCell>
+                                                <TableCell className="text-center">
+                                                    <Button variant="ghost" size="icon" className="h-6 w-6">
+                                                        <Eye className="h-3 w-3 text-slate-400" />
+                                                    </Button>
+                                                </TableCell>
+                                            </TableRow>
+                                        );
+                                    })
                                 )}
                             </TableBody>
                         </Table>

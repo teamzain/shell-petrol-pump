@@ -100,6 +100,8 @@ export async function createPurchaseOrder(formData: {
                     transaction_type: 'debit',
                     transaction_source: 'purchase_order',
                     amount: estimatedTotal,
+                    balance_before: Number(account.current_balance),
+                    balance_after: Number(account.current_balance) - estimatedTotal,
                     transaction_date: formData.order_date,
                     reference_number: po.po_number,
                     purchase_order_id: po.id,

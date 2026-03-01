@@ -51,6 +51,13 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
         fetchDeliveries()
     }, [dateFilters])
 
+    const formatMultiUnit = (unitsObj: { [key: string]: number }) => {
+        const parts = Object.entries(unitsObj)
+            .filter(([_, qty]) => qty > 0)
+            .map(([unit, qty]) => `${qty.toLocaleString()} ${unit === 'liter' ? 'L' : 'U'}`);
+        return parts.length > 0 ? parts.join(", ") : "-";
+    };
+
     const groupedDeliveries = deliveries.reduce((acc: any, del: any) => {
         const key = `${del.purchase_order_id}-${del.company_invoice_number || 'no-invoice'}`
 
@@ -70,8 +77,8 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
                 debited_value: 0,
                 hold_value: 0,
                 release_value: 0,
-                short_qty: 0,
-                extra_qty: 0,
+                short_units: {} as { [key: string]: number },
+                extra_units: {} as { [key: string]: number },
                 unit_type: del.unit_type || poData?.unit_type
             }
         }
@@ -81,10 +88,12 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
         // Calculate short/extra for this specific delivery item
         const ordered = Number(del.quantity_ordered || 0)
         const received = Number(del.delivered_quantity || 0)
+        const unit = del.unit_type || poData?.unit_type || 'unit'
+
         if (received < ordered) {
-            acc[key].short_qty += (ordered - received)
+            acc[key].short_units[unit] = (acc[key].short_units[unit] || 0) + (ordered - received)
         } else if (received > ordered) {
-            acc[key].extra_qty += (received - ordered)
+            acc[key].extra_units[unit] = (acc[key].extra_units[unit] || 0) + (received - ordered)
         }
 
         // Sum release values from hold records (if any)
@@ -171,11 +180,11 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
                                     <TableCell className="text-[10px] whitespace-nowrap">
                                         {del.receiving_date ? new Date(del.receiving_date).toLocaleDateString('en-PK') : '-'}
                                     </TableCell>
-                                    <TableCell className="text-right font-bold text-xs text-amber-600">
-                                        {del.short_qty > 0 ? `${del.short_qty.toLocaleString()} ${del.unit_type === 'liter' ? 'L' : 'U'}` : '-'}
+                                    <TableCell className="text-right font-bold text-[10px] text-amber-600">
+                                        {formatMultiUnit(del.short_units)}
                                     </TableCell>
-                                    <TableCell className="text-right font-bold text-xs text-emerald-600">
-                                        {del.extra_qty > 0 ? `${del.extra_qty.toLocaleString()} ${del.unit_type === 'liter' ? 'L' : 'U'}` : '-'}
+                                    <TableCell className="text-right font-bold text-[10px] text-emerald-600">
+                                        {formatMultiUnit(del.extra_units)}
                                     </TableCell>
                                     <TableCell className="text-right font-bold text-xs text-slate-500">
                                         Rs. {Number(del.total_order_value || 0).toLocaleString()}

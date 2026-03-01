@@ -1,5 +1,13 @@
+-- Table: profiles (Base user metadata)
+CREATE TABLE IF NOT EXISTS profiles (
+  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  full_name TEXT,
+  role TEXT DEFAULT 'staff',
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
 -- Table: dispensers
-CREATE TABLE dispensers (
+CREATE TABLE IF NOT EXISTS dispensers (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   name TEXT NOT NULL,           -- e.g. "Dispenser 1"
   product_id UUID REFERENCES products(id),
@@ -9,7 +17,7 @@ CREATE TABLE dispensers (
 );
 
 -- Table: nozzles
-CREATE TABLE nozzles (
+CREATE TABLE IF NOT EXISTS nozzles (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   dispenser_id UUID REFERENCES dispensers(id),
   nozzle_number INT NOT NULL,   -- 1, 2, 3, 4
