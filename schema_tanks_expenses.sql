@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS daily_accounts_status (
     total_lube_sale NUMERIC(12, 2) DEFAULT 0,
     total_expenses NUMERIC(12, 2) DEFAULT 0,
     net_cash_sale NUMERIC(12, 2) DEFAULT 0,
+    opening_balances_set BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
 );

@@ -191,25 +191,65 @@ export async function addBankAccount(data: {
     return { success: true, data: account }
 }
 
-export async function updateDailyOpeningBalances(cash: number, bank: number, date?: string) {
+export async function updateDailyOpeningBalances(
+    cash: number,
+    bankAccounts: { id: string, amount: number }[],
+    date?: string
+) {
     const supabase = await createClient()
     const targetDate = date || getTodayPKT()
 
-    const { data, error } = await supabase
+    // 1. Check if already set
+    const { data: existingStatus } = await supabase
+        .from("daily_accounts_status")
+        .select("opening_balances_set")
+        .eq("status_date", targetDate)
+        .single()
+
+    if (existingStatus?.opening_balances_set) {
+        throw new Error("Opening balances have already been set for this day.")
+    }
+
+    // 2. Record transactions for cash
+    if (cash > 0) {
+        await recordBalanceTransaction({
+            transaction_type: 'add_cash',
+            amount: cash,
+            description: "Daily Opening Cash Balance",
+            isOpeningBalance: true,
+            date: targetDate
+        })
+    }
+
+    // 3. Record transactions for each bank account
+    let totalBank = 0
+    for (const entry of bankAccounts) {
+        if (entry.amount > 0) {
+            totalBank += entry.amount
+            await recordBalanceTransaction({
+                transaction_type: 'add_bank',
+                amount: entry.amount,
+                bank_account_id: entry.id,
+                description: "Daily Opening Bank Balance",
+                isOpeningBalance: true,
+                date: targetDate
+            })
+        }
+    }
+
+    // 4. Mark as set in daily status
+    const { error } = await supabase
         .from("daily_accounts_status")
         .upsert({
             status_date: targetDate,
-            opening_cash: cash,
-            opening_bank: bank,
+            opening_balances_set: true,
             updated_at: new Date().toISOString()
         }, { onConflict: 'status_date' })
-        .select()
-        .single()
 
     if (error) throw error
 
     revalidatePath("/dashboard/balance")
-    return { success: true, data }
+    return { success: true }
 }
 
 export async function recordBalanceTransaction(data: {
@@ -228,6 +268,19 @@ export async function recordBalanceTransaction(data: {
     if (!user) throw new Error("Unauthorized")
 
     const targetDate = data.date || getTodayPKT()
+
+    // 0. Check if opening balances are already set if this is an opening adjustment
+    if (data.isOpeningBalance) {
+        const { data: status } = await supabase
+            .from("daily_accounts_status")
+            .select("opening_balances_set")
+            .eq("status_date", targetDate)
+            .single()
+
+        if (status?.opening_balances_set) {
+            throw new Error("Opening balances for this day have already been set and cannot be adjusted as an opening balance.")
+        }
+    }
 
     // 1. Record the transaction
     const insertPayload: any = {
@@ -299,7 +352,6 @@ export async function recordBalanceTransaction(data: {
 
     // 4. Update individual bank account balance if applicable
     if (effectiveBankId && bankAdj !== 0) {
-        // Try RPC first, fallback to direct update
         const { error: bankUpErr } = await supabase.rpc("adjust_bank_balance", {
             p_bank_id: effectiveBankId,
             p_amount: bankAdj
@@ -367,7 +419,6 @@ export async function recordBalanceTransaction(data: {
 
     // 5. Update supplier balance if applicable
     if ((data.transaction_type === 'transfer_to_supplier' || data.transaction_type === 'supplier_to_bank') && effectiveSupplierId) {
-        // Find company account id
         const { data: compAcc } = await supabase
             .from("company_accounts")
             .select("id")
@@ -376,7 +427,6 @@ export async function recordBalanceTransaction(data: {
 
         if (compAcc) {
             const txType = data.transaction_type === 'transfer_to_supplier' ? 'credit' : 'debit'
-            // Use existing supplier action to add credit/debit
             const { addLedgerTransaction } = await import("./suppliers")
             await addLedgerTransaction({
                 company_account_id: compAcc.id,
@@ -401,7 +451,7 @@ export async function closeDayForBalance(cashClosing: number, bankClosing: numbe
     console.log('Closing day for:', targetDate, { cashClosing, bankClosing })
 
     // 1. Manual close sets today's closing balances
-    const { data: updateResult, error } = await supabase
+    const { error } = await supabase
         .from("daily_accounts_status")
         .update({
             closing_cash: cashClosing,
@@ -410,7 +460,6 @@ export async function closeDayForBalance(cashClosing: number, bankClosing: numbe
             updated_at: new Date().toISOString()
         })
         .eq("status_date", targetDate)
-        .select()
 
     if (error) {
         console.error('Close day error:', error)
@@ -431,6 +480,7 @@ export async function closeDayForBalance(cashClosing: number, bankClosing: numbe
             opening_bank: bankClosing,
             closing_bank: bankClosing,
             is_closed: false,
+            opening_balances_set: true, // Mark as set by carry-forward
             updated_at: new Date().toISOString()
         }, { onConflict: 'status_date' })
 
@@ -456,7 +506,6 @@ export async function closeDayForBalance(cashClosing: number, bankClosing: numbe
 
     if (nextOpsErr) {
         console.error('Next day operations error:', nextOpsErr)
-        // We don't necessarily throw here if status was created, but for consistency we should
         throw new Error(`Failed to create next day operations: ${nextOpsErr.message}`)
     }
 
@@ -491,8 +540,6 @@ export async function updateBankAccount(id: string, data: {
 
     const updatePayload: any = { ...data }
     if (data.opening_balance !== undefined) {
-        // Note: Changing opening balance might need current_balance adjustment logic
-        // For simplicity, we just update the field.
         updatePayload.current_balance = data.opening_balance
     }
 

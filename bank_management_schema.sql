@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS balance_transactions (
     bank_account_id UUID REFERENCES bank_accounts(id),
     supplier_id UUID REFERENCES suppliers(id),
     description TEXT,
+    is_opening BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT now(),
     created_by UUID REFERENCES auth.users(id)
 );

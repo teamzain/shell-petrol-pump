@@ -34,7 +34,9 @@ import {
   Percent,
   Pencil,
   List,
-  History
+  History,
+  Plus,
+  Trash2
 } from "lucide-react"
 import { BrandLoader as Loader, BrandLoader } from "@/components/ui/brand-loader"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -78,6 +80,7 @@ import {
   addBankAccount
 } from "@/app/actions/balance"
 import { toast } from "sonner"
+import { createClient as createBrowserClient } from "@/lib/supabase/client"
 
 interface DailyBalance {
   id: string
@@ -171,7 +174,7 @@ export default function BalanceManagementPage() {
 
   const [openingBalances, setOpeningBalances] = useState({
     cash: "0",
-    bank: "0"
+    bankAccounts: [{ id: "", amount: "" }]
   })
 
   const [cardData, setCardData] = useState({
@@ -259,12 +262,43 @@ export default function BalanceManagementPage() {
     fetchData(workingDate)
   }, [workingDate])
 
+  // Supabase Realtime Subscription
+  useEffect(() => {
+    const supabase = createBrowserClient()
+
+    // Subscribe to all relevant tables
+    const channel = supabase
+      .channel('balance_pumps_realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_accounts_status' }, () => {
+        fetchData(workingDate)
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'balance_transactions' }, () => {
+        fetchData(workingDate)
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bank_accounts' }, () => {
+        fetchData(workingDate)
+      })
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [workingDate])
+
   const handleSetOpeningBalance = async () => {
+    const invalidBank = openingBalances.bankAccounts.some(b => Number(b.amount) > 0 && !b.id)
+    if (invalidBank) {
+      toast.error("Please select a bank account for all entered bank balances")
+      return
+    }
+
     setSaving(true)
     try {
       await updateDailyOpeningBalances(
         Number(openingBalances.cash),
-        Number(openingBalances.bank),
+        openingBalances.bankAccounts
+          .filter(b => Number(b.amount) > 0)
+          .map(b => ({ id: b.id, amount: Number(b.amount) })),
         workingDate
       )
       toast.success("Opening balance updated")
@@ -275,6 +309,31 @@ export default function BalanceManagementPage() {
     } finally {
       setSaving(false)
     }
+  }
+
+  const addBankOpeningRow = () => {
+    setOpeningBalances({
+      ...openingBalances,
+      bankAccounts: [...openingBalances.bankAccounts, { id: "", amount: "" }]
+    })
+  }
+
+  const removeBankOpeningRow = (index: number) => {
+    const newAccounts = [...openingBalances.bankAccounts]
+    newAccounts.splice(index, 1)
+    setOpeningBalances({
+      ...openingBalances,
+      bankAccounts: newAccounts
+    })
+  }
+
+  const updateBankOpeningRow = (index: number, field: 'id' | 'amount', value: string) => {
+    const newAccounts = [...openingBalances.bankAccounts]
+    newAccounts[index] = { ...newAccounts[index], [field]: value }
+    setOpeningBalances({
+      ...openingBalances,
+      bankAccounts: newAccounts
+    })
   }
 
   const handleCloseDay = async () => {
@@ -962,12 +1021,12 @@ export default function BalanceManagementPage() {
             onClick={() => {
               setOpeningBalances({
                 cash: (todayBalance?.opening_cash || 0).toString(),
-                bank: (todayBalance?.opening_bank || 0).toString()
+                bankAccounts: [{ id: "", amount: "" }]
               })
               setOpeningDialogOpen(true)
             }}
-            disabled={todayBalance?.is_closed || isFutureDate}
-            variant={todayBalance?.is_closed ? "secondary" : "default"}
+            disabled={todayBalance?.is_closed || todayBalance?.opening_balances_set || isFutureDate}
+            variant={todayBalance?.is_closed || todayBalance?.opening_balances_set ? "secondary" : "default"}
             className="w-full sm:w-auto"
           >
             <Save className="mr-2 h-4 w-4" />
@@ -1112,44 +1171,108 @@ export default function BalanceManagementPage() {
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="cash_opening" className="flex items-center gap-2">
-                <Wallet className="h-4 w-4" />
-                Cash Opening Balance
-              </Label>
-              <Input
-                id="cash_opening"
-                type="number"
-                step="0.01"
-                min="0"
-                value={openingBalances.cash}
-                onChange={(e) => setOpeningBalances({ ...openingBalances, cash: e.target.value })}
-                placeholder="Enter cash balance"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="bank_opening" className="flex items-center gap-2">
-                <Banknote className="h-4 w-4" />
-                Bank Opening Balance
-              </Label>
-              <Input
-                id="bank_opening"
-                type="number"
-                step="0.01"
-                min="0"
-                value={openingBalances.bank}
-                onChange={(e) => setOpeningBalances({ ...openingBalances, bank: e.target.value })}
-                placeholder="Enter bank balance"
-              />
-            </div>
+            {todayBalance?.opening_balances_set ? (
+              <Alert className="bg-amber-50 text-amber-800 border-amber-200">
+                <AlertCircle className="h-4 w-4" />
+                <AlertTitle>Already Set</AlertTitle>
+                <AlertDescription>
+                  Opening balances for this day have already been set and cannot be modified.
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="cash_opening" className="flex items-center gap-2">
+                    <Wallet className="h-4 w-4 text-primary" />
+                    Cash Opening Balance
+                  </Label>
+                  <Input
+                    id="cash_opening"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={openingBalances.cash}
+                    onChange={(e) => setOpeningBalances({ ...openingBalances, cash: e.target.value })}
+                    placeholder="Enter cash balance"
+                  />
+                </div>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <Label className="flex items-center gap-2 text-primary font-semibold">
+                      <Banknote className="h-4 w-4" />
+                      Bank Account Balances
+                    </Label>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={addBankOpeningRow}
+                      className="h-8 gap-1"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      Add Account
+                    </Button>
+                  </div>
+
+                  <div className="space-y-3">
+                    {openingBalances.bankAccounts.map((account, index) => (
+                      <div key={index} className="flex gap-3 items-end animate-in fade-in slide-in-from-top-2">
+                        <div className="flex-1 space-y-1.5">
+                          <Label className="text-[10px] uppercase text-muted-foreground ml-1">Account</Label>
+                          <Select
+                            value={account.id}
+                            onValueChange={(v) => updateBankOpeningRow(index, 'id', v)}
+                          >
+                            <SelectTrigger className="h-9">
+                              <SelectValue placeholder="Choose bank..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {bankAccounts.map(bank => (
+                                <SelectItem key={bank.id} value={bank.id}>
+                                  {bank.account_name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="w-[140px] space-y-1.5">
+                          <Label className="text-[10px] uppercase text-muted-foreground ml-1">Opening Amount</Label>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            className="h-9"
+                            value={account.amount}
+                            onChange={(e) => updateBankOpeningRow(index, 'amount', e.target.value)}
+                            placeholder="0.00"
+                          />
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => removeBankOpeningRow(index)}
+                          className="h-9 w-9 text-destructive hover:text-destructive hover:bg-destructive/10"
+                          disabled={openingBalances.bankAccounts.length === 1}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
           </div>
           <DialogFooter className="gap-2 sm:gap-0">
             <Button variant="outline" onClick={() => setOpeningDialogOpen(false)} className="w-full sm:w-auto">
-              Cancel
+              {todayBalance?.opening_balances_set ? "Close" : "Cancel"}
             </Button>
-            <Button onClick={handleSetOpeningBalance} disabled={saving} className="w-full sm:w-auto">
-              {saving ? <Loader size="xs" /> : "Save Opening Balance"}
-            </Button>
+            {!todayBalance?.opening_balances_set && (
+              <Button onClick={handleSetOpeningBalance} disabled={saving} className="w-full sm:w-auto">
+                {saving ? <Loader size="xs" /> : "Save Opening Balance"}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
