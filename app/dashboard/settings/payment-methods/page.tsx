@@ -2,291 +2,237 @@
 
 import { useState, useEffect } from "react"
 import { createClient } from "@/lib/supabase/client"
-import { Plus, Edit2, CheckCircle2, CreditCard, Banknote, Building2 } from "lucide-react"
-
+import {
+    Plus,
+    Trash2,
+    CreditCard,
+    Building2,
+    Settings,
+    CheckCircle2,
+    AlertCircle,
+    Banknote
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { useToast } from "@/components/ui/use-toast"
-import { BrandLoader } from "@/components/ui/brand-loader"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Switch } from "@/components/ui/switch"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { BrandLoader } from "@/components/ui/brand-loader"
 
 export default function PaymentMethodsPage() {
-    const { toast } = useToast()
-    const supabase = createClient()
-
-    const [methods, setMethods] = useState<any[]>([])
-    const [suppliers, setSuppliers] = useState<any[]>([])
-    const [loading, setLoading] = useState(true)
-
-    // Dialog State
-    const [isDialogOpen, setIsDialogOpen] = useState(false)
-    const [editingMethod, setEditingMethod] = useState<any>(null)
+    const [loading, setLoading] = useState(false)
     const [saving, setSaving] = useState(false)
+    const [methods, setMethods] = useState<any[]>([])
+    const [error, setError] = useState("")
+    const [success, setSuccess] = useState<string | null>(null)
+    const [isDialogOpen, setIsDialogOpen] = useState(false)
 
-    // Form State
     const [formData, setFormData] = useState({
         name: "",
         type: "bank_card",
-        supplier_id: "",
-        hold_days: 0,
+        hold_days: "0",
         is_active: true
     })
 
+    const supabase = createClient()
+
     useEffect(() => {
-        fetchData()
+        fetchMethods()
     }, [])
 
-    const fetchData = async () => {
+    const fetchMethods = async () => {
         setLoading(true)
         try {
-            const { data: mData, error: mErr } = await supabase
+            const { data, error: err } = await supabase
                 .from('payment_methods')
-                .select(`*, suppliers(name)`)
-                .order('id')
-            if (mErr) throw mErr
-            setMethods(mData || [])
-
-            const { data: sData, error: sErr } = await supabase
-                .from('suppliers')
-                .select('id, name')
-            if (sErr) throw sErr
-            setSuppliers(sData || [])
-
+                .select('*')
+                .order('name')
+            if (err) throw err
+            setMethods(data || [])
         } catch (err: any) {
-            toast({ title: "Error", description: err.message, variant: "destructive" })
+            setError(err.message)
         } finally {
             setLoading(false)
         }
     }
 
-    const openAddDialog = () => {
-        setEditingMethod(null)
-        setFormData({
-            name: "",
-            type: "bank_card",
-            supplier_id: "",
-            hold_days: 0,
-            is_active: true
-        })
-        setIsDialogOpen(true)
-    }
-
-    const openEditDialog = (method: any) => {
-        setEditingMethod(method)
-        setFormData({
-            name: method.name,
-            type: method.type,
-            supplier_id: method.supplier_id || "",
-            hold_days: method.hold_days,
-            is_active: method.is_active
-        })
-        setIsDialogOpen(true)
-    }
-
     const handleSave = async () => {
-        if (!formData.name) {
-            toast({ title: "Validation Error", description: "Name is required.", variant: "destructive" })
-            return
-        }
-
+        if (!formData.name) return
         setSaving(true)
+        setError("")
         try {
-            const payload = {
-                name: formData.name,
-                type: formData.type,
-                supplier_id: formData.type === 'supplier_card' ? formData.supplier_id : null,
-                hold_days: formData.hold_days,
-                is_active: formData.is_active
-            }
+            const { error: err } = await supabase
+                .from('payment_methods')
+                .insert([{
+                    name: formData.name,
+                    type: formData.type,
+                    hold_days: parseInt(formData.hold_days) || 0,
+                    is_active: formData.is_active
+                }])
+            if (err) throw err
 
-            let error
-            if (editingMethod) {
-                const { error: updateErr } = await supabase
-                    .from('payment_methods')
-                    .update(payload)
-                    .eq('id', editingMethod.id)
-                error = updateErr
-            } else {
-                const { error: insertErr } = await supabase
-                    .from('payment_methods')
-                    .insert([payload])
-                error = insertErr
-            }
-
-            if (error) throw error
-
-            toast({ title: "Success", description: "Payment method saved successfully." })
+            setSuccess("Payment method added successfully")
             setIsDialogOpen(false)
-            fetchData()
+            setFormData({ name: "", type: "bank_card", hold_days: "0", is_active: true })
+            fetchMethods()
+            setTimeout(() => setSuccess(null), 3000)
         } catch (err: any) {
-            toast({ title: "Save Error", description: err.message, variant: "destructive" })
+            setError(err.message)
         } finally {
             setSaving(false)
         }
     }
 
+    const handleDelete = async (id: string) => {
+        try {
+            const { error: err } = await supabase
+                .from('payment_methods')
+                .delete()
+                .eq('id', id)
+            if (err) throw err
+            setSuccess("Payment method deleted")
+            fetchMethods()
+            setTimeout(() => setSuccess(null), 3000)
+        } catch (err: any) {
+            setError(err.message)
+        }
+    }
+
+    if (loading) return <div className="h-[60vh] flex items-center justify-center"><BrandLoader /></div>
+
     return (
-        <div className="flex flex-col gap-6 max-w-5xl mx-auto pb-10 pt-4">
-            <div className="flex flex-col md:flex-row justify-between md:items-center gap-4 border-b pb-4">
+        <div className="flex flex-col gap-6">
+            <div className="flex justify-between items-center">
                 <div>
-                    <h1 className="text-3xl font-black tracking-tight flex items-center gap-2">
-                        <CreditCard className="h-8 w-8 text-primary" /> Payment Methods
-                    </h1>
-                    <p className="text-muted-foreground ml-[40px] text-sm">Manage payment types and hold durations.</p>
+                    <h1 className="text-3xl font-bold tracking-tight">Payment Methods</h1>
+                    <p className="text-muted-foreground">Manage cards, banks, and other payment channels.</p>
                 </div>
-                <Button onClick={openAddDialog}>
-                    <Plus className="mr-2 h-4 w-4" /> Add Payment Method
-                </Button>
-            </div>
-
-            <Card className="shadow-sm border-border">
-                {loading ? (
-                    <div className="h-64 flex items-center justify-center">
-                        <BrandLoader size="lg" />
-                    </div>
-                ) : (
-                    <div className="overflow-x-auto">
-                        <table className="w-full text-sm text-left">
-                            <thead className="bg-muted text-muted-foreground uppercase text-[10px] tracking-wider font-bold">
-                                <tr>
-                                    <th className="px-6 py-4">Method Name</th>
-                                    <th className="px-6 py-4">Type</th>
-                                    <th className="px-6 py-4 text-center">Hold Period</th>
-                                    <th className="px-6 py-4 text-center">Status</th>
-                                    <th className="px-6 py-4 text-right">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-border">
-                                {methods.map(method => (
-                                    <tr key={method.id} className="hover:bg-muted/5 transition-colors">
-                                        <td className="px-6 py-4 font-bold flex items-center gap-3">
-                                            <div className={`h-8 w-8 rounded-lg flex items-center justify-center ${method.type === 'cash' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
-                                                {method.type === 'cash' ? <Banknote className="h-4 w-4" /> : <CreditCard className="h-4 w-4" />}
-                                            </div>
-                                            {method.name}
-                                        </td>
-                                        <td className="px-6 py-4">
-                                            {method.type === 'cash' && <span className="text-xs uppercase px-2 py-1 bg-muted rounded font-bold">Cash</span>}
-                                            {method.type === 'bank_card' && <span className="text-xs uppercase px-2 py-1 bg-muted rounded font-bold">Bank Card</span>}
-                                            {method.type === 'supplier_card' && (
-                                                <div>
-                                                    <span className="text-xs uppercase px-2 py-1 bg-muted rounded font-bold">Supplier Card</span>
-                                                    <div className="text-[10px] text-muted-foreground mt-1 tracking-tight flex items-center gap-1">
-                                                        <Building2 className="h-3 w-3" /> {method.suppliers?.name || 'Unknown Supplier'}
-                                                    </div>
-                                                </div>
-                                            )}
-                                            {method.type === 'custom' && <span className="text-xs uppercase px-2 py-1 bg-muted rounded font-bold">Custom</span>}
-                                        </td>
-                                        <td className="px-6 py-4 text-center font-mono">
-                                            {method.hold_days} <span className="text-xs text-muted-foreground">days</span>
-                                        </td>
-                                        <td className="px-6 py-4 text-center">
-                                            {method.is_active ? (
-                                                <Badge variant="outline" className="border-green-200 text-green-700 bg-green-50 uppercase text-[10px]">Active</Badge>
-                                            ) : (
-                                                <Badge variant="outline" className="text-muted-foreground uppercase text-[10px]">Inactive</Badge>
-                                            )}
-                                        </td>
-                                        <td className="px-6 py-4 text-right">
-                                            <Button variant="ghost" size="sm" onClick={() => openEditDialog(method)}>
-                                                <Edit2 className="h-4 w-4 text-primary" />
-                                            </Button>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-            </Card>
-
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-                <DialogContent className="sm:max-w-md">
-                    <DialogHeader>
-                        <DialogTitle>{editingMethod ? 'Edit Payment Method' : 'Add Payment Method'}</DialogTitle>
-                        <DialogDescription>
-                            Configure the behavior for this payment option at checkout.
-                        </DialogDescription>
-                    </DialogHeader>
-                    <div className="py-4 space-y-4">
-                        <div className="space-y-2">
-                            <Label>Method Name</Label>
-                            <Input
-                                value={formData.name}
-                                onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
-                                placeholder="e.g., Shell Fleet Card"
-                            />
-                        </div>
-
-                        <div className="space-y-2">
-                            <Label>Payment Type</Label>
-                            <Select value={formData.type} onValueChange={(v) => setFormData(prev => ({ ...prev, type: v }))} disabled={formData.type === 'cash'}>
-                                <SelectTrigger>
-                                    <SelectValue placeholder="Select type" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="cash">Cash (Immediate Settlement)</SelectItem>
-                                    <SelectItem value="bank_card">Bank Card (Holds in Bank)</SelectItem>
-                                    <SelectItem value="supplier_card">Supplier Card (Credits Supplier Ledger)</SelectItem>
-                                    <SelectItem value="custom">Custom Other</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        {formData.type === 'supplier_card' && (
-                            <div className="space-y-2 animate-in slide-in-from-top-2">
-                                <Label>Link Supplier Ledger</Label>
-                                <Select value={formData.supplier_id} onValueChange={(v) => setFormData(prev => ({ ...prev, supplier_id: v }))}>
-                                    <SelectTrigger>
-                                        <SelectValue placeholder="Select Supplier" />
+                <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+                    <DialogTrigger asChild>
+                        <Button>
+                            <Plus className="mr-2 h-4 w-4" />
+                            Add New Method
+                        </Button>
+                    </DialogTrigger>
+                    <DialogContent>
+                        <DialogHeader>
+                            <DialogTitle>Add Payment Method</DialogTitle>
+                            <DialogDescription>
+                                Users will be able to select this method during daily sales entry.
+                            </DialogDescription>
+                        </DialogHeader>
+                        <div className="grid gap-4 py-4">
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <Label htmlFor="name">Method Name</Label>
+                                    <Input
+                                        id="name"
+                                        placeholder="e.g. HBL Card"
+                                        value={formData.name}
+                                        onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <Label htmlFor="hold_days">Hold Days</Label>
+                                    <Input
+                                        id="hold_days"
+                                        type="number"
+                                        value={formData.hold_days}
+                                        onChange={(e) => setFormData({ ...formData, hold_days: e.target.value })}
+                                    />
+                                </div>
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="type">Type</Label>
+                                <Select value={formData.type} onValueChange={(v) => setFormData({ ...formData, type: v })}>
+                                    <SelectTrigger id="type">
+                                        <SelectValue />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        {suppliers.map(s => (
-                                            <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                                        ))}
+                                        <SelectItem value="bank_card">💳 Bank Card</SelectItem>
+                                        <SelectItem value="shell_card">🐚 Shell Card</SelectItem>
+                                        <SelectItem value="digital_wallet">📱 Digital Wallet</SelectItem>
+                                        <SelectItem value="other">❓ Other</SelectItem>
                                     </SelectContent>
                                 </Select>
                             </div>
-                        )}
-
-                        <div className="space-y-2">
-                            <Label>Hold Duration (Days)</Label>
-                            <Input
-                                type="number"
-                                min="0"
-                                value={formData.hold_days}
-                                onChange={(e) => setFormData(prev => ({ ...prev, hold_days: parseInt(e.target.value) || 0 }))}
-                                disabled={formData.type === 'cash'}
-                            />
-                            <p className="text-[10px] text-muted-foreground px-1">Money typically takes this long to appear in your account.</p>
                         </div>
+                        <DialogFooter>
+                            <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Cancel</Button>
+                            <Button onClick={handleSave} disabled={saving}>
+                                {saving ? <BrandLoader size="xs" /> : "Save Method"}
+                            </Button>
+                        </DialogFooter>
+                    </DialogContent>
+                </Dialog>
+            </div>
 
-                        <div className="flex items-center justify-between pt-4 border-t">
-                            <Label className="flex flex-col gap-1 cursor-pointer">
-                                <span className="font-bold">Active Status</span>
-                                <span className="text-xs text-muted-foreground font-normal">Enable or disable this method for sales.</span>
-                            </Label>
-                            <Switch
-                                checked={formData.is_active}
-                                onCheckedChange={(checked) => setFormData(prev => ({ ...prev, is_active: checked }))}
-                            />
-                        </div>
+            {success && (
+                <Alert className="border-green-200 bg-green-50">
+                    <CheckCircle2 className="h-4 w-4 text-green-600" />
+                    <AlertTitle className="text-green-800 font-bold">Success</AlertTitle>
+                    <AlertDescription className="text-green-700">{success}</AlertDescription>
+                </Alert>
+            )}
 
-                    </div>
-                    <DialogFooter>
-                        <Button variant="outline" onClick={() => setIsDialogOpen(false)} disabled={saving}>Cancel</Button>
-                        <Button onClick={handleSave} disabled={saving}>
-                            {saving ? <BrandLoader size="xs" /> : "Save Changes"}
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
+            <Card>
+                <CardHeader>
+                    <CardTitle>Configured Methods</CardTitle>
+                    <CardDescription>All active payment methods available in the system.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Method Name</TableHead>
+                                <TableHead>Type</TableHead>
+                                <TableHead>Status</TableHead>
+                                <TableHead className="text-right">Actions</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {methods.map((m) => (
+                                <TableRow key={m.id}>
+                                    <TableCell className="font-medium">{m.name}</TableCell>
+                                    <TableCell>
+                                        <Badge variant="secondary" className="capitalize">
+                                            {m.type.replace('_', ' ')}
+                                        </Badge>
+                                    </TableCell>
+                                    <TableCell>
+                                        <Badge variant={m.is_active ? "default" : "secondary"}>
+                                            {m.is_active ? "Active" : "Inactive"}
+                                        </Badge>
+                                    </TableCell>
+                                    <TableCell className="text-right">
+                                        {m.type !== 'cash' && (
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                className="text-muted-foreground hover:text-destructive"
+                                                onClick={() => handleDelete(m.id)}
+                                            >
+                                                <Trash2 className="h-4 w-4" />
+                                            </Button>
+                                        )}
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                            {methods.length === 0 && (
+                                <TableRow>
+                                    <TableCell colSpan={4} className="text-center py-10 text-muted-foreground">
+                                        No payment methods found.
+                                    </TableCell>
+                                </TableRow>
+                            )}
+                        </TableBody>
+                    </Table>
+                </CardContent>
+            </Card>
         </div>
     )
 }

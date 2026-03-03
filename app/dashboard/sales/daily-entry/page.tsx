@@ -22,7 +22,8 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow
 } from "@/components/ui/table"
 
-import { saveLubricantSale, saveDailyExpense, finalizeDailySummary, getOpeningBalances } from "@/app/actions/sales-daily"
+import { saveLubricantSale, finalizeDailySummary, getOpeningBalances, getNozzleReadingForDate } from "@/app/actions/sales-daily"
+import { Lock } from "lucide-react"
 
 export default function DailyEntryPage() {
   const router = useRouter()
@@ -43,21 +44,23 @@ export default function DailyEntryPage() {
   const [tanks, setTanks] = useState<any[]>([])
 
   // Form Data
-  const [readings, setReadings] = useState<Record<string, { opening: number, closing: number, price: number }>>({})
+  const [readings, setReadings] = useState<Record<string, { opening: number, closing: number, price: number, locked: boolean }>>({})
   const [lubeSales, setLubeSales] = useState<any[]>([])
-  const [cardPayments, setCardPayments] = useState({ shell: 0, bank: 0 })
-  const [expenses, setExpenses] = useState<{ description: string, amount: number }[]>([{ description: "", amount: 0 }])
+  const [cardPayments, setCardPayments] = useState<Record<string, number>>({})
   const [dailyStatus, setDailyStatus] = useState({ openingCash: 0, openingBank: 0 })
+
+  const [isMounted, setIsMounted] = useState(false)
 
   useEffect(() => {
     init()
+    setIsMounted(true)
   }, [])
 
   useEffect(() => {
-    if (date) {
+    if (date && isMounted) {
       fetchOpeningData()
     }
-  }, [date])
+  }, [date, isMounted])
 
   const init = async () => {
     setLoading(true)
@@ -87,17 +90,21 @@ export default function DailyEntryPage() {
 
   const fetchOpeningData = async () => {
     try {
-      // Fetch opening readings for each nozzle
+      // Fetch opening readings and check for existing closing readings
       const newReadings: Record<string, any> = {}
       for (const nozzle of nozzles) {
         const { data: opening } = await supabase.rpc('get_opening_reading', {
           p_nozzle_id: nozzle.id,
           p_date: date
         })
+
+        const existingReading = await getNozzleReadingForDate(nozzle.id, date)
+
         newReadings[nozzle.id] = {
           opening: opening || 0,
-          closing: opening || 0,
-          price: nozzle.products?.selling_price || 0
+          closing: existingReading?.closing_reading || opening || 0,
+          price: nozzle.products?.selling_price || 0,
+          locked: !!existingReading
         }
       }
       setReadings(newReadings)
@@ -117,18 +124,13 @@ export default function DailyEntryPage() {
   // --- Handlers ---
   const handleReadingChange = (id: string, val: string) => {
     const num = parseFloat(val) || 0
-    setReadings(prev => ({
-      ...prev,
-      [id]: { ...prev[id], closing: num }
-    }))
-  }
-
-  const addExpenseRow = () => setExpenses([...expenses, { description: "", amount: 0 }])
-  const removeExpenseRow = (idx: number) => setExpenses(expenses.filter((_, i) => i !== idx))
-  const updateExpense = (idx: number, field: string, val: any) => {
-    const newExpenses = [...expenses]
-    newExpenses[idx] = { ...newExpenses[idx], [field]: val }
-    setExpenses(newExpenses)
+    setReadings(prev => {
+      const existing = prev[id] || { opening: 0, closing: 0, price: 0, locked: false }
+      return {
+        ...prev,
+        [id]: { ...existing, closing: num }
+      }
+    })
   }
 
   const addLubeSale = (product: any) => {
@@ -152,12 +154,25 @@ export default function DailyEntryPage() {
 
   const removeLubeSale = (idx: number) => setLubeSales(lubeSales.filter((_, i) => i !== idx))
 
-  // --- Calculations ---
-  const fuelTotalAmount = Object.values(readings).reduce((sum, r) => sum + (r.closing - r.opening) * r.price, 0)
+  const handleCardChange = (methodId: string, amount: string) => {
+    const val = parseFloat(amount) || 0
+    setCardPayments(prev => ({
+      ...prev,
+      [methodId]: val
+    }))
+  }
+  const fuelTotalAmount = nozzles.reduce((sum, n) => {
+    const r = readings[n.id]
+    if (!r) return sum
+    const opening = typeof r.opening === 'number' ? r.opening : 0
+    const closing = typeof r.closing === 'number' ? r.closing : 0
+    const price = Number(n.products?.selling_price) || 0
+    return sum + (Math.max(0, closing - opening) * price)
+  }, 0)
   const lubeTotalAmount = lubeSales.reduce((sum, s) => sum + s.total_amount, 0)
   const grossSale = fuelTotalAmount + lubeTotalAmount
-  const totalExpenses = expenses.reduce((sum, e) => sum + (e.amount || 0), 0)
-  const netCashSale = grossSale - cardPayments.shell - cardPayments.bank - totalExpenses
+  const totalCardsAmount = Object.values(cardPayments).reduce((sum, val) => sum + (val || 0), 0)
+  const netCashSale = grossSale - totalCardsAmount
   const closingCash = dailyStatus.openingCash + netCashSale
 
   // Final Save
@@ -166,14 +181,10 @@ export default function DailyEntryPage() {
     try {
       // 1. Save Nozzle Readings / Sales
       const cashMethod = paymentMethods.find(m => m.type === 'cash')?.id
-      const shellMethod = paymentMethods.find(m => m.name.toLowerCase().includes('shell'))?.id
-      const bankMethod = paymentMethods.find(m => m.type === 'bank_card')?.id
 
       for (const nozzleId in readings) {
         const item = readings[nozzleId]
-        if (item.closing > item.opening) {
-          // In a real app, you might want to split by payment type if recorded per nozzle
-          // Here we assume cash for nozzle if not specified, then deduct card payments at summary
+        if (item.closing > item.opening && !item.locked) {
           await supabase.rpc('save_daily_sale_v2', {
             p_sale_date: date,
             p_nozzle_id: nozzleId,
@@ -197,14 +208,45 @@ export default function DailyEntryPage() {
         })
       }
 
-      // 3. Save Expenses
-      for (const exp of expenses) {
-        if (exp.description && exp.amount > 0) {
-          await saveDailyExpense({
-            expense_date: date,
-            description: exp.description,
-            amount: exp.amount
-          })
+      // 3. Save Card Payments (as separate entries to reconcile cash)
+      for (const methodId in cardPayments) {
+        const amount = cardPayments[methodId]
+        if (amount > 0) {
+          const method = paymentMethods.find(m => m.id === methodId)
+          if (method) {
+            // We insert into daily_sales directly for card payments
+            // This ensures finalize_daily_status correctly calculates net_cash_sale
+            const { data: saleData, error: saleError } = await supabase.from('daily_sales').insert({
+              sale_date: date,
+              payment_method_id: methodId,
+              payment_type: method.type,
+              total_amount: amount,
+              liters_sold: 0,
+              rate_per_liter: 0,
+              card_amount: amount,
+              hold_amount: amount,
+              hold_status: 'pending',
+              created_by: user
+            }).select('id').single()
+
+            if (saleError) throw saleError
+
+            // Also create record in card_hold_records for tracking
+            const holdDays = method.hold_days || 0
+            const relDate = new Date(date)
+            relDate.setDate(relDate.getDate() + holdDays)
+
+            await supabase.from('card_hold_records').insert({
+              sale_id: saleData.id,
+              payment_method_id: methodId,
+              payment_type: method.type,
+              supplier_id: method.supplier_id,
+              hold_amount: amount,
+              sale_date: date,
+              expected_release_date: relDate.toISOString().split('T')[0],
+              created_by: user
+            })
+          }
         }
       }
 
@@ -221,10 +263,10 @@ export default function DailyEntryPage() {
     }
   }
 
-  if (loading) return <div className="h-screen flex items-center justify-center"><BrandLoader /></div>
+  if (loading || !isMounted) return <div className="h-screen flex items-center justify-center"><BrandLoader /></div>
 
   return (
-    <div className="max-w-5xl mx-auto pb-20">
+    <div className="max-w-5xl mx-auto pb-20" suppressHydrationWarning>
       {/* Header */}
       <div className="flex items-center justify-between mb-8 border-b pb-4">
         <div className="flex items-center gap-4">
@@ -290,14 +332,19 @@ export default function DailyEntryPage() {
                     <TableHead className="text-right">Opening</TableHead>
                     <TableHead className="text-right">Closing</TableHead>
                     <TableHead className="text-right">Sales (L)</TableHead>
+                    <TableHead className="text-right">Rate (PKR)</TableHead>
                     <TableHead className="text-right">Amount (PKR)</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {nozzles.map(n => {
-                    const r = readings[n.id] || { opening: 0, closing: 0, price: 0 }
-                    const liters = Math.max(0, r.closing - r.opening)
-                    const amount = liters * r.price
+                    const r = readings[n.id] || { opening: 0, closing: 0 }
+                    const opening = typeof r.opening === 'number' ? r.opening : 0
+                    const closing = typeof r.closing === 'number' ? r.closing : 0
+                    const price = Number(n.products?.selling_price) || 0
+
+                    const liters = Math.max(0, closing - opening)
+                    const amount = liters * price
 
                     return (
                       <TableRow key={n.id}>
@@ -308,23 +355,26 @@ export default function DailyEntryPage() {
                         <TableCell>
                           <Badge variant="outline">{n.products?.name}</Badge>
                         </TableCell>
-                        <TableCell className="text-right font-mono text-muted-foreground">
-                          {r.opening.toFixed(2)}
+                        <TableCell className="text-right font-mono text-muted-foreground" suppressHydrationWarning>
+                          {opening.toFixed(2)}
                         </TableCell>
-                        <TableCell className="text-right">
+                        <TableCell className="text-right" suppressHydrationWarning>
                           <Input
                             type="number"
                             step="0.01"
-                            value={r.closing || ""}
+                            value={closing === 0 ? "" : closing}
                             onChange={(e) => handleReadingChange(n.id, e.target.value)}
                             className="w-32 text-right ml-auto font-bold"
                           />
                         </TableCell>
-                        <TableCell className="text-right font-bold text-blue-600">
+                        <TableCell className="text-right font-bold text-blue-600" suppressHydrationWarning>
                           {liters.toFixed(2)}
                         </TableCell>
-                        <TableCell className="text-right font-black">
-                          {amount.toLocaleString()}
+                        <TableCell className="text-right font-mono text-muted-foreground" suppressHydrationWarning>
+                          {price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </TableCell>
+                        <TableCell className="text-right font-black" suppressHydrationWarning>
+                          {amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </TableCell>
                       </TableRow>
                     )
@@ -423,38 +473,30 @@ export default function DailyEntryPage() {
               <CardTitle className="flex items-center gap-2">
                 <CreditCard className="h-5 w-5 text-indigo-500" /> Step 3: Card Payments
               </CardTitle>
-              <CardDescription>Enter total amount received via Shell Card and Bank Cards today.</CardDescription>
+              <CardDescription>Enter total amount received for each card/payment method today.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div className="space-y-2">
-                <Label className="text-lg font-bold">Shell Card Total</Label>
-                <div className="relative">
-                  <Input
-                    type="number"
-                    className="text-2xl h-14 pl-12 font-black text-primary"
-                    value={cardPayments.shell || ""}
-                    onChange={(e) => setCardPayments({ ...cardPayments, shell: parseFloat(e.target.value) || 0 })}
-                  />
-                  <div className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground font-bold">PKR</div>
+              {paymentMethods.filter(m => m.type !== 'cash').map((method) => (
+                <div key={method.id} className="space-y-2">
+                  <Label className="text-lg font-bold">{method.name}</Label>
+                  <div className="relative">
+                    <Input
+                      type="number"
+                      className="text-2xl h-14 pl-12 font-black text-primary"
+                      value={cardPayments[method.id] || ""}
+                      onChange={(e) => handleCardChange(method.id, e.target.value)}
+                    />
+                    <div className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground font-bold">PKR</div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {method.type === 'shell_card' ? "This amount will be held in Shell Account balance." : "This amount will be reconciled via bank accounts."}
+                  </p>
                 </div>
-                <p className="text-xs text-muted-foreground">This amount will be held in Shell Account balance.</p>
-              </div>
+              ))}
 
-              <Separator />
-
-              <div className="space-y-2">
-                <Label className="text-lg font-bold">Bank Card Total</Label>
-                <div className="relative">
-                  <Input
-                    type="number"
-                    className="text-2xl h-14 pl-12 font-black text-blue-700"
-                    value={cardPayments.bank || ""}
-                    onChange={(e) => setCardPayments({ ...cardPayments, bank: parseFloat(e.target.value) || 0 })}
-                  />
-                  <div className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground font-bold">PKR</div>
-                </div>
-                <p className="text-xs text-muted-foreground">This amount will be added to bank balance once released.</p>
-              </div>
+              {paymentMethods.filter(m => m.type !== 'cash').length === 0 && (
+                <div className="text-center py-10 text-muted-foreground italic">No card payment methods configured.</div>
+              )}
             </CardContent>
             <CardFooter className="flex justify-between">
               <Button variant="outline" onClick={() => setStep(2)}><ArrowLeft className="mr-2 h-4 w-4" /> Back</Button>
@@ -463,57 +505,8 @@ export default function DailyEntryPage() {
           </Card>
         )}
 
-        {/* STEP 4: EXPENSES */}
+        {/* STEP 4: SUMMARY & FINALIZE */}
         {step === 4 && (
-          <Card className="animate-in fade-in slide-in-from-right-4">
-            <CardHeader className="flex flex-row items-center justify-between">
-              <div>
-                <CardTitle className="flex items-center gap-2">
-                  <Receipt className="h-5 w-5 text-red-500" /> Step 4: Daily Expenses
-                </CardTitle>
-                <CardDescription>Record any cash expenses paid today.</CardDescription>
-              </div>
-              <Button onClick={addExpenseRow} variant="outline" size="sm">
-                <Plus className="h-4 w-4 mr-2" /> Add Expense
-              </Button>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                {expenses.map((exp, idx) => (
-                  <div key={idx} className="flex gap-4 items-end">
-                    <div className="flex-1 space-y-2">
-                      <Label>Description</Label>
-                      <Input
-                        placeholder="e.g. Electricity Bill, Staff Meal"
-                        value={exp.description}
-                        onChange={(e) => updateExpense(idx, 'description', e.target.value)}
-                      />
-                    </div>
-                    <div className="w-[200px] space-y-2">
-                      <Label>Amount (PKR)</Label>
-                      <Input
-                        type="number"
-                        value={exp.amount || ""}
-                        onChange={(e) => updateExpense(idx, 'amount', parseFloat(e.target.value) || 0)}
-                      />
-                    </div>
-                    <Button variant="ghost" size="icon" className="mb-0.5" onClick={() => removeExpenseRow(idx)}>
-                      <Trash2 className="h-4 w-4 text-red-500" />
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-            <CardFooter className="flex justify-between bg-muted/20">
-              <Button variant="outline" onClick={() => setStep(3)}><ArrowLeft className="mr-2 h-4 w-4" /> Back</Button>
-              <div className="font-bold">Total Expenses: <span className="text-red-600 text-xl ml-2">PKR {totalExpenses.toLocaleString()}</span></div>
-              <Button onClick={() => setStep(5)}>Next Step <ArrowRight className="ml-2 h-4 w-4" /></Button>
-            </CardFooter>
-          </Card>
-        )}
-
-        {/* STEP 5: SUMMARY & FINALIZE */}
-        {step === 5 && (
           <Card className="animate-in fade-in zoom-in-95 duration-300">
             <CardHeader className="text-center bg-slate-900 text-white rounded-t-xl py-8">
               <CardTitle className="text-3xl font-black tracking-tighter uppercase italic">Daily Cash Flow Summary</CardTitle>
@@ -536,17 +529,16 @@ export default function DailyEntryPage() {
                     <span>GROSS SALES</span>
                     <span>PKR {grossSale.toLocaleString()}</span>
                   </div>
-                  <div className="flex justify-between items-center py-2 border-b text-indigo-600">
-                    <span>Shell Card Payments</span>
-                    <span className="font-bold">- {cardPayments.shell.toLocaleString()}</span>
-                  </div>
-                  <div className="flex justify-between items-center py-2 border-b text-blue-600">
-                    <span>Bank Card Payments</span>
-                    <span className="font-bold">- {cardPayments.bank.toLocaleString()}</span>
-                  </div>
-                  <div className="flex justify-between items-center py-2 border-b text-red-600">
-                    <span>Total Expenses</span>
-                    <span className="font-bold">- {totalExpenses.toLocaleString()}</span>
+
+                  {paymentMethods.filter(m => m.type !== 'cash').map(method => (
+                    <div key={method.id} className="flex justify-between items-center py-2 border-b text-indigo-600">
+                      <span>{method.name}</span>
+                      <span className="font-bold">- {(cardPayments[method.id] || 0).toLocaleString()}</span>
+                    </div>
+                  ))}
+
+                  <div className="flex justify-between items-center py-2 border-b text-slate-400 italic">
+                    <span className="text-xs">Note: Expenses are recorded on a separate page.</span>
                   </div>
                 </div>
 
@@ -572,7 +564,7 @@ export default function DailyEntryPage() {
               </div>
             </CardContent>
             <CardFooter className="flex justify-between bg-slate-100 py-6 rounded-b-xl border-t mt-4">
-              <Button variant="outline" onClick={() => setStep(4)} disabled={saving}><ArrowLeft className="mr-2 h-4 w-4" /> Edit Details</Button>
+              <Button variant="outline" onClick={() => setStep(3)} disabled={saving}><ArrowLeft className="mr-2 h-4 w-4" /> Edit Details</Button>
               <Button
                 size="lg"
                 className="bg-slate-900 hover:bg-slate-800 text-white px-8 h-14 text-xl font-black rounded-xl shadow-xl hover:scale-105 transition-all"

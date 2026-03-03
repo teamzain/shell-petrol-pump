@@ -75,7 +75,15 @@ const navItems: NavItem[] = [
   { title: "Expenses", href: "/dashboard/expenses", icon: Calculator },
   { title: "Reports", href: "/dashboard/reports", icon: BarChart3 },
   { title: "Users", href: "/dashboard/users", icon: Users },
-  { title: "Settings", href: "/dashboard/settings", icon: Settings },
+  {
+    title: "Settings",
+    href: "/dashboard/settings",
+    icon: Settings,
+    children: [
+      { title: "Profile", href: "/dashboard/settings" },
+      { title: "Payment Methods", href: "/dashboard/settings/payment-methods" },
+    ],
+  },
 ]
 
 export function DashboardSidebar() {
@@ -156,8 +164,9 @@ export function DashboardSidebar() {
           "fixed top-0 left-0 z-40 h-screen w-64 bg-sidebar border-r border-sidebar-border transition-transform duration-300",
           isOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         )}
+        suppressHydrationWarning
       >
-        <div className="flex flex-col h-full relative">
+        <div className="flex flex-col h-full relative" suppressHydrationWarning>
           {/* Mobile close button (right-aligned inside sidebar) */}
           <button
             type="button"

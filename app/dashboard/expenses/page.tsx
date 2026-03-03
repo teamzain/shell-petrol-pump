@@ -3,6 +3,9 @@
 import { useState, useEffect, useMemo } from "react"
 import { format } from "date-fns"
 import { getTodayPKT } from "@/lib/utils"
+import { createClient } from "@/lib/supabase/client"
+import { saveDailyExpense } from "@/app/actions/sales-daily"
+import { useToast } from "@/components/ui/use-toast"
 import {
     DollarSign,
     TrendingDown,
@@ -117,9 +120,63 @@ export default function ExpensesPage() {
     const [categoryFilter, setCategoryFilter] = useState("all")
     const [expenses, setExpenses] = useState<Expense[]>([])
 
+    const supabase = createClient()
+    const { toast } = useToast()
+
     useEffect(() => {
-        // Backend logic removed for system recreation
+        fetchData()
     }, [])
+
+    const fetchData = async () => {
+        setLoading(true)
+        setError("")
+        try {
+            // Fetch categories
+            const { data: catData, error: catErr } = await supabase
+                .from('expense_categories')
+                .select('*')
+                .order('category_name')
+            if (catErr) throw catErr
+            setCategories(catData || [])
+
+            // Fetch expenses
+            const { data: expData, error: expErr } = await supabase
+                .from('daily_expenses')
+                .select('*, expense_categories(*)')
+                .order('expense_date', { ascending: false })
+            if (expErr) throw expErr
+
+            setExpenses(expData?.map(e => ({
+                ...e,
+                category: {
+                    category_name: e.expense_categories?.category_name || "Uncategorized",
+                    category_type: e.expense_categories?.category_type || "other"
+                }
+            })) || [])
+
+            // Fetch today's balance
+            const today = getTodayPKT()
+            const { data: balData, error: balErr } = await supabase
+                .from('daily_accounts_status')
+                .select('*')
+                .eq('status_date', today)
+                .single()
+            if (balErr && balErr.code !== 'PGRST116') throw balErr
+            setTodayBalance(balData || null)
+
+            // Fetch bank accounts
+            const { data: bankData, error: bankErr } = await supabase
+                .from('bank_accounts')
+                .select('*')
+            if (bankErr) throw bankErr
+            setBankAccounts(bankData || [])
+
+        } catch (err: any) {
+            setError(err.message)
+        } finally {
+            setLoading(false)
+        }
+    }
 
     // --- Derived Stats ---
     const stats = useMemo(() => {
@@ -149,20 +206,81 @@ export default function ExpensesPage() {
     const currentBank = todayBalance?.bank_closing ?? todayBalance?.bank_opening ?? 0
 
     const handleSubmit = async () => {
-        setSuccess("Expense recorded (UI Only mode)")
-        setIsDialogOpen(false)
-        setTimeout(() => setSuccess(null), 3000)
+        if (!formData.description || !formData.amount || !formData.categoryId) {
+            setError("Please fill in all required fields.")
+            return
+        }
+
+        setSaving(true)
+        setError("")
+        try {
+            const expenseData = {
+                expense_date: formData.date,
+                description: formData.description,
+                amount: parseFloat(formData.amount),
+                category_id: formData.categoryId,
+                payment_method: formData.paymentMethod,
+                paid_to: formData.paidTo || undefined,
+                invoice_number: formData.invoiceNumber || undefined,
+                notes: formData.notes || undefined,
+            }
+
+            const result = await saveDailyExpense(expenseData)
+            if (result.success) {
+                setSuccess("Expense recorded successfully")
+                setIsDialogOpen(false)
+                fetchData()
+                setFormData({
+                    ...formData,
+                    description: "",
+                    amount: "",
+                    paidTo: "",
+                    invoiceNumber: "",
+                    notes: ""
+                })
+                setTimeout(() => setSuccess(null), 3000)
+            }
+        } catch (err: any) {
+            setError(err.message)
+        } finally {
+            setSaving(false)
+        }
     }
 
     const handleAddCategory = async () => {
-        setIsCategoryDialogOpen(false)
-        setSuccess("Category added (UI Only mode)")
-        setTimeout(() => setSuccess(null), 3000)
+        if (!newCategory.name) return
+        setAddingCategory(true)
+        try {
+            const { error: err } = await supabase
+                .from('expense_categories')
+                .insert([{ category_name: newCategory.name, category_type: newCategory.type }])
+            if (err) throw err
+
+            setSuccess("Category added successfully")
+            setNewCategory({ name: "", type: "operating" })
+            fetchData()
+            setTimeout(() => setSuccess(null), 3000)
+        } catch (err: any) {
+            setError(err.message)
+        } finally {
+            setAddingCategory(false)
+        }
     }
 
     const handleDeleteCategory = async (id: string, name: string) => {
-        setSuccess("Category deleted (UI Only mode)")
-        setTimeout(() => setSuccess(null), 3000)
+        try {
+            const { error: err } = await supabase
+                .from('expense_categories')
+                .delete()
+                .eq('id', id)
+            if (err) throw err
+
+            setSuccess(`Category "${name}" deleted`)
+            fetchData()
+            setTimeout(() => setSuccess(null), 3000)
+        } catch (err: any) {
+            setError(err.message)
+        }
     }
 
     const formatCurrency = (val: number) => `Rs. ${val.toLocaleString("en-PK")}`

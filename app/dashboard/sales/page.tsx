@@ -44,10 +44,13 @@ export default function SalesHistoryPage() {
   const [holdToRelease, setHoldToRelease] = useState<any>(null)
   const [releasing, setReleasing] = useState(false)
 
+  const [isMounted, setIsMounted] = useState(false)
+
   useEffect(() => {
     // get user inline for releases
     supabase.auth.getSession().then(({ data }) => setSessionUser(data.session?.user?.id || ''))
     fetchData()
+    setIsMounted(true)
   }, [selectedDate, activeTab])
 
   const fetchData = async () => {
@@ -141,18 +144,20 @@ export default function SalesHistoryPage() {
     return <Badge variant="outline" className="bg-white">Upcoming</Badge> // Default
   }
 
+  if (loading || !isMounted) return <div className="h-screen flex items-center justify-center"><BrandLoader /></div>
+
   return (
-    <div className="flex flex-col gap-6 max-w-7xl mx-auto pb-10">
+    <div className="flex flex-col gap-6 max-w-7xl mx-auto pb-10" suppressHydrationWarning>
 
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b pb-4 border-border/40">
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <Link href="/dashboard" legacyBehavior>
-              <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted/60 transition-colors">
+            <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted/60 transition-colors" asChild>
+              <Link href="/dashboard">
                 <ArrowLeft className="h-4 w-4" />
-              </Button>
-            </Link>
+              </Link>
+            </Button>
             <h1 className="text-3xl font-black tracking-tighter sm:text-4xl relative">
               Sales <span className="text-primary tracking-tighter">History</span>
               <div className="absolute -bottom-1 left-0 w-1/3 h-[2px] bg-primary/20 rounded-full" />

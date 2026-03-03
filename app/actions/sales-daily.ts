@@ -41,10 +41,16 @@ export async function saveDailyExpense(data: {
     description: string;
     amount: number;
     category?: string;
+    category_id?: string;
+    payment_method?: string;
+    paid_to?: string;
+    invoice_number?: string;
+    notes?: string;
 }) {
     const supabase = await createClient()
     const { error } = await supabase.from("daily_expenses").insert(data)
     if (error) throw error
+    revalidatePath("/dashboard/expenses")
     revalidatePath("/dashboard/sales")
     return { success: true }
 }
@@ -84,4 +90,19 @@ export async function getOpeningBalances(date: string) {
         opening_cash: data?.closing_cash || 0,
         opening_bank: data?.closing_bank || 0
     }
+}
+export async function getNozzleReadingForDate(nozzleId: string, date: string) {
+    const supabase = await createClient()
+    const { data, error } = await supabase
+        .from("daily_meter_readings")
+        .select("closing_reading")
+        .eq("nozzle_id", nozzleId)
+        .eq("reading_date", date)
+        .single()
+
+    if (error && error.code !== 'PGRST116') {
+        console.error("Error fetching nozzle reading:", error)
+    }
+
+    return data ? { closing_reading: Number(data.closing_reading) } : null
 }
