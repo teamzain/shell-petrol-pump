@@ -397,6 +397,7 @@ export async function closeDayForBalance(cashClosing: number, bankClosing: numbe
     const supabase = await createClient()
     const targetDate = date || getTodayPKT()
     const { data: { user } } = await supabase.auth.getUser()
+    const todayPKT = getTodayPKT()
 
     console.log('Closing day for:', targetDate, { cashClosing, bankClosing })
 
@@ -411,60 +412,131 @@ export async function closeDayForBalance(cashClosing: number, bankClosing: numbe
         })
         .eq("status_date", targetDate)
         .select()
+        .single()
 
     if (error) {
         console.error('Close day error:', error)
         throw error
     }
 
-    // 2. Automate next day opening
-    const nextDate = getNextDate(targetDate)
-
-    // A. Upsert next day in daily_accounts_status
-    console.log('Opening next day status for:', nextDate)
-    const { error: nextBalErr } = await supabase
+    // Re-fetch the closed day to get the actual stored closing values
+    const { data: closedDay } = await supabase
         .from("daily_accounts_status")
-        .upsert({
-            status_date: nextDate,
-            opening_cash: cashClosing,
-            closing_cash: cashClosing,
-            opening_bank: bankClosing,
-            closing_bank: bankClosing,
-            is_closed: false,
-            updated_at: new Date().toISOString()
-        }, { onConflict: 'status_date' })
+        .select("closing_cash, closing_bank")
+        .eq("status_date", targetDate)
+        .single()
 
-    if (nextBalErr) {
-        console.error('Next day status error:', nextBalErr)
-        throw new Error(`Failed to create next day status: ${nextBalErr.message}`)
+    const actualCashClosing = closedDay?.closing_cash ?? cashClosing
+    const actualBankClosing = closedDay?.closing_bank ?? bankClosing
+
+    console.log('Actual closing values:', { actualCashClosing, actualBankClosing })
+
+    // 2. Only auto-open the next day if it has already arrived (nextDate <= today)
+    //    Never pre-create a future date.
+    const nextDate = getNextDate(targetDate)
+    const shouldOpenNext = nextDate <= todayPKT
+
+    if (shouldOpenNext) {
+        console.log('Opening next day status for:', nextDate)
+
+        // A. Upsert next day in daily_accounts_status
+        const { error: nextBalErr } = await supabase
+            .from("daily_accounts_status")
+            .upsert({
+                status_date: nextDate,
+                opening_cash: actualCashClosing,
+                closing_cash: actualCashClosing,
+                opening_bank: actualBankClosing,
+                closing_bank: actualBankClosing,
+                is_closed: false,
+                updated_at: new Date().toISOString()
+            }, { onConflict: 'status_date' })
+
+        if (nextBalErr) {
+            console.error('Next day status error:', nextBalErr)
+            throw new Error(`Failed to create next day status: ${nextBalErr.message}`)
+        }
+
+        // B. Upsert next day in daily_operations
+        const { error: nextOpsErr } = await supabase
+            .from("daily_operations")
+            .upsert({
+                operation_date: nextDate,
+                status: 'open',
+                opening_cash: actualCashClosing,
+                opening_cash_actual: actualCashClosing,
+                opening_cash_variance: 0,
+                opening_bank: actualBankClosing,
+                opened_by: user?.id,
+                opened_at: new Date().toISOString()
+            }, { onConflict: 'operation_date' })
+
+        if (nextOpsErr) {
+            console.error('Next day operations error:', nextOpsErr)
+            throw new Error(`Failed to create next day operations: ${nextOpsErr.message}`)
+        }
+
+        console.log('Day closed and next day opened:', nextDate)
+    } else {
+        console.log('Next date', nextDate, 'is in the future — not auto-opening.')
     }
-
-    // B. Upsert next day in daily_operations
-    console.log('Opening next day operations for:', nextDate)
-    const { error: nextOpsErr } = await supabase
-        .from("daily_operations")
-        .upsert({
-            operation_date: nextDate,
-            status: 'open',
-            opening_cash: cashClosing,
-            opening_cash_actual: cashClosing,
-            opening_cash_variance: 0,
-            opening_bank: bankClosing,
-            opened_by: user?.id,
-            opened_at: new Date().toISOString()
-        }, { onConflict: 'operation_date' })
-
-    if (nextOpsErr) {
-        console.error('Next day operations error:', nextOpsErr)
-        // We don't necessarily throw here if status was created, but for consistency we should
-        throw new Error(`Failed to create next day operations: ${nextOpsErr.message}`)
-    }
-
-    console.log('Day closed and next day opened successfully')
 
     revalidatePath("/dashboard/balance")
     revalidatePath("/dashboard")
-    return { success: true }
+    return { success: true, nextDate, nextDateOpened: shouldOpenNext }
+}
+
+/**
+ * Fixes a day's opening balances by copying the previous day's closing balances.
+ * Use this to repair incorrect (e.g., 0.00) opening balances.
+ */
+export async function syncOpeningFromPreviousClosing(date: string) {
+    const supabase = await createClient()
+
+    // 1. Find the most recent closed day BEFORE the target date
+    const { data: prevDay, error: prevErr } = await supabase
+        .from("daily_accounts_status")
+        .select("status_date, closing_cash, closing_bank")
+        .eq("is_closed", true)
+        .lt("status_date", date)
+        .order("status_date", { ascending: false })
+        .limit(1)
+        .single()
+
+    if (prevErr || !prevDay) {
+        throw new Error("No previous closed day found to sync from.")
+    }
+
+    const prevCashClose = prevDay.closing_cash ?? 0
+    const prevBankClose = prevDay.closing_bank ?? 0
+
+    console.log(`Syncing ${date} opening from ${prevDay.status_date} closing:`, { prevCashClose, prevBankClose })
+
+    // 2. Update ONLY the target day's OPENING balances (never touch closing_cash/closing_bank
+    // as those accumulate from real transactions during the day)
+    const { error: updateErr } = await supabase
+        .from("daily_accounts_status")
+        .update({
+            opening_cash: prevCashClose,
+            opening_bank: prevBankClose,
+            updated_at: new Date().toISOString()
+        })
+        .eq("status_date", date)
+
+    if (updateErr) throw new Error(`Failed to sync opening balances: ${updateErr.message}`)
+
+    // 3. Also update daily_operations if a record exists
+    await supabase
+        .from("daily_operations")
+        .update({
+            opening_cash: prevCashClose,
+            opening_cash_actual: prevCashClose,
+            opening_bank: prevBankClose,
+        })
+        .eq("operation_date", date)
+
+    revalidatePath("/dashboard/balance")
+    return { success: true, opening_cash: prevCashClose, opening_bank: prevBankClose }
 }
 
 export async function updateSupplierTax(supplierId: string, taxPercentage: number) {

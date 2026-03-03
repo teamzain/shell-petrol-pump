@@ -74,6 +74,7 @@ import {
   recordBalanceTransaction,
   updateDailyOpeningBalances,
   closeDayForBalance,
+  syncOpeningFromPreviousClosing,
   addBankCard,
   addBankAccount
 } from "@/app/actions/balance"
@@ -231,9 +232,16 @@ export default function BalanceManagementPage() {
         if (firstOpenDay) {
           initialDate = firstOpenDay.status_date
         } else {
-          // All history is closed. Start with the day after the last closed day.
+          // All history is closed. Go to next day *only if it's not in the future*.
           const lastClosedDay = sortedHistory[sortedHistory.length - 1]
-          initialDate = getNextDate(lastClosedDay.status_date)
+          const nextDay = getNextDate(lastClosedDay.status_date)
+          const today = getTodayPKT()
+          // nextDay <= today means it has arrived
+          if (nextDay <= today) {
+            initialDate = nextDay
+          } else {
+            initialDate = today
+          }
         }
       }
 
@@ -259,6 +267,25 @@ export default function BalanceManagementPage() {
     fetchData(workingDate)
   }, [workingDate])
 
+  // Auto-sync opening balances when cash or bank opening is 0 and there's a prior closed day
+  useEffect(() => {
+    if (
+      todayBalance &&
+      !todayBalance.is_closed &&
+      ((todayBalance.opening_cash ?? 0) === 0 || (todayBalance.opening_bank ?? 0) === 0) &&
+      balanceHistory.some(h => h.is_closed && h.status_date < workingDate)
+    ) {
+      syncOpeningFromPreviousClosing(workingDate)
+        .then((result) => {
+          if (result.success) {
+            toast.info(`Opening balances synced from previous day's closing.`)
+            fetchData(workingDate)
+          }
+        })
+        .catch(() => { })
+    }
+  }, [todayBalance?.opening_cash, todayBalance?.opening_bank, workingDate])
+
   const handleSetOpeningBalance = async () => {
     setSaving(true)
     try {
@@ -280,14 +307,21 @@ export default function BalanceManagementPage() {
   const handleCloseDay = async () => {
     setSaving(true)
     try {
-      await closeDayForBalance(currentCashBalance, currentBankBalance, workingDate)
+      // totalBankAssets is the sum of all bank_accounts.current_balance — the true bank total
+      // currentCashBalance is the running cash figure from daily_accounts_status
+      const result = await closeDayForBalance(currentCashBalance, totalBankAssets, workingDate)
       toast.success("Day closed successfully")
       setCloseDialogOpen(false)
 
-      // Auto-progress to next day
-      const nextDay = getNextDate(workingDate)
-      setWorkingDate(nextDay)
-      toast.info(`Moved to ${nextDay}`)
+      // Only shift to next day if it has already arrived (not a future date)
+      if (result.nextDateOpened && result.nextDate) {
+        setWorkingDate(result.nextDate)
+        toast.info(`Moved to ${result.nextDate}`)
+      } else {
+        // Next day is in the future — stay on current date and just refresh
+        fetchData(workingDate)
+        toast.info("Day closed. Next day will open when it arrives.")
+      }
     } catch (err: any) {
       toast.error(err.message || "Failed to close day")
     } finally {
