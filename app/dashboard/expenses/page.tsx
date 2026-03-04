@@ -61,12 +61,18 @@ interface ExpenseCategory {
     category_type: string
 }
 
+interface ExpenseStats {
+    amount: number
+    expense_date: string
+}
+
 interface DailyBalance {
     id: string
-    cash_closing: number | null
-    cash_opening: number
-    bank_closing: number | null
-    bank_opening: number
+    status_date: string
+    opening_cash: number
+    closing_cash: number | null
+    opening_bank: number
+    closing_bank: number | null
     is_closed: boolean
 }
 
@@ -118,14 +124,19 @@ export default function ExpensesPage() {
     // Search & Filter
     const [searchQuery, setSearchQuery] = useState("")
     const [categoryFilter, setCategoryFilter] = useState("all")
+    const [dateRange, setDateRange] = useState({
+        start: getTodayPKT(),
+        end: getTodayPKT()
+    })
     const [expenses, setExpenses] = useState<Expense[]>([])
+    const [monthlyStatsData, setMonthlyStatsData] = useState<ExpenseStats[]>([])
 
     const supabase = createClient()
     const { toast } = useToast()
 
     useEffect(() => {
         fetchData()
-    }, [])
+    }, [dateRange.start, dateRange.end])
 
     const fetchData = async () => {
         setLoading(true)
@@ -139,10 +150,12 @@ export default function ExpensesPage() {
             if (catErr) throw catErr
             setCategories(catData || [])
 
-            // Fetch expenses
+            // Fetch expenses with date range
             const { data: expData, error: expErr } = await supabase
                 .from('daily_expenses')
                 .select('*, expense_categories(*)')
+                .gte('expense_date', dateRange.start)
+                .lte('expense_date', dateRange.end)
                 .order('expense_date', { ascending: false })
             if (expErr) throw expErr
 
@@ -154,12 +167,20 @@ export default function ExpensesPage() {
                 }
             })) || [])
 
-            // Fetch today's balance
-            const today = getTodayPKT()
+            // Fetch global month stats (independent of filter)
+            const startOfMonth = format(new Date(new Date().getFullYear(), new Date().getMonth(), 1), "yyyy-MM-dd")
+            const { data: monthData } = await supabase
+                .from('daily_expenses')
+                .select('amount, expense_date')
+                .gte('expense_date', startOfMonth)
+            setMonthlyStatsData(monthData || [])
+
+            // Fetch status for the selected end-date (or today)
+            const statusDate = dateRange.end
             const { data: balData, error: balErr } = await supabase
                 .from('daily_accounts_status')
                 .select('*')
-                .eq('status_date', today)
+                .eq('status_date', statusDate)
                 .single()
             if (balErr && balErr.code !== 'PGRST116') throw balErr
             setTodayBalance(balData || null)
@@ -178,21 +199,6 @@ export default function ExpensesPage() {
         }
     }
 
-    // --- Derived Stats ---
-    const stats = useMemo(() => {
-        const today = getTodayPKT()
-        const todayTotal = expenses
-            .filter(e => e.expense_date === today)
-            .reduce((sum, e) => sum + Number(e.amount), 0)
-
-        const startOfMonth = format(new Date(new Date().getFullYear(), new Date().getMonth(), 1), "yyyy-MM-dd")
-        const monthTotal = expenses
-            .filter(e => e.expense_date >= startOfMonth)
-            .reduce((sum, e) => sum + Number(e.amount), 0)
-
-        return { todayTotal, monthTotal }
-    }, [expenses])
-
     const filteredExpenses = useMemo(() => {
         return expenses.filter(e => {
             const matchesSearch = e.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -202,8 +208,30 @@ export default function ExpensesPage() {
         })
     }, [expenses, searchQuery, categoryFilter])
 
-    const currentCash = todayBalance?.cash_closing ?? todayBalance?.cash_opening ?? 0
-    const currentBank = todayBalance?.bank_closing ?? todayBalance?.bank_opening ?? 0
+    // --- Derived Stats ---
+    const stats = useMemo(() => {
+        const today = getTodayPKT()
+        // Today total from ALL expenses of today, not just from the filtered list
+        // However, usually today is in the filtered list if range is today.
+        // Let's use the monthlyStatsData for accurate "Global" stats
+
+        const todayTotal = monthlyStatsData
+            .filter(e => e.expense_date === today)
+            .reduce((sum, e) => sum + Number(e.amount), 0)
+
+        const startOfMonth = format(new Date(new Date().getFullYear(), new Date().getMonth(), 1), "yyyy-MM-dd")
+        const monthTotal = monthlyStatsData
+            .filter(e => e.expense_date >= startOfMonth)
+            .reduce((sum, e) => sum + Number(e.amount), 0)
+
+        // Total for the selected filtered view (table)
+        const filteredTotal = filteredExpenses.reduce((sum, e) => sum + Number(e.amount), 0)
+
+        return { todayTotal, monthTotal, filteredTotal }
+    }, [monthlyStatsData, filteredExpenses])
+
+    const currentCash = todayBalance?.closing_cash ?? todayBalance?.opening_cash ?? 0
+    const currentBank = todayBalance?.closing_bank ?? todayBalance?.opening_bank ?? 0
 
     const handleSubmit = async () => {
         if (!formData.description || !formData.amount || !formData.categoryId) {
@@ -220,6 +248,7 @@ export default function ExpensesPage() {
                 amount: parseFloat(formData.amount),
                 category_id: formData.categoryId,
                 payment_method: formData.paymentMethod,
+                bank_account_id: formData.paymentMethod === 'bank_transfer' ? formData.bankAccountId : undefined,
                 paid_to: formData.paidTo || undefined,
                 invoice_number: formData.invoiceNumber || undefined,
                 notes: formData.notes || undefined,
@@ -518,14 +547,22 @@ export default function ExpensesPage() {
             </div>
 
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                <Card className="border-l-4 border-l-primary shadow-sm">
+                <Card className="border-l-4 border-l-primary shadow-sm bg-primary/5">
                     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">Today's Expenses</CardTitle>
+                        <CardTitle className="text-sm font-bold uppercase tracking-wider text-primary">
+                            {dateRange.start === dateRange.end && dateRange.start === getTodayPKT()
+                                ? "Today's Expenses"
+                                : "Period Total"}
+                        </CardTitle>
                         <TrendingDown className="h-4 w-4 text-primary" />
                     </CardHeader>
                     <CardContent>
-                        <div className="text-2xl font-bold">{formatCurrency(stats.todayTotal)}</div>
-                        <p className="text-xs text-muted-foreground mt-1">Impact on today's books</p>
+                        <div className="text-3xl font-black tracking-tight">{formatCurrency(stats.filteredTotal)}</div>
+                        <p className="text-[10px] text-muted-foreground mt-1 uppercase font-bold tracking-tighter">
+                            {dateRange.start === dateRange.end
+                                ? `Expenses for ${format(new Date(dateRange.start), "MMM dd")}`
+                                : `Total for selected period`}
+                        </p>
                     </CardContent>
                 </Card>
                 <Card className="border-l-4 border-l-orange-500 shadow-sm">
@@ -550,12 +587,20 @@ export default function ExpensesPage() {
                 </Card>
                 <Card className="border-l-4 border-l-blue-500 shadow-sm">
                     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">Total Bank Balance</CardTitle>
+                        <CardTitle className="text-sm font-medium">
+                            {dateRange.end === getTodayPKT() ? "Total Bank Balance" : "Historical Bank Balance"}
+                        </CardTitle>
                         <PiggyBank className="h-4 w-4 text-blue-500" />
                     </CardHeader>
                     <CardContent>
-                        <div className="text-2xl font-bold">{formatCurrency(bankAccounts.reduce((sum, b) => sum + Number(b.current_balance), 0))}</div>
-                        <p className="text-xs text-muted-foreground mt-1 font-medium">Across all bank accounts</p>
+                        <div className="text-2xl font-bold">
+                            {dateRange.end === getTodayPKT()
+                                ? formatCurrency(bankAccounts.reduce((sum, b) => sum + Number(b.current_balance), 0))
+                                : formatCurrency(currentBank)}
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1 font-medium">
+                            {dateRange.end === getTodayPKT() ? "Across all bank accounts" : `As of ${format(new Date(dateRange.end), "MMM dd")}`}
+                        </p>
                     </CardContent>
                 </Card>
             </div>
@@ -591,6 +636,22 @@ export default function ExpensesPage() {
                                     className="pl-9 h-9"
                                     value={searchQuery}
                                     onChange={(e) => setSearchQuery(e.target.value)}
+                                />
+                            </div>
+                            <div className="flex items-center gap-2 border rounded-md px-2 bg-background shadow-sm">
+                                <Calendar className="h-4 w-4 text-muted-foreground" />
+                                <Input
+                                    type="date"
+                                    className="border-0 focus-visible:ring-0 w-32 h-8 text-xs p-1"
+                                    value={dateRange.start}
+                                    onChange={(e) => setDateRange(prev => ({ ...prev, start: e.target.value }))}
+                                />
+                                <span className="text-muted-foreground">to</span>
+                                <Input
+                                    type="date"
+                                    className="border-0 focus-visible:ring-0 w-32 h-8 text-xs p-1"
+                                    value={dateRange.end}
+                                    onChange={(e) => setDateRange(prev => ({ ...prev, end: e.target.value }))}
                                 />
                             </div>
                             <Select value={categoryFilter} onValueChange={setCategoryFilter}>

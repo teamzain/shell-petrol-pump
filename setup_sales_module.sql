@@ -131,7 +131,6 @@ INSERT INTO payment_methods (name, type, hold_days) VALUES
   ('Bank Card', 'bank_card', 3),     -- holds 3 days in bank
   ('Shell Card', 'supplier_card', 2); -- holds 2 days in company
 
--- Function 1: Get or Create Today's Opening Reading
 CREATE OR REPLACE FUNCTION get_opening_reading(
   p_nozzle_id UUID,
   p_date DATE
@@ -139,12 +138,12 @@ CREATE OR REPLACE FUNCTION get_opening_reading(
 DECLARE
   v_opening NUMERIC;
 BEGIN
-  -- Get previous day's closing reading
+  -- Get the most recent closing reading before the given date
   SELECT closing_reading INTO v_opening
   FROM daily_meter_readings
   WHERE nozzle_id = p_nozzle_id
-  AND reading_date = p_date - INTERVAL '1 day'
-  ORDER BY created_at DESC
+  AND reading_date < p_date
+  ORDER BY reading_date DESC, created_at DESC
   LIMIT 1;
   
   -- If no previous reading, return 0
