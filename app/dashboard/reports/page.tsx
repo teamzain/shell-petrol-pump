@@ -48,12 +48,9 @@ import { Separator } from "@/components/ui/separator"
 import { cn, getTodayPKT } from "@/lib/utils"
 
 // Report Components
-import { DailySummaryReport } from "@/components/reports/daily-summary"
-import { SalesAnalysisReport } from "@/components/reports/sales-analysis"
 import { SupplierPerformanceReport } from "@/components/reports/supplier-tracking"
 import { PurchaseHistoryReport } from "@/components/reports/purchase-history"
 import { ExpenseBreakdownReport } from "@/components/reports/expense-breakdown"
-import { ProfitLossStatement } from "@/components/reports/profit-loss"
 
 import {
     Dialog,
@@ -87,7 +84,7 @@ export default function ReportsPage() {
         status: "all"
     })
 
-    const [activeTab, setActiveTab] = useState("daily-summary")
+    const [activeTab, setActiveTab] = useState("supplier-tracking")
     const [reportData, setReportData] = useState<any>(null)
     const [isRefreshing, setIsRefreshing] = useState(false)
     const [isFiltersChanging, setIsFiltersChanging] = useState(false)
@@ -360,12 +357,6 @@ export default function ReportsPage() {
                     <div className="relative">
                         <div className="flex items-center justify-between mb-4 overflow-x-auto pb-2 scrollbar-hide">
                             <TabsList className="bg-muted/50 p-1 h-12">
-                                <TabsTrigger value="daily-summary" className="px-6 data-[state=active]:bg-background data-[state=active]:shadow-sm">
-                                    <FileText className="mr-2 h-4 w-4" /> Daily Summary
-                                </TabsTrigger>
-                                <TabsTrigger value="sales-analysis" className="px-6 data-[state=active]:bg-background data-[state=active]:shadow-sm">
-                                    <BarChart3 className="mr-2 h-4 w-4" /> Sales Analysis
-                                </TabsTrigger>
                                 <TabsTrigger value="supplier-tracking" className="px-6 data-[state=active]:bg-background data-[state=active]:shadow-sm">
                                     <Users className="mr-2 h-4 w-4" /> Suppliers
                                 </TabsTrigger>
@@ -374,9 +365,6 @@ export default function ReportsPage() {
                                 </TabsTrigger>
                                 <TabsTrigger value="expense-breakdown" className="px-6 data-[state=active]:bg-background data-[state=active]:shadow-sm">
                                     <Receipt className="mr-2 h-4 w-4" /> Expenses
-                                </TabsTrigger>
-                                <TabsTrigger value="profit-loss" className="px-6 data-[state=active]:bg-background data-[state=active]:shadow-sm">
-                                    <TrendingUp className="mr-2 h-4 w-4" /> P&L Statement
                                 </TabsTrigger>
                             </TabsList>
                         </div>
@@ -392,13 +380,6 @@ export default function ReportsPage() {
                             </div>
                         )}
 
-                        <TabsContent value="daily-summary" className="animate-in fade-in-50 duration-500">
-                            <DailySummaryReport filters={filters} onDetailClick={openDetail} onDataLoaded={setReportData} />
-                        </TabsContent>
-
-                        <TabsContent value="sales-analysis" className="animate-in fade-in-50 duration-500">
-                            <SalesAnalysisReport filters={filters} onDetailClick={openDetail} onDataLoaded={setReportData} />
-                        </TabsContent>
 
                         <TabsContent value="supplier-tracking" className="animate-in fade-in-50 duration-500">
                             <SupplierPerformanceReport filters={filters} onDetailClick={openDetail} onDataLoaded={setReportData} />
@@ -410,10 +391,6 @@ export default function ReportsPage() {
 
                         <TabsContent value="expense-breakdown" className="animate-in fade-in-50 duration-500">
                             <ExpenseBreakdownReport filters={filters} onDetailClick={openDetail} onDataLoaded={setReportData} />
-                        </TabsContent>
-
-                        <TabsContent value="profit-loss" className="animate-in fade-in-50 duration-500">
-                            <ProfitLossStatement filters={filters} onDetailClick={openDetail} onDataLoaded={setReportData} />
                         </TabsContent>
                     </div>
                 </Tabs>

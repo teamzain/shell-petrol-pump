@@ -165,6 +165,18 @@ export function StartDayDialog({ open, onOpenChange, onSuccess }: StartDayDialog
                 }
             })
 
+            // 4. Initialize Daily Accounts Status Record
+            await supabase.from("daily_accounts_status").upsert({
+                status_date: today,
+                opening_cash: enteredCash,
+                closing_cash: enteredCash,
+                opening_bank: previousClosing?.bank || 0,
+                closing_bank: previousClosing?.bank || 0,
+                opening_balances_set: true,
+                is_closed: false,
+                updated_at: new Date().toISOString()
+            }, { onConflict: 'status_date' })
+
             onSuccess()
             onOpenChange(false)
 

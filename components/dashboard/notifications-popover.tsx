@@ -178,40 +178,6 @@ export function NotificationsPopover() {
                 console.error("PO Hold Notifs error:", err)
             }
 
-            // 6. Fetch Sales Card Hold Notifications (New)
-            try {
-                const { data: salesHoldNotifs } = await supabase
-                    .from('card_hold_notifications')
-                    .select(`
-                        id, trigger_date, card_hold_id,
-                        card_hold_records(
-                            hold_amount, payment_type, sale_date,
-                            payment_methods(name),
-                            suppliers(name)
-                        )
-                    `)
-                    .lte('trigger_date', getTodayPKT())
-                    .eq('status', 'pending')
-
-                if (salesHoldNotifs) {
-                    salesHoldNotifs.forEach((sn: any) => {
-                        const hold = sn.card_hold_records || {}
-                        allItems.push({
-                            id: sn.id,
-                            title: "Card Hold Due",
-                            message: `PKR ${hold.hold_amount?.toLocaleString()} ${hold.payment_methods?.name} payment from ${format(new Date(hold.sale_date), 'dd MMM')} is due today.`,
-                            type: "warning",
-                            timestamp: sn.trigger_date,
-                            read: false,
-                            source: "system", // Using system for general behavior
-                            link: "/dashboard/sales",
-                            relatedHoldId: sn.card_hold_id
-                        })
-                    })
-                }
-            } catch (err) {
-                console.error("Sales Hold Notifs error:", err)
-            }
 
             // 4. Fetch Supplier Dues (Live) - Only if balance column exists (graceful fallback)
             try {

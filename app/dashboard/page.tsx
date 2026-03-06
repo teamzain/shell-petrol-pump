@@ -14,9 +14,7 @@ import {
   Plus,
 } from "lucide-react"
 import Link from "next/link"
-import { DailyOperationsWidget } from "@/components/dashboard/daily-operations-widget"
 import { HoldAlerts } from "@/components/dashboard/hold-alerts"
-import { SalesHoldAlerts } from "@/components/dashboard/sales-hold-alerts"
 import { BrandLoader } from "@/components/ui/brand-loader"
 
 type DashboardStats = {
@@ -108,12 +106,6 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Link href="/dashboard/sales" className="w-full sm:w-auto">
-            <Button className="w-full sm:w-auto">
-              <Plus className="w-4 h-4 mr-2" />
-              New Sale
-            </Button>
-          </Link>
         </div>
       </div>
 
@@ -121,9 +113,8 @@ export default function DashboardPage() {
       {/* <DailyOperationsWidget /> */}
 
       {/* Holds Alerts */}
-      <div className="grid gap-6 md:grid-cols-2">
+      <div className="grid gap-6 md:grid-cols-1">
         <HoldAlerts onlyToday={true} />
-        <SalesHoldAlerts onlyToday={true} />
       </div>
 
       {/* Stats Grid */}
@@ -164,12 +155,6 @@ export default function DashboardPage() {
               <Button variant="outline" className="w-full justify-start bg-transparent">
                 <Plus className="w-4 h-4 mr-2" />
                 Add Purchase
-              </Button>
-            </Link>
-            <Link href="/dashboard/sales">
-              <Button variant="outline" className="w-full justify-start bg-transparent">
-                <DollarSign className="w-4 h-4 mr-2" />
-                Record Sale
               </Button>
             </Link>
             <Link href="/dashboard/expenses/new">

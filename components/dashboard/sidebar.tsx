@@ -51,6 +51,7 @@ const navItems: NavItem[] = [
     ],
   },
   { title: "Suppliers", href: "/dashboard/suppliers", icon: Truck },
+  { title: "Purchases", href: "/dashboard/purchases", icon: ShoppingCart },
   {
     title: "Inventory",
     href: "/dashboard/inventory",
@@ -60,8 +61,16 @@ const navItems: NavItem[] = [
       { title: "Stock Movements", href: "/dashboard/inventory/movements" },
     ],
   },
-  { title: "Purchases", href: "/dashboard/purchases", icon: ShoppingCart },
-  { title: "Sales", href: "/dashboard/sales", icon: DollarSign },
+  {
+    title: "Sales",
+    href: "/dashboard/sales",
+    icon: DollarSign,
+    children: [
+      { title: "Nozzle Readings", href: "/dashboard/sales/nozzle-readings" },
+      { title: "Manual Entry", href: "/dashboard/sales/manual-entry" },
+      { title: "Sales History", href: "/dashboard/sales/history" },
+    ],
+  },
   {
     title: "Balance",
     href: "/dashboard/balance",
@@ -71,7 +80,6 @@ const navItems: NavItem[] = [
       { title: "Balance Movements", href: "/dashboard/balance/movements" },
     ],
   },
-  { title: "Nozzles", href: "/dashboard/nozzles", icon: Gauge },
   { title: "Expenses", href: "/dashboard/expenses", icon: Calculator },
   { title: "Reports", href: "/dashboard/reports", icon: BarChart3 },
   { title: "Users", href: "/dashboard/users", icon: Users },
@@ -81,6 +89,7 @@ const navItems: NavItem[] = [
     icon: Settings,
     children: [
       { title: "Profile", href: "/dashboard/settings" },
+      { title: "Nozzle Config", href: "/dashboard/settings/nozzles" },
       { title: "Payment Methods", href: "/dashboard/settings/payment-methods" },
     ],
   },

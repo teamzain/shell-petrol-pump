@@ -35,27 +35,7 @@ function exportToCSV(activeTab: string, reportData: any, dateRangeStr: string) {
     let csvContent = "data:text/csv;charset=utf-8,"
     let fileName = `report-${activeTab}-${getTodayPKT()}.csv`
 
-    if (activeTab === "daily-summary" && reportData.stockMovements) {
-        const headers = ["Product", "Type", "Quantity", "Balance After", "Date"]
-        csvContent += headers.join(",") + "\n"
-        reportData.stockMovements.forEach((m: any) => {
-            const row = [
-                m.products?.product_name || "N/A",
-                m.movement_type,
-                m.quantity,
-                m.balance_after,
-                format(new Date(m.movement_date || m.created_at || new Date()), "yyyy-MM-dd")
-            ]
-            csvContent += row.join(",") + "\n"
-        })
-    } else if (activeTab === "sales-analysis" && reportData.breakdownData) {
-        const headers = ["Product", "Volume", "Revenue", "Profit"]
-        csvContent += headers.join(",") + "\n"
-        reportData.breakdownData.forEach((d: any) => {
-            const row = [d.name, d.volume, d.revenue, d.profit]
-            csvContent += row.join(",") + "\n"
-        })
-    } else if (activeTab === "purchase-history" && Array.isArray(reportData)) {
+    if (activeTab === "purchase-history" && Array.isArray(reportData)) {
         const headers = ["Date", "Invoice", "Supplier", "Amount", "Status"]
         csvContent += headers.join(",") + "\n"
         reportData.forEach((o: any) => {
@@ -144,39 +124,7 @@ function exportToPDF(activeTab: string, reportData: any, dateRangeStr: string, s
 
     let nextY = 55
 
-    if (activeTab === "daily-summary" && reportData.stockMovements) {
-        nextY = addSummarySection("Key Performance Indicators", [
-            ["Total Revenue", `Rs. ${reportData.totalSales?.toLocaleString() || "0"}`],
-            ["Total Purchases", `Rs. ${reportData.totalPurchases?.toLocaleString() || "0"}`],
-            ["Total Expenses", `Rs. ${reportData.totalExpenses?.toLocaleString() || "0"}`],
-            ["Net Profit", `Rs. ${reportData.netProfit?.toLocaleString() || "0"}`],
-            ["Opening Balance", `Rs. ${reportData.openingBalance?.toLocaleString() || "0"}`],
-            ["Closing Balance", `Rs. ${reportData.closingBalance?.toLocaleString() || "0"}`],
-        ])
-
-        tableHeaders = ["Product", "Type", "Quantity", "Balance After", "Date"]
-        tableData = reportData.stockMovements.map((m: any) => [
-            m.products?.product_name || "N/A",
-            m.movement_type,
-            m.quantity,
-            m.balance_after,
-            format(new Date(m.movement_date || m.created_at || new Date()), "MMM dd, yyyy")
-        ])
-    } else if (activeTab === "sales-analysis" && reportData.breakdownData) {
-        nextY = addSummarySection("Sales Summary", [
-            ["Total Sales Revenue", `Rs. ${reportData.totalRevenue?.toLocaleString() || "0"}`],
-            ["Total Estimated Profit", `Rs. ${reportData.totalProfit?.toLocaleString() || "0"}`],
-            ["Transactions", `${(reportData.rawFuelSales?.length || 0) + (reportData.rawProductSales?.length || 0)}`],
-        ])
-
-        tableHeaders = ["Product", "Volume", "Revenue (Rs.)", "Profit (Rs.)"]
-        tableData = reportData.breakdownData.map((d: any) => [
-            d.name,
-            d.volume.toLocaleString(),
-            d.revenue.toLocaleString(),
-            d.profit.toLocaleString()
-        ])
-    } else if (activeTab === "purchase-history" && reportData.orders) {
+    if (activeTab === "purchase-history" && reportData.orders) {
         nextY = addSummarySection("Purchase Overview", [
             ["Total Purchase Value", `Rs. ${reportData.totalValue?.toLocaleString() || "0"}`],
             ["Total Paid Amount", `Rs. ${reportData.totalPaid?.toLocaleString() || "0"}`],
@@ -220,50 +168,6 @@ function exportToPDF(activeTab: string, reportData: any, dateRangeStr: string, s
             s.total_purchases.toLocaleString(),
             s.outstandingDues.toLocaleString()
         ])
-    } else if (activeTab === "profit-loss" && reportData) {
-        // Custom P&L formatting
-        const body = [
-            ["Operating Revenue", ""],
-            ["  Fuel Sales", reportData.revFuel?.toLocaleString() || "0"],
-            ["  Product Sales", reportData.revProd?.toLocaleString() || "0"],
-            ["Total Revenue", reportData.totalRev?.toLocaleString() || "0"],
-            ["", ""],
-            ["Direct Costs (COGS)", ""],
-            ["  Opening Stock", reportData.openingStockValue?.toLocaleString() || "0"],
-            ["  Purchases", reportData.totalPurchases?.toLocaleString() || "0"],
-            ["  Closing Stock", `(${reportData.closingStockValue?.toLocaleString() || "0"})`],
-            ["Total Cost of Goods Sold", `(${reportData.cogs?.toLocaleString() || "0"})`],
-            ["", ""],
-            ["Gross Profit", reportData.grossProfit?.toLocaleString() || "0"],
-            ["", ""],
-            ["Operating Expenses", ""],
-            ["  General & Admin", `(${reportData.totalExp?.toLocaleString() || "0"})`],
-            ["", ""],
-            ["Net Profit", reportData.netProfit?.toLocaleString() || "0"],
-        ]
-
-        autoTable(doc, {
-            startY: 55,
-            head: [["Category", "Amount (Rs.)"]],
-            body: body,
-            theme: 'striped',
-            headStyles: { fillColor: [41, 128, 185], textColor: 255 },
-            didParseCell: function (data) {
-                if (data.section === 'body' && (
-                    data.row.index === 0 ||
-                    data.row.index === 3 ||
-                    data.row.index === 5 ||
-                    data.row.index === 9 ||
-                    data.row.index === 11 ||
-                    data.row.index === 13 ||
-                    data.row.index === 16
-                )) {
-                    data.cell.styles.fontStyle = 'bold';
-                }
-            }
-        })
-        doc.save(`report-${activeTab}-${getTodayPKT()}.pdf`)
-        return
     }
 
     if (tableHeaders.length > 0) {

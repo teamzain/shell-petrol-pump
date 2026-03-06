@@ -1,0 +1,22 @@
+Read Attempt: {
+  "data": [],
+  "error": null
+}
+
+Insert Attempt (Empty): {
+  "code": "23502",
+  "details": "Failing row contains (a9b3b64b-c773-41ee-8945-904e3f6d5f8d, null, null, null, null, null, null, null, null, on_hold, null, null, 2026-03-06 22:39:42.735451+00, 2026-03-06 22:39:42.735451+00, null, null).",
+  "hint": null,
+  "message": "null value in column \"payment_type\" of relation \"card_hold_records\" violates not-null constraint"
+}
+
+Check Column 'card_type': column card_hold_records.card_type does not exist
+Check Column 'payment_method': column card_hold_records.payment_method does not exist
+Check Column 'method': column card_hold_records.method does not exist
+Check Column 'type': column card_hold_records.type does not exist
+Check Column 'category': column card_hold_records.category does not exist
+Check Column 'status': EXISTS
+Check Column 'sale_date': EXISTS
+Check Column 'hold_amount': EXISTS
+Check Column 'amount': column card_hold_records.amount does not exist
+Check Column 'net_amount': column card_hold_records.net_amount does not exist

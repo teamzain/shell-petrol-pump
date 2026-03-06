@@ -90,12 +90,25 @@ export async function getBalanceOverviewData(date?: string) {
         throw new Error(`Database Error: ${errors.join(' | ')}`)
     }
 
+    // 5b. Fetch Pending Card Holdings
+    const { data: cardHoldings } = await supabase
+        .from("card_hold_records")
+        .select(`
+            *,
+            bank_cards ( card_name, bank_accounts ( bank_name ) ),
+            supplier_cards ( card_name, suppliers ( name ) )
+        `)
+        .eq("status", "pending")
+        .order("created_at", { ascending: false })
+
+
     return {
         todayBalance: todayBalance || null,
         balanceHistory: balanceHistory || [],
         bankAccounts: bankAccounts || [],
         bankCards: bankCards || [],
         supplierCards: supplierCards || [],
+        cardHoldings: cardHoldings || [],
         suppliers: (suppliers || []).map((s: any) => {
             // company_accounts can be array (one-to-many) or object (single) or null
             const accounts = s.company_accounts
@@ -288,20 +301,19 @@ export async function recordBalanceTransaction(data: {
         amount: data.amount,
         description: data.description,
         transaction_date: targetDate,
-        created_by: user.id
+        created_by: user.id,
+        bank_account_id: data.bank_account_id,
+        bank_card_id: data.bank_card_id,
+        supplier_id: data.supplier_id,
+        supplier_card_id: data.supplier_card_id,
+        is_opening: data.isOpeningBalance || false
     }
-    if (data.bank_account_id) insertPayload.bank_account_id = data.bank_account_id
-    if (data.bank_card_id) insertPayload.bank_card_id = data.bank_card_id
-    if (data.supplier_id) insertPayload.supplier_id = data.supplier_id
-    if (data.supplier_card_id) insertPayload.supplier_card_id = data.supplier_card_id
-    if (data.isOpeningBalance) insertPayload.is_opening = true
 
     const { error: txErr } = await supabase
         .from("balance_transactions")
         .insert(insertPayload)
 
-    // Ignore error if bank_card_id or is_opening column doesn't exist yet
-    if (txErr && !txErr.message?.includes('bank_card_id') && !txErr.message?.includes('is_opening')) throw txErr
+    if (txErr) throw txErr
 
     // 2. Resolve target bank account if card is used
     let effectiveBankId = data.bank_account_id
@@ -665,5 +677,71 @@ export async function updateSupplierCard(id: string, data: {
     if (error) throw error
 
     revalidatePath("/dashboard/balance")
+    return { success: true }
+}
+
+/**
+ * Release a card hold record into a bank account
+ */
+export async function releaseCardHold(holdId: string, bankAccountId: string) {
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) throw new Error("Unauthorized")
+
+    // 1. Get hold record
+    const { data: hold, error: fetchErr } = await supabase
+        .from('card_hold_records')
+        .select('*')
+        .eq('id', holdId)
+        .single()
+
+    if (fetchErr || !hold) throw new Error("Hold record not found")
+    if (hold.status !== 'pending') throw new Error("Record already processed")
+
+    // 2. Update hold record status
+    const { error: updateErr } = await supabase
+        .from('card_hold_records')
+        .update({
+            status: 'released',
+            released_at: new Date().toISOString(),
+            bank_account_id: bankAccountId
+        })
+        .eq('id', holdId)
+
+    if (updateErr) throw new Error(updateErr.message)
+
+    // 3. Update Target Bank Current Balance
+    const { data: bank } = await supabase.from('bank_accounts').select('current_balance').eq('id', bankAccountId).single()
+    if (bank) {
+        await supabase.from('bank_accounts').update({
+            current_balance: Number(bank.current_balance) + Number(hold.net_amount)
+        }).eq('id', bankAccountId)
+    }
+
+    // 4. Update daily_accounts_status (Subtract from hold, Add to received)
+    const { data: dailyStat } = await supabase
+        .from('daily_accounts_status')
+        .select('total_card_hold, total_card_received')
+        .eq('status_date', hold.sale_date)
+        .single()
+
+    if (dailyStat) {
+        await supabase.from('daily_accounts_status').update({
+            total_card_hold: Math.max(0, (Number(dailyStat.total_card_hold) || 0) - Number(hold.hold_amount)),
+            total_card_received: (Number(dailyStat.total_card_received) || 0) + Number(hold.net_amount)
+        }).eq('status_date', hold.sale_date)
+    }
+
+    // 5. Record transaction for reconciliation
+    await supabase.from('balance_transactions').insert({
+        transaction_type: 'add_bank',
+        amount: hold.net_amount,
+        bank_account_id: bankAccountId,
+        description: `Card Settlement: ${hold.card_type} (Hold ID: ${hold.id})`,
+        transaction_date: hold.sale_date,
+        created_by: user.id
+    })
+
+    revalidatePath('/dashboard/balance')
     return { success: true }
 }

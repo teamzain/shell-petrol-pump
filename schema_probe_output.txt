@@ -1,0 +1,21 @@
+Probing columns for card_hold_records:
+id: EXISTS
+sale_date: EXISTS
+sale_id: EXISTS
+card_type: EXISTS
+payment_type: EXISTS
+type: MISSING (column card_hold_records.type does not exist)
+bank_card_id: EXISTS
+supplier_card_id: EXISTS
+amount: MISSING (column card_hold_records.amount does not exist)
+hold_amount: EXISTS
+tax_percentage: EXISTS
+tax_amount: EXISTS
+net_amount: EXISTS
+status: EXISTS
+released_at: EXISTS
+actual_release_date: EXISTS
+bank_account_id: EXISTS
+created_at: EXISTS
+updated_at: EXISTS
+created_by: EXISTS

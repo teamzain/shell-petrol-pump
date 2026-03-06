@@ -1,21 +1,39 @@
-
 const { createClient } = require('@supabase/supabase-js');
-
-const supabaseUrl = 'https://fidxjegjkpilfgkbkboi.supabase.co';
-const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZpZHhqZWdqa3BpbGZna2JrYm9pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE3ODgzMTcsImV4cCI6MjA4NzM2NDMxN30.zNrRcK15Iyy-cg9P-bD0i8waJVVXreADHwVFd_Vphzs';
-const supabase = createClient(supabaseUrl, supabaseKey);
+const { execSync } = require('child_process');
 
 async function checkSchema() {
-    const { data, error } = await supabase
-        .from('products')
-        .select('*')
-        .limit(1);
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-    if (error) {
-        console.error('Error fetching products:', error);
-    } else {
-        console.log('Sample product:', data[0]);
-        console.log('Fields:', data[0] ? Object.keys(data[0]) : 'No data');
+    if (!url || !key) {
+        console.error('Missing Supabase credentials');
+        return;
+    }
+
+    const supabase = createClient(url, key);
+
+    try {
+        // Try to get one record to see keys
+        const { data, error } = await supabase.from('card_hold_records').select('*').limit(1);
+
+        if (error) {
+            console.log('Error selecting from table:', error.message);
+            // If column not found on select *, it's really missing or cache is broken
+        } else {
+            if (data.length > 0) {
+                console.log('Columns in card_hold_records:', Object.keys(data[0]));
+            } else {
+                console.log('Table found but empty. Trying to trigger a schema error by selecting card_type explicitly...');
+                const { error: error2 } = await supabase.from('card_hold_records').select('card_type').limit(1);
+                if (error2) {
+                    console.log('Confirmation error:', error2.message);
+                } else {
+                    console.log('card_type exists according to direct select');
+                }
+            }
+        }
+    } catch (err) {
+        console.error('Script error:', err);
     }
 }
 
