@@ -1,87 +1,91 @@
--- Enable UUID extension
+-- consolidated fix for missing expense and bank tables
+-- enable uuid extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
--- 1. Tanks Table
-CREATE TABLE IF NOT EXISTS tanks (
+-- 1. Ensure expense_categories exists
+CREATE TABLE IF NOT EXISTS expense_categories (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name TEXT NOT NULL, -- e.g. "Super Tank 1"
-    product_id UUID REFERENCES products(id),
-    capacity NUMERIC(12, 2) NOT NULL,
-    dry_level NUMERIC(12, 2) NOT NULL DEFAULT 500, -- Minimum safe level
-    current_level NUMERIC(12, 2) NOT NULL DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now()
+    category_name TEXT NOT NULL UNIQUE,
+    category_type TEXT DEFAULT 'operating', -- operating, fixed, maintenance, other
+    created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- 2. Link Dispensers to Tanks (Migration)
-ALTER TABLE dispensers ADD COLUMN IF NOT EXISTS tank_id UUID REFERENCES tanks(id);
+-- Insert default categories
+INSERT INTO expense_categories (category_name, category_type)
+VALUES 
+('Staff Salary', 'operating'),
+('Electricity Bill', 'fixed'),
+('Generator Fuel', 'operating'),
+('Stationery', 'operating'),
+('Site Maintenance', 'maintenance')
+ON CONFLICT (category_name) DO NOTHING;
 
--- 3. Daily Expenses Table
+-- 2. Ensure daily_expenses exists and has correct columns
 CREATE TABLE IF NOT EXISTS daily_expenses (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     expense_date DATE NOT NULL DEFAULT CURRENT_DATE,
     description TEXT NOT NULL,
     amount NUMERIC(12, 2) NOT NULL,
-    category_id UUID REFERENCES expense_categories(id),
-    bank_account_id UUID REFERENCES bank_accounts(id),
-    payment_method TEXT DEFAULT 'cash',
-    paid_to TEXT,
-    invoice_number TEXT,
-    notes TEXT,
-    created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now()
-);
--- For both loose and packed lubricants
-CREATE TABLE IF NOT EXISTS lubricant_sales (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    sale_date DATE NOT NULL DEFAULT CURRENT_DATE,
-    product_id UUID REFERENCES products(id),
-    is_loose BOOLEAN DEFAULT false, -- true if sold by litre, false if packed
-    pack_size TEXT, -- e.g. "4L", "5L"
-    quantity NUMERIC(12, 2) NOT NULL, -- litres or units
-    rate NUMERIC(12, 2) NOT NULL,
-    total_amount NUMERIC(12, 2) NOT NULL,
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
 );
 
--- 5. Daily Accounts Status (Cash/Bank Carry Forward)
-CREATE TABLE IF NOT EXISTS daily_accounts_status (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    status_date DATE NOT NULL UNIQUE,
-    opening_cash NUMERIC(12, 2) DEFAULT 0,
-    closing_cash NUMERIC(12, 2) DEFAULT 0,
-    opening_bank NUMERIC(12, 2) DEFAULT 0,
-    closing_bank NUMERIC(12, 2) DEFAULT 0,
-    shell_account_balance NUMERIC(12, 2) DEFAULT 0,
-    total_fuel_sale NUMERIC(12, 2) DEFAULT 0,
-    total_lube_sale NUMERIC(12, 2) DEFAULT 0,
-    total_expenses NUMERIC(12, 2) DEFAULT 0,
-    net_cash_sale NUMERIC(12, 2) DEFAULT 0,
-    opening_balances_set BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now()
-);
-
--- 6. Add some Lubricant specific fields to products if not there
-ALTER TABLE products ADD COLUMN IF NOT EXISTS lubricant_type TEXT CHECK (lubricant_type IN ('loose', 'packed'));
--- For packed lubricants, we might have multiple pack sizes. 
--- In a simple system, each pack size can be a separate product, or we use a JSONB field.
--- For now, let's keep it simple: each pack size is a separate product entry.
-
--- 7. Add dry level warning trigger/check helper
-CREATE OR REPLACE FUNCTION check_tank_dry_level()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF NEW.current_level < NEW.dry_level THEN
-        -- We could insert a notification record here if a notifications table exists
-        -- In this system, we'll just let the UI handle the warning based on the reading
+-- Explicitly add columns and foreign keys to handle cases where table already existed
+DO $$ 
+BEGIN 
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='daily_expenses' AND column_name='category_id') THEN
+        ALTER TABLE daily_expenses ADD COLUMN category_id UUID REFERENCES expense_categories(id);
     END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
 
--- 8. Function to finalize day (Carry Forward)
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='daily_expenses' AND column_name='bank_account_id') THEN
+        ALTER TABLE daily_expenses ADD COLUMN bank_account_id UUID REFERENCES bank_accounts(id);
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='daily_expenses' AND column_name='payment_method') THEN
+        ALTER TABLE daily_expenses ADD COLUMN payment_method TEXT DEFAULT 'cash';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='daily_expenses' AND column_name='paid_to') THEN
+        ALTER TABLE daily_expenses ADD COLUMN paid_to TEXT;
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='daily_expenses' AND column_name='invoice_number') THEN
+        ALTER TABLE daily_expenses ADD COLUMN invoice_number TEXT;
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='daily_expenses' AND column_name='notes') THEN
+        ALTER TABLE daily_expenses ADD COLUMN notes TEXT;
+    END IF;
+END $$;
+
+-- 3. Ensure bank_accounts exists
+CREATE TABLE IF NOT EXISTS bank_accounts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    account_name TEXT NOT NULL,
+    account_number TEXT,
+    bank_name TEXT,
+    opening_balance NUMERIC(15, 2) DEFAULT 0,
+    current_balance NUMERIC(15, 2) DEFAULT 0,
+    status TEXT DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Ensure RLS is enabled and policies are set (Relaxed for this stage)
+ALTER TABLE expense_categories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE daily_expenses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bank_accounts ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow authenticated full access to expense_categories" ON expense_categories;
+CREATE POLICY "Allow authenticated full access to expense_categories" ON expense_categories FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow authenticated full access to daily_expenses" ON daily_expenses;
+CREATE POLICY "Allow authenticated full access to daily_expenses" ON daily_expenses FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow authenticated full access to bank_accounts" ON bank_accounts;
+CREATE POLICY "Allow authenticated full access to bank_accounts" ON bank_accounts FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- 4. Improved Finalization logic to handle cash vs bank expenses
 CREATE OR REPLACE FUNCTION finalize_daily_status(
     p_date DATE,
     p_user_id UUID
@@ -93,7 +97,7 @@ DECLARE
     v_prev_date DATE := p_date - INTERVAL '1 day';
     v_fuel_sale NUMERIC;
     v_lube_sale NUMERIC;
-    v_expenses NUMERIC;
+    v_expenses NUMERIC; -- Cash expenses
     v_bank_expenses NUMERIC;
     v_shell_card NUMERIC;
     v_bank_card NUMERIC;

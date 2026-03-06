@@ -296,17 +296,17 @@ export default function SalesHistoryPage() {
                       sales.map((sale) => (
                         <TableRow key={sale.id} className="hover:bg-muted/10 transition-colors">
                           <TableCell className="font-medium">
-                            {sale.dispensers.name}
-                            <div className="text-[10px] text-muted-foreground uppercase">Nozzle {sale.nozzles.nozzle_number}</div>
+                            {sale.dispensers?.name || 'N/A'}
+                            <div className="text-[10px] text-muted-foreground uppercase">Nozzle {sale.nozzles?.nozzle_number || 'N/A'}</div>
                           </TableCell>
                           <TableCell>
-                            <Badge variant="outline" className="bg-white">{sale.products.name}</Badge>
+                            <Badge variant="outline" className="bg-white">{sale.products?.name || 'N/A'}</Badge>
                           </TableCell>
                           <TableCell className="text-right font-black tracking-tight">{Number(sale.liters_sold).toFixed(2)}</TableCell>
                           <TableCell className="text-right font-black text-primary tracking-tight">{Number(sale.total_amount).toLocaleString()}</TableCell>
                           <TableCell className="text-center">
                             <span className="text-xs font-bold bg-muted px-2 py-1 rounded-md">
-                              {sale.payment_methods.name}
+                              {sale.payment_methods?.name || 'N/A'}
                             </span>
                           </TableCell>
                           <TableCell className="text-center">
@@ -365,7 +365,7 @@ export default function SalesHistoryPage() {
                           <TableCell className="font-medium">
                             <span className="flex items-center gap-2">
                               <div className="h-1.5 w-1.5 rounded-full bg-primary" />
-                              {reading.dispensers.name} - Nozzle {reading.nozzles.nozzle_number}
+                              {reading.dispensers?.name || 'N/A'} - Nozzle {reading.nozzles?.nozzle_number || 'N/A'}
                             </span>
                           </TableCell>
                           <TableCell className="text-right font-mono text-muted-foreground">
@@ -431,9 +431,9 @@ export default function SalesHistoryPage() {
                         <TableRow key={hold.id} className="hover:bg-muted/10 transition-colors">
                           <TableCell className="font-mono text-xs">{format(new Date(hold.sale_date), 'dd MMM yyyy')}</TableCell>
                           <TableCell>
-                            <div className="font-medium text-sm">{hold.payment_methods.name}</div>
+                            <div className="font-medium text-sm">{hold.payment_methods?.name || 'N/A'}</div>
                             {hold.payment_type === 'supplier_card' && hold.suppliers && (
-                              <div className="text-[10px] text-muted-foreground">via {hold.suppliers.name}</div>
+                              <div className="text-[10px] text-muted-foreground">via {hold.suppliers?.name || 'N/A'}</div>
                             )}
                           </TableCell>
                           <TableCell className="text-right font-black tracking-tight text-[#1a1a1a]">
@@ -542,7 +542,7 @@ export default function SalesHistoryPage() {
                 </div>
                 <div className="flex justify-between items-center mb-2">
                   <div className="text-sm text-muted-foreground">Payment Method</div>
-                  <div className="font-bold">{holdToRelease.payment_methods.name}</div>
+                  <div className="font-bold">{holdToRelease.payment_methods?.name || 'N/A'}</div>
                 </div>
                 <div className="flex justify-between items-center pt-2 border-t mt-2">
                   <div className="font-bold text-slate-700 uppercase text-xs tracking-widest">Amount to Release</div>
@@ -553,7 +553,7 @@ export default function SalesHistoryPage() {
                 Releasing this hold will update the transaction status.
                 {holdToRelease.payment_type === 'supplier_card' && holdToRelease.suppliers && (
                   <span className="block mt-2 text-green-700 font-medium p-2 bg-green-50 rounded">
-                    ✓ Funds will be automatically credited to your {holdToRelease.suppliers.name} company account.
+                    ✓ Funds will be automatically credited to your {holdToRelease.suppliers?.name || 'N/A'} company account.
                   </span>
                 )}
               </p>

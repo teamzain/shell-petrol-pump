@@ -153,8 +153,10 @@ export default function PaymentMethodsPage() {
                                         <SelectValue />
                                     </SelectTrigger>
                                     <SelectContent>
+                                        <SelectItem value="cash">💵 Cash</SelectItem>
                                         <SelectItem value="bank_card">💳 Bank Card</SelectItem>
                                         <SelectItem value="shell_card">🐚 Shell Card</SelectItem>
+                                        <SelectItem value="supplier_card">🚛 Supplier Card</SelectItem>
                                         <SelectItem value="digital_wallet">📱 Digital Wallet</SelectItem>
                                         <SelectItem value="other">❓ Other</SelectItem>
                                     </SelectContent>
