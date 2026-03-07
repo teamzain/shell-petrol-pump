@@ -186,6 +186,7 @@ export async function addBankAccount(data: {
     account_number?: string;
     bank_name?: string;
     opening_balance: number;
+    account_type: 'bank' | 'supplier';
 }) {
     const supabase = await createClient()
 
@@ -614,6 +615,7 @@ export async function updateBankAccount(id: string, data: {
     account_number?: string;
     bank_name?: string;
     opening_balance?: number;
+    account_type?: 'bank' | 'supplier';
 }) {
     const supabase = await createClient()
 
@@ -681,9 +683,9 @@ export async function updateSupplierCard(id: string, data: {
 }
 
 /**
- * Release a card hold record into a bank account
+ * Release a card hold record into a bank account or supplier account
  */
-export async function releaseCardHold(holdId: string, bankAccountId: string) {
+export async function releaseCardHold(holdId: string, targetId: string) {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) throw new Error("Unauthorized")
@@ -698,24 +700,63 @@ export async function releaseCardHold(holdId: string, bankAccountId: string) {
     if (fetchErr || !hold) throw new Error("Hold record not found")
     if (hold.status !== 'pending') throw new Error("Record already processed")
 
+    const isBankTarget = targetId.startsWith('acc_')
+    const actualTargetId = targetId.replace(/^(acc_|supp_)/, '')
+
     // 2. Update hold record status
     const { error: updateErr } = await supabase
         .from('card_hold_records')
         .update({
             status: 'released',
             released_at: new Date().toISOString(),
-            bank_account_id: bankAccountId
+            bank_account_id: isBankTarget ? actualTargetId : null,
+            supplier_id: !isBankTarget ? actualTargetId : null
         })
         .eq('id', holdId)
 
     if (updateErr) throw new Error(updateErr.message)
 
-    // 3. Update Target Bank Current Balance
-    const { data: bank } = await supabase.from('bank_accounts').select('current_balance').eq('id', bankAccountId).single()
-    if (bank) {
-        await supabase.from('bank_accounts').update({
-            current_balance: Number(bank.current_balance) + Number(hold.net_amount)
-        }).eq('id', bankAccountId)
+    if (isBankTarget) {
+        // 3a. Update Target Bank Current Balance
+        const { data: bank } = await supabase.from('bank_accounts').select('current_balance').eq('id', actualTargetId).single()
+        if (bank) {
+            await supabase.from('bank_accounts').update({
+                current_balance: Number(bank.current_balance) + Number(hold.net_amount)
+            }).eq('id', actualTargetId)
+        }
+
+        // 5a. Record transaction for reconciliation
+        await supabase.from('balance_transactions').insert({
+            transaction_type: 'add_bank',
+            amount: hold.net_amount,
+            bank_account_id: actualTargetId,
+            description: `Card Settlement: ${hold.card_type} (Hold ID: ${hold.id})`,
+            transaction_date: hold.sale_date,
+            created_by: user.id
+        })
+    } else {
+        // 3b. Update Supplier Balance (company_accounts)
+        const { data: supplierAcc } = await supabase
+            .from('company_accounts')
+            .select('current_balance')
+            .eq('supplier_id', actualTargetId)
+            .single()
+
+        if (supplierAcc) {
+            await supabase.from('company_accounts').update({
+                current_balance: Number(supplierAcc.current_balance) + Number(hold.net_amount)
+            }).eq('supplier_id', actualTargetId)
+        }
+
+        // 5b. Record transaction for reconciliation
+        await supabase.from('balance_transactions').insert({
+            transaction_type: 'supplier_transfer',
+            amount: hold.net_amount,
+            supplier_id: actualTargetId,
+            description: `Card Settlement: ${hold.card_type} (Hold ID: ${hold.id})`,
+            transaction_date: hold.sale_date,
+            created_by: user.id
+        })
     }
 
     // 4. Update daily_accounts_status (Subtract from hold, Add to received)
@@ -732,16 +773,7 @@ export async function releaseCardHold(holdId: string, bankAccountId: string) {
         }).eq('status_date', hold.sale_date)
     }
 
-    // 5. Record transaction for reconciliation
-    await supabase.from('balance_transactions').insert({
-        transaction_type: 'add_bank',
-        amount: hold.net_amount,
-        bank_account_id: bankAccountId,
-        description: `Card Settlement: ${hold.card_type} (Hold ID: ${hold.id})`,
-        transaction_date: hold.sale_date,
-        created_by: user.id
-    })
-
     revalidatePath('/dashboard/balance')
+    revalidatePath('/dashboard/sales/history')
     return { success: true }
 }

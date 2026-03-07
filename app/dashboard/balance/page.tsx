@@ -199,7 +199,8 @@ export default function BalanceManagementPage() {
     account_name: "",
     account_number: "",
     bank_name: "",
-    opening_balance: "0"
+    opening_balance: "0",
+    account_type: "bank"
   })
 
   const [dailyCardEntries, setDailyCardEntries] = useState<DailyCardEntry[]>([
@@ -378,7 +379,7 @@ export default function BalanceManagementPage() {
     try {
       // totalBankAssets is the sum of all bank_accounts.current_balance — the true bank total
       // currentCashBalance is the running cash figure from daily_accounts_status
-      const result = await closeDayForBalance(currentCashBalance, totalBankAssets, workingDate)
+      const result = await closeDayForBalance(totalCashBalance, totalBankAssets, workingDate)
       toast.success("Day closed successfully")
       setCloseDialogOpen(false)
 
@@ -537,7 +538,8 @@ export default function BalanceManagementPage() {
           account_name: bankAccountData.account_name,
           account_number: bankAccountData.account_number,
           bank_name: bankAccountData.bank_name,
-          opening_balance: Number(bankAccountData.opening_balance)
+          opening_balance: Number(bankAccountData.opening_balance),
+          account_type: bankAccountData.account_type as 'bank' | 'supplier'
         })
         toast.success("Bank account updated")
       } else {
@@ -545,7 +547,8 @@ export default function BalanceManagementPage() {
           account_name: bankAccountData.account_name,
           account_number: bankAccountData.account_number,
           bank_name: bankAccountData.bank_name,
-          opening_balance: Number(bankAccountData.opening_balance)
+          opening_balance: Number(bankAccountData.opening_balance),
+          account_type: bankAccountData.account_type as 'bank' | 'supplier'
         })
         toast.success("Bank account added")
       }
@@ -555,7 +558,8 @@ export default function BalanceManagementPage() {
         account_name: "",
         account_number: "",
         bank_name: "",
-        opening_balance: "0"
+        opening_balance: "0",
+        account_type: "bank"
       })
       fetchData()
     } catch (err: any) {
@@ -640,7 +644,8 @@ export default function BalanceManagementPage() {
   }
 
   // daily_accounts_status uses opening_cash / closing_cash / opening_bank / closing_bank
-  const currentCashBalance = todayBalance?.closing_cash ?? todayBalance?.opening_cash ?? 0
+  // We sum them for "Total Cash" as requested by user
+  const totalCashBalance = (todayBalance?.opening_cash || 0) + (todayBalance?.closing_cash || 0)
   const currentBankBalance = todayBalance?.closing_bank ?? todayBalance?.opening_bank ?? 0
   const totalBankAssets = bankAccounts.reduce((acc, bank) => acc + (bank.current_balance || 0), 0)
 
@@ -742,7 +747,7 @@ export default function BalanceManagementPage() {
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => {
               setEditingBankAccountId(null)
-              setBankAccountData({ account_name: "", account_number: "", bank_name: "", opening_balance: "0" })
+              setBankAccountData({ account_name: "", account_number: "", bank_name: "", opening_balance: "0", account_type: "bank" })
               setBankAccountDialogOpen(true)
             }}>
               <Banknote className="mr-2 h-4 w-4" />
@@ -774,7 +779,7 @@ export default function BalanceManagementPage() {
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-bold uppercase tracking-wider flex items-center gap-2 text-muted-foreground">
               <Wallet className="h-4 w-4 text-primary" />
-              Cash Balance (Net)
+              Cash Balance
             </CardTitle>
             {todayBalance?.is_closed && (
               <Badge variant="secondary" className="h-5 px-1.5 text-[10px] gap-1 bg-amber-100 text-amber-700 border-amber-200">
@@ -784,7 +789,7 @@ export default function BalanceManagementPage() {
             )}
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-black tracking-tight text-foreground">{formatCurrency(currentCashBalance)}</div>
+            <div className="text-3xl font-black tracking-tight text-foreground">{formatCurrency(totalCashBalance)}</div>
             <div className="mt-4 pt-4 border-t space-y-2 text-xs font-semibold">
               <div className="flex justify-between items-center">
                 <span className="text-muted-foreground uppercase flex items-center gap-1.5">
@@ -815,7 +820,7 @@ export default function BalanceManagementPage() {
                 <span className="text-rose-600">-{formatCurrency(todayBalance?.total_expenses ?? 0)}</span>
               </div>
               <p className="text-[10px] text-muted-foreground italic leading-tight mt-3 p-2 bg-primary/5 rounded border border-primary/10">
-                Note: Net Cash is Sales minus Card Holds and Expenses. Recording a card hold will automatically subtract from this figure.
+                Note: Total Cash includes Opening Balance + Cash Intake (Sales minus Card Holds and Expenses).
               </p>
             </div>
           </CardContent>
@@ -884,10 +889,6 @@ export default function BalanceManagementPage() {
             <CreditCard className="h-4 w-4 mr-2" />
             Supplier Cards
           </TabsTrigger>
-          <TabsTrigger value="card_holdings" className="data-[state=active]:bg-background text-orange-600">
-            <History className="h-4 w-4 mr-2" />
-            Card Holdings
-          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="bank_accounts" className="space-y-4">
@@ -918,7 +919,8 @@ export default function BalanceManagementPage() {
                             account_name: bank.account_name,
                             account_number: bank.account_number || "",
                             bank_name: bank.bank_name || "",
-                            opening_balance: bank.current_balance.toString()
+                            opening_balance: bank.current_balance.toString(),
+                            account_type: bank.account_type || "bank"
                           })
                           setBankAccountDialogOpen(true)
                         }}
@@ -1131,114 +1133,6 @@ export default function BalanceManagementPage() {
                     <p className="text-sm text-muted-foreground">No supplier cards added yet.</p>
                   </div>
                 )}
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="card_holdings" className="space-y-4">
-          <Card className="border-none shadow-xl bg-background/50 backdrop-blur-sm overflow-hidden">
-            <CardHeader className="pb-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="p-2 bg-orange-500/10 rounded-lg">
-                    <History className="h-5 w-5 text-orange-600" />
-                  </div>
-                  <div>
-                    <CardTitle className="text-xl">Pending Card Settlements</CardTitle>
-                    <CardDescription>Release on-hold card payments to bank accounts</CardDescription>
-                  </div>
-                </div>
-                <Badge variant="outline" className="border-orange-200 text-orange-700 font-bold px-3">
-                  {cardHoldings.length} Pending
-                </Badge>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="rounded-xl border border-border/50 bg-background/50 overflow-hidden">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-muted/30">
-                      <TableHead>Date</TableHead>
-                      <TableHead>Card Type</TableHead>
-                      <TableHead>Card Name</TableHead>
-                      <TableHead className="text-right">Gross Amount</TableHead>
-                      <TableHead className="text-right">Tax (%)</TableHead>
-                      <TableHead className="text-right">Net Amount</TableHead>
-                      <TableHead className="text-center">Action</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {cardHoldings.map((hold) => (
-                      <TableRow key={hold.id} className="hover:bg-muted/20">
-                        <TableCell className="font-medium">
-                          {format(new Date(hold.sale_date), "dd MMM yyyy")}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className={hold.card_type === 'bank' ? "bg-blue-50 text-blue-700 border-blue-100" : "bg-emerald-50 text-emerald-700 border-emerald-100"}>
-                            {hold.card_type.toUpperCase()}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex flex-col">
-                            <span className="font-bold text-xs">
-                              {hold.bank_cards?.card_name || hold.supplier_cards?.card_name}
-                            </span>
-                            <span className="text-[10px] text-muted-foreground uppercase">
-                              {hold.bank_cards?.bank_accounts?.bank_name || hold.supplier_cards?.suppliers?.name}
-                            </span>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-right">{formatCurrency(hold.hold_amount)}</TableCell>
-                        <TableCell className="text-right">
-                          <span className="text-rose-600 font-bold">{hold.tax_percentage}%</span>
-                        </TableCell>
-                        <TableCell className="text-right font-black text-emerald-600">{formatCurrency(hold.net_amount)}</TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2 justify-center">
-                            <Select
-                              onValueChange={(v) => {
-                                // Selection storage via temp prop
-                                hold.__target_bank_id = v;
-                              }}
-                            >
-                              <SelectTrigger className="w-[180px] h-8 text-[11px]">
-                                <SelectValue placeholder="Target Bank..." />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {bankAccounts.map(bank => (
-                                  <SelectItem key={bank.id} value={bank.id}>{bank.account_name}</SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                            <Button
-                              size="sm"
-                              className="h-8 bg-orange-600 hover:bg-orange-700 gap-1 px-3"
-                              onClick={() => {
-                                if (!hold.__target_bank_id) {
-                                  toast.error("Please select a target bank account");
-                                  return;
-                                }
-                                handleReleaseHold(hold.id, hold.__target_bank_id);
-                              }}
-                              disabled={saving}
-                            >
-                              {saving ? <RefreshCw className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-                              Release
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                    {cardHoldings.length === 0 && (
-                      <TableRow>
-                        <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">
-                          No pending card settlements found.
-                        </TableCell>
-                      </TableRow>
-                    )}
-                  </TableBody>
-                </Table>
               </div>
             </CardContent>
           </Card>
@@ -1549,7 +1443,7 @@ export default function BalanceManagementPage() {
             <div className="mt-4 space-y-2 text-sm">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Cash Closing:</span>
-                <span className="font-medium">{formatCurrency(currentCashBalance)}</span>
+                <span className="font-medium">{formatCurrency(totalCashBalance)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Bank Closing:</span>
@@ -1795,11 +1689,13 @@ export default function BalanceManagementPage() {
                   <SelectValue placeholder="Select bank account..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {bankAccounts.map(bank => (
-                    <SelectItem key={bank.id} value={bank.id}>
-                      {bank.account_name} ({formatCurrency(bank.current_balance)})
-                    </SelectItem>
-                  ))}
+                  {bankAccounts
+                    .filter(bank => (bank.account_type || 'bank') === 'bank')
+                    .map(bank => (
+                      <SelectItem key={bank.id} value={bank.id}>
+                        {bank.account_name} ({formatCurrency(bank.current_balance)})
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </div>
@@ -1979,6 +1875,21 @@ export default function BalanceManagementPage() {
                 onChange={(e) => setBankAccountData(prev => ({ ...prev, opening_balance: e.target.value }))}
                 placeholder="0.00"
               />
+            </div>
+            <div className="space-y-2">
+              <Label>Account Type</Label>
+              <Select
+                value={bankAccountData.account_type}
+                onValueChange={(v) => setBankAccountData(prev => ({ ...prev, account_type: v }))}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select Account Type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="bank">🏦 Bank Account</SelectItem>
+                  <SelectItem value="supplier">🤝 Supplier Settlement Account</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
           <DialogFooter className="gap-2 sm:gap-0">

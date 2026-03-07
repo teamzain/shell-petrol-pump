@@ -27,6 +27,8 @@ import {
     Droplet
 } from "lucide-react"
 import { BrandLoader as Loader } from "@/components/ui/brand-loader"
+import { getPumpConfig, updateAdminPin } from "@/app/actions/config-actions"
+import { toast } from "sonner"
 
 interface BankAccount {
     id: string
@@ -75,7 +77,23 @@ export default function SettingsPage() {
     const [isEditingBank, setIsEditingBank] = useState(false)
 
     useEffect(() => {
-        // Backend logic removed for system recreation
+        async function loadConfig() {
+            setLoading(true)
+            try {
+                const config = await getPumpConfig()
+                if (config) {
+                    setSystemConfig({
+                        id: config.id,
+                        adminPin: config.admin_pin || ''
+                    })
+                }
+            } catch (error) {
+                console.error("Failed to load config:", error)
+            } finally {
+                setLoading(false)
+            }
+        }
+        loadConfig()
     }, [])
 
     const handleBankSubmit = async (e: React.FormEvent) => {
@@ -100,8 +118,18 @@ export default function SettingsPage() {
 
     const handlePinUpdate = async (e: React.FormEvent) => {
         e.preventDefault()
-        setMessage({ type: 'success', text: 'Admin PIN updated (UI Only mode)' })
-        setTimeout(() => setMessage(null), 3000)
+        setLoading(true)
+        try {
+            await updateAdminPin(systemConfig.adminPin)
+            toast.success("Admin PIN updated successfully")
+            setMessage({ type: 'success', text: 'Admin PIN updated successfully' })
+        } catch (error: any) {
+            toast.error(error.message || "Failed to update PIN")
+            setMessage({ type: 'error', text: error.message || "Failed to update PIN" })
+        } finally {
+            setLoading(false)
+            setTimeout(() => setMessage(null), 3000)
+        }
     }
 
     return (

@@ -15,8 +15,11 @@ import {
     Plus,
     Trash2,
     Download,
-    Search
+    Search,
+    Lock,
+    Unlock
 } from "lucide-react"
+import { AdminPinDialog } from "@/components/auth/admin-pin-dialog"
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -76,9 +79,15 @@ export default function NozzleReadingsPage() {
     // Card Summary State
     const [bankCards, setBankCards] = useState<any[]>([])
     const [supplierCards, setSupplierCards] = useState<any[]>([])
+    const [workingDate, setWorkingDate] = useState(getTodayPKT())
     const [cardEntries, setCardEntries] = useState<DailyCardEntry[]>([
         { card_type: 'bank_card', card_id: '', amount: 0, date: getTodayPKT() }
     ])
+
+    // Security Lock State
+    const [lockedNozzleIds, setLockedNozzleIds] = useState<Set<string>>(new Set())
+    const [isPinDialogOpen, setIsPinDialogOpen] = useState(false)
+    const [activeNozzleId, setActiveNozzleId] = useState<string | null>(null)
 
     const supabase = createClient()
     const today = getTodayPKT()
@@ -86,7 +95,7 @@ export default function NozzleReadingsPage() {
     useEffect(() => {
         fetchNozzles()
         fetchCardOptions()
-    }, [])
+    }, [workingDate])
 
     async function fetchCardOptions() {
         try {
@@ -102,19 +111,70 @@ export default function NozzleReadingsPage() {
     async function fetchNozzles() {
         setIsLoading(true)
         try {
-            const { data } = await supabase
+            // 1. Fetch Nozzles
+            const { data: nozzleData } = await supabase
                 .from("nozzles")
                 .select(`
-          *,
-          products(name, selling_price)
-        `)
+                    *,
+                    products(name, selling_price)
+                `)
                 .eq("status", "active")
                 .order("nozzle_number")
 
-            if (data) {
-                setNozzles(data)
+            if (nozzleData) {
+                // 2. Fetch existing sales for this date
+                const { data: existingSales } = await supabase
+                    .from('daily_sales')
+                    .select('*')
+                    .eq('sale_date', workingDate)
+
+                const processedNozzles = await Promise.all(nozzleData.map(async (n) => {
+                    const existingSale = existingSales?.find(s => s.nozzle_id === n.id)
+
+                    let openingReading = 0
+                    let closingReading = ""
+
+                    if (existingSale) {
+                        openingReading = existingSale.opening_reading
+                        closingReading = existingSale.closing_reading.toString()
+                    } else {
+                        // Find most recent closing reading before this date
+                        const { data: lastReadingRecord } = await supabase
+                            .from('daily_sales')
+                            .select('closing_reading')
+                            .eq('nozzle_id', n.id)
+                            .lt('sale_date', workingDate)
+                            .order('sale_date', { ascending: false })
+                            .limit(1)
+                            .single()
+
+                        openingReading = lastReadingRecord ? lastReadingRecord.closing_reading : n.last_reading
+                    }
+
+                    return {
+                        ...n,
+                        opening_reading: openingReading,
+                        existing_closing: existingSale ? existingSale.closing_reading : null
+                    }
+                }))
+
+                setNozzles(processedNozzles)
+
+                // Track locked status and pre-fill inputReadings
+                const initialInputs: Record<string, string> = {}
+                const lockedIds = new Set<string>()
+
+                processedNozzles.forEach(n => {
+                    if (n.existing_closing !== null) {
+                        initialInputs[n.id] = n.existing_closing.toString()
+                        lockedIds.add(n.id)
+                    }
+                })
+                setLockedNozzleIds(lockedIds)
+                setInputReadings(initialInputs)
             }
         } catch (error) {
+            console.error("Fetch error:", error)
             toast.error("Failed to load nozzles")
         } finally {
             setIsLoading(false)
@@ -140,6 +200,7 @@ export default function NozzleReadingsPage() {
             .filter(n => inputReadings[n.id] && inputReadings[n.id].trim() !== "")
             .map(n => ({
                 nozzle_id: n.id,
+                opening_reading: n.opening_reading,
                 meter_reading: parseFloat(inputReadings[n.id])
             }))
 
@@ -151,18 +212,24 @@ export default function NozzleReadingsPage() {
         // Validation
         for (const r of readingsToSave) {
             const nozzle = nozzles.find(n => n.id === r.nozzle_id)
-            if (isNaN(r.meter_reading) || r.meter_reading < (nozzle?.last_reading || 0)) {
-                toast.error(`Invalid reading for ${nozzle?.nozzle_number}. Must be >= ${nozzle?.last_reading}`)
+            if (isNaN(r.meter_reading) || r.meter_reading < (nozzle?.opening_reading || 0)) {
+                toast.error(`Invalid reading for ${nozzle?.nozzle_number}. Must be >= ${nozzle?.opening_reading}`)
                 return
             }
         }
 
         setIsSaving(true)
         try {
-            await recordNozzleReadings(readingsToSave)
+            await recordNozzleReadings(readingsToSave, workingDate)
             toast.success("Readings recorded and sales calculated!")
+
+            // Re-lock all saved nozzles
+            const updatedLocked = new Set(lockedNozzleIds)
+            readingsToSave.forEach(r => updatedLocked.add(r.nozzle_id))
+            setLockedNozzleIds(updatedLocked)
+
             fetchNozzles()
-            setInputReadings({})
+            // Don't clear inputs anymore so they stay visible while locked
         } catch (error: any) {
             toast.error(error.message || "Failed to save readings")
         } finally {
@@ -171,7 +238,7 @@ export default function NozzleReadingsPage() {
     }
 
     const handleAddCardRow = () => {
-        setCardEntries([...cardEntries, { card_type: 'bank_card', card_id: '', amount: 0, date: today }])
+        setCardEntries([...cardEntries, { card_type: 'bank_card', card_id: '', amount: 0, date: workingDate }])
     }
 
     const handleRemoveCardRow = (index: number) => {
@@ -195,7 +262,7 @@ export default function NozzleReadingsPage() {
         try {
             await recordDailyCardPayments(validEntries)
             toast.success("Daily card summary recorded!")
-            setCardEntries([{ card_type: 'bank_card', card_id: '', amount: 0, date: today }])
+            setCardEntries([{ card_type: 'bank_card', card_id: '', amount: 0, date: workingDate }])
         } catch (error: any) {
             toast.error(error.message || "Failed to record card payments")
         } finally {
@@ -216,6 +283,18 @@ export default function NozzleReadingsPage() {
                     <p className="text-muted-foreground">Enter closing meter readings for each nozzle. Sales are calculated automatically.</p>
                 </div>
                 <div className="flex items-center gap-2">
+                    <Input
+                        type="date"
+                        value={workingDate}
+                        max={getTodayPKT()}
+                        onChange={(e) => {
+                            const newDate = e.target.value
+                            setWorkingDate(newDate)
+                            // Update existing card entries to the new date as well
+                            setCardEntries(prev => prev.map(entry => ({ ...entry, date: newDate })))
+                        }}
+                        className="w-40 h-9"
+                    />
                     <Button variant="outline" size="sm" onClick={handleExport} className="gap-2">
                         <Download className="w-4 h-4" />
                         Export Nozzles
@@ -259,21 +338,21 @@ export default function NozzleReadingsPage() {
                                         <TableRow>
                                             <TableHead>Nozzle</TableHead>
                                             <TableHead>Fuel Type</TableHead>
-                                            <TableHead>Last Reading</TableHead>
-                                            <TableHead className="w-[160px]">New Reading</TableHead>
-                                            <TableHead className="text-right">Sales (Qty)</TableHead>
+                                            <TableHead>Opening Reading</TableHead>
+                                            <TableHead className="w-[160px]">Closing Reading</TableHead>
+                                            <TableHead className="text-right">Sales (Liters)</TableHead>
                                             <TableHead className="text-right">Total Revenue</TableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
                                         {isLoading ? (
-                                            <TableRow><TableCell colSpan={8} className="text-center py-10">Loading nozzles...</TableCell></TableRow>
+                                            <TableRow><TableCell colSpan={6} className="text-center py-10">Loading nozzles...</TableCell></TableRow>
                                         ) : filteredNozzles.length === 0 ? (
-                                            <TableRow><TableCell colSpan={8} className="text-center py-10 text-muted-foreground">No matches found.</TableCell></TableRow>
+                                            <TableRow><TableCell colSpan={6} className="text-center py-10 text-muted-foreground">No matches found.</TableCell></TableRow>
                                         ) : filteredNozzles.map((n) => {
                                             const current = parseFloat(inputReadings[n.id] || "0")
-                                            const last = n.last_reading || 0
-                                            const qtySold = current > 0 ? (current - last) : 0
+                                            const opening = n.opening_reading || 0
+                                            const qtySold = current > 0 ? (current - opening) : 0
                                             const revenue = qtySold * (n.products?.selling_price || 0)
 
                                             return (
@@ -282,27 +361,49 @@ export default function NozzleReadingsPage() {
                                                     <TableCell>
                                                         <Badge variant="secondary" className="font-normal capitalize">{n.products?.name}</Badge>
                                                     </TableCell>
-                                                    <TableCell className="font-mono text-muted-foreground">{(last || 0).toLocaleString()} L</TableCell>
+                                                    <TableCell className="font-mono text-muted-foreground">{(opening || 0).toLocaleString()} L</TableCell>
                                                     <TableCell>
-                                                        <div className="relative">
-                                                            <Input
-                                                                type="number"
-                                                                step="0.01"
-                                                                placeholder="Enter reading"
-                                                                value={inputReadings[n.id] || ""}
-                                                                onChange={(e) => handleInputChange(n.id, e.target.value)}
-                                                                className={`font-mono border-primary/20 focus-visible:ring-primary ${current > 0 && current < last ? "border-red-500 bg-red-50" : ""}`}
-                                                            />
-                                                            {current > 0 && current < last && (
-                                                                <span className="absolute -bottom-5 left-0 text-[10px] text-red-500 font-medium">Reading too low</span>
-                                                            )}
+                                                        <div className="relative flex items-center gap-2">
+                                                            <div className="relative flex-1">
+                                                                <Input
+                                                                    type="number"
+                                                                    step="0.01"
+                                                                    placeholder="Enter reading"
+                                                                    value={inputReadings[n.id] || ""}
+                                                                    onChange={(e) => handleInputChange(n.id, e.target.value)}
+                                                                    disabled={lockedNozzleIds.has(n.id)}
+                                                                    className={`font-mono border-primary/20 focus-visible:ring-primary ${current > 0 && current < opening ? "border-red-500 bg-red-50" : ""} ${lockedNozzleIds.has(n.id) ? "bg-muted cursor-not-allowed opacity-80" : ""}`}
+                                                                />
+                                                                {current > 0 && current < opening && (
+                                                                    <span className="absolute -bottom-5 left-0 text-[10px] text-red-500 font-medium">Reading too low</span>
+                                                                )}
+                                                            </div>
+                                                            <Button
+                                                                variant="ghost"
+                                                                size="icon"
+                                                                className={`h-9 w-9 shrink-0 ${lockedNozzleIds.has(n.id) ? "text-primary hover:text-primary/80" : "text-muted-foreground"}`}
+                                                                onClick={() => {
+                                                                    if (lockedNozzleIds.has(n.id)) {
+                                                                        setActiveNozzleId(n.id)
+                                                                        setIsPinDialogOpen(true)
+                                                                    } else {
+                                                                        // Optional: manual lock if desired, but user wants auto-lock on save
+                                                                    }
+                                                                }}
+                                                            >
+                                                                {lockedNozzleIds.has(n.id) ? (
+                                                                    <Lock className="h-4 w-4" />
+                                                                ) : (
+                                                                    <Unlock className="h-4 w-4 opacity-50" />
+                                                                )}
+                                                            </Button>
                                                         </div>
                                                     </TableCell>
                                                     <TableCell className="text-right">
                                                         {qtySold > 0 ? (
                                                             <div className="flex flex-col items-end">
                                                                 <span className="font-bold text-primary">{(qtySold || 0).toLocaleString()} L</span>
-                                                                <span className="text-[10px] text-muted-foreground">Liters Sold</span>
+                                                                <span className="text-[10px] text-muted-foreground">Quantity Sold</span>
                                                             </div>
                                                         ) : "-"}
                                                     </TableCell>
@@ -345,7 +446,7 @@ export default function NozzleReadingsPage() {
                                 <CardTitle>Daily Card Summary</CardTitle>
                             </div>
                             <CardDescription>
-                                Consolidated entry for all card payments received today (<b>{today}</b>).
+                                Consolidated entry for all card payments received on <b>{new Date(workingDate).toLocaleDateString("en-PK", { day: 'numeric', month: 'short', year: 'numeric' })}</b>.
                             </CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-4">
@@ -436,6 +537,22 @@ export default function NozzleReadingsPage() {
                     </Card>
                 </TabsContent>
             </Tabs>
+
+            <AdminPinDialog
+                open={isPinDialogOpen}
+                onOpenChange={setIsPinDialogOpen}
+                onSuccess={() => {
+                    if (activeNozzleId) {
+                        const updatedLocked = new Set(lockedNozzleIds)
+                        updatedLocked.delete(activeNozzleId)
+                        setLockedNozzleIds(updatedLocked)
+                        setActiveNozzleId(null)
+                        toast.success("Nozzle unlocked for editing")
+                    }
+                }}
+                title="Unlock Nozzle Reading"
+                description="Enter Admin PIN to enable editing for this saved reading."
+            />
         </div>
     )
 }

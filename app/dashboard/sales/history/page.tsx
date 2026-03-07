@@ -13,7 +13,9 @@ import {
     TrendingUp,
     CreditCard,
     Banknote,
-    X
+    X,
+    CheckCircle2,
+    RefreshCw
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
@@ -45,12 +47,27 @@ import {
     SelectValue,
 } from "@/components/ui/select"
 import { exportToCSV } from "@/lib/export-utils"
+import { getBalanceOverviewData, releaseCardHold } from "@/app/actions/balance"
+import { format } from "date-fns"
 
 export default function SalesHistoryPage() {
     const [fuelSales, setFuelSales] = useState<any[]>([])
     const [manualSales, setManualSales] = useState<any[]>([])
     const [isLoading, setIsLoading] = useState(true)
     const [activeTab, setActiveTab] = useState("fuel")
+    const [cardHoldings, setCardHoldings] = useState<any[]>([])
+    const [bankAccounts, setBankAccounts] = useState<any[]>([])
+    const [suppliers, setSuppliers] = useState<any[]>([])
+    const [isSaving, setIsSaving] = useState(false)
+
+    const formatCurrency = (amount: number) => {
+        return new Intl.NumberFormat('en-PK', {
+            style: 'currency',
+            currency: 'PKR',
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 0,
+        }).format(amount).replace('PKR', 'Rs.')
+    }
 
     // Filter State
     const [startDate, setStartDate] = useState("")
@@ -126,10 +143,34 @@ export default function SalesHistoryPage() {
 
             setFuelSales(fData || [])
             setManualSales(mData || [])
+
+            // Also fetch card holdings, bank accounts, and suppliers for the new tab
+            const balanceData = await getBalanceOverviewData()
+            setCardHoldings(balanceData.cardHoldings || [])
+            setBankAccounts(balanceData.bankAccounts || [])
+            setSuppliers(balanceData.suppliers || [])
         } catch (error) {
             toast.error("Failed to load history")
         } finally {
             setIsLoading(false)
+        }
+    }
+
+    const handleReleaseHold = async (holdId: string, bankAccountId: string) => {
+        if (!bankAccountId) {
+            toast.error("Please select a bank account")
+            return
+        }
+
+        setIsSaving(true)
+        try {
+            await releaseCardHold(holdId, bankAccountId)
+            toast.success("Card payment released to bank account")
+            fetchHistory()
+        } catch (err: any) {
+            toast.error(err.message || "Failed to release card hold")
+        } finally {
+            setIsSaving(false)
         }
     }
 
@@ -272,6 +313,10 @@ export default function SalesHistoryPage() {
                         <Package className="w-4 h-4" />
                         Manual Sales (Lubricants)
                     </TabsTrigger>
+                    <TabsTrigger value="card_holding" className="gap-2 text-orange-600">
+                        <History className="w-4 h-4" />
+                        Card Holding
+                    </TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="fuel" className="mt-6">
@@ -379,6 +424,130 @@ export default function SalesHistoryPage() {
                                     ))}
                                 </TableBody>
                             </Table>
+                        </CardContent>
+                    </Card>
+                </TabsContent>
+
+                <TabsContent value="card_holding" className="mt-6">
+                    <Card className="border-none shadow-xl bg-background/50 backdrop-blur-sm overflow-hidden">
+                        <CardHeader className="pb-4">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                    <div className="p-2 bg-orange-500/10 rounded-lg">
+                                        <History className="h-5 w-5 text-orange-600" />
+                                    </div>
+                                    <div>
+                                        <CardTitle className="text-xl">Pending Card Settlements</CardTitle>
+                                        <CardDescription>Release on-hold card payments to bank accounts</CardDescription>
+                                    </div>
+                                </div>
+                                <Badge variant="outline" className="border-orange-200 text-orange-700 font-bold px-3">
+                                    {cardHoldings.length} Pending
+                                </Badge>
+                            </div>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="rounded-xl border border-border/50 bg-background/50 overflow-hidden">
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow className="bg-muted/30">
+                                            <TableHead>Date</TableHead>
+                                            <TableHead>Card Type</TableHead>
+                                            <TableHead>Card Name</TableHead>
+                                            <TableHead className="text-right">Gross Amount</TableHead>
+                                            <TableHead className="text-right">Tax (%)</TableHead>
+                                            <TableHead className="text-right">Net Amount</TableHead>
+                                            <TableHead className="text-center">Action</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {cardHoldings.map((hold) => (
+                                            <TableRow key={hold.id} className="hover:bg-muted/20">
+                                                <TableCell className="font-medium">
+                                                    {format(new Date(hold.sale_date), "dd MMM yyyy")}
+                                                </TableCell>
+                                                <TableCell>
+                                                    <Badge variant="outline" className={(hold.card_type === 'bank' || hold.card_type === 'bank_card') ? "bg-blue-50 text-blue-700 border-blue-100" : "bg-emerald-50 text-emerald-700 border-emerald-100"}>
+                                                        {hold.card_type.toUpperCase().replace('_', ' ')}
+                                                    </Badge>
+                                                </TableCell>
+                                                <TableCell>
+                                                    <div className="flex flex-col">
+                                                        <span className="font-bold text-xs">
+                                                            {hold.bank_cards?.card_name || hold.supplier_cards?.card_name}
+                                                        </span>
+                                                        <span className="text-[10px] text-muted-foreground uppercase">
+                                                            {hold.bank_cards?.bank_accounts?.bank_name || hold.supplier_cards?.suppliers?.name}
+                                                        </span>
+                                                    </div>
+                                                </TableCell>
+                                                <TableCell className="text-right">{formatCurrency(hold.hold_amount)}</TableCell>
+                                                <TableCell className="text-right">
+                                                    <span className="text-rose-600 font-bold">{hold.tax_percentage}%</span>
+                                                </TableCell>
+                                                <TableCell className="text-right font-black text-emerald-600">{formatCurrency(hold.net_amount)}</TableCell>
+                                                <TableCell>
+                                                    <div className="flex items-center gap-2 justify-center">
+                                                        <Select
+                                                            onValueChange={(v) => {
+                                                                hold.__target_bank_id = v;
+                                                            }}
+                                                        >
+                                                            <SelectTrigger className="w-[180px] h-8 text-[11px]">
+                                                                <SelectValue placeholder="Target Bank..." />
+                                                            </SelectTrigger>
+                                                            <SelectContent>
+                                                                {bankAccounts
+                                                                    .filter(bank => {
+                                                                        const isBankCard = hold.card_type === 'bank' || hold.card_type === 'bank_card';
+                                                                        if (isBankCard) {
+                                                                            return (bank.account_type || 'bank') === 'bank';
+                                                                        } else {
+                                                                            return bank.account_type === 'supplier';
+                                                                        }
+                                                                    })
+                                                                    .map(bank => (
+                                                                        <SelectItem key={bank.id} value={`acc_${bank.id}`}>{bank.account_name}</SelectItem>
+                                                                    ))}
+                                                                {!(hold.card_type === 'bank' || hold.card_type === 'bank_card') && suppliers.length > 0 && (
+                                                                    <>
+                                                                        <div className="px-2 py-1.5 text-[10px] font-bold text-muted-foreground uppercase border-t bg-muted/20">Direct Supplier Accounts</div>
+                                                                        {suppliers.map(s => (
+                                                                            <SelectItem key={s.id} value={`supp_${s.id}`}>{s.supplier_name}</SelectItem>
+                                                                        ))}
+                                                                    </>
+                                                                )}
+                                                            </SelectContent>
+                                                        </Select>
+                                                        <Button
+                                                            size="sm"
+                                                            className="h-8 bg-orange-600 hover:bg-orange-700 gap-1 px-3"
+                                                            onClick={() => {
+                                                                if (!hold.__target_bank_id) {
+                                                                    toast.error("Please select a target bank account");
+                                                                    return;
+                                                                }
+                                                                handleReleaseHold(hold.id, hold.__target_bank_id);
+                                                            }}
+                                                            disabled={isSaving}
+                                                        >
+                                                            {isSaving ? <RefreshCw className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                                                            Release
+                                                        </Button>
+                                                    </div>
+                                                </TableCell>
+                                            </TableRow>
+                                        ))}
+                                        {cardHoldings.length === 0 && (
+                                            <TableRow>
+                                                <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">
+                                                    No pending card settlements found.
+                                                </TableCell>
+                                            </TableRow>
+                                        )}
+                                    </TableBody>
+                                </Table>
+                            </div>
                         </CardContent>
                     </Card>
                 </TabsContent>

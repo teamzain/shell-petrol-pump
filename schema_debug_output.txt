@@ -1,16 +1,41 @@
 Read Attempt: {
-  "data": [],
+  "data": [
+    {
+      "id": "2e9d93fb-bdf8-4fec-a753-d87a0ba6e35f",
+      "sale_id": null,
+      "payment_method_id": null,
+      "payment_type": "bank_card",
+      "supplier_id": null,
+      "hold_amount": 200,
+      "sale_date": "2026-03-07",
+      "expected_release_date": null,
+      "actual_release_date": null,
+      "status": "released",
+      "release_note": null,
+      "created_by": null,
+      "created_at": "2026-03-06T22:50:07.734807+00:00",
+      "updated_at": "2026-03-06T22:50:07.734807+00:00",
+      "bank_card_id": "100b3e3e-7fab-4ee5-b611-17ec59eedf5c",
+      "supplier_card_id": null,
+      "card_type": "bank_card",
+      "tax_percentage": 10,
+      "tax_amount": 20,
+      "net_amount": 180,
+      "released_at": "2026-03-07T10:45:30.588+00:00",
+      "bank_account_id": "6554222c-4dbe-4fe8-a5a6-db682a19efca"
+    }
+  ],
   "error": null
 }
 
 Insert Attempt (Empty): {
   "code": "23502",
-  "details": "Failing row contains (a9b3b64b-c773-41ee-8945-904e3f6d5f8d, null, null, null, null, null, null, null, null, on_hold, null, null, 2026-03-06 22:39:42.735451+00, 2026-03-06 22:39:42.735451+00, null, null).",
+  "details": "Failing row contains (218263d1-f893-4d67-b8d2-3722e97e0378, null, null, null, null, null, null, null, null, pending, null, null, 2026-03-07 11:08:45.697524+00, 2026-03-07 11:08:45.697524+00, null, null, null, 0.00, 0.00, 0.00, null, null).",
   "hint": null,
-  "message": "null value in column \"payment_type\" of relation \"card_hold_records\" violates not-null constraint"
+  "message": "null value in column \"hold_amount\" of relation \"card_hold_records\" violates not-null constraint"
 }
 
-Check Column 'card_type': column card_hold_records.card_type does not exist
+Check Column 'card_type': EXISTS
 Check Column 'payment_method': column card_hold_records.payment_method does not exist
 Check Column 'method': column card_hold_records.method does not exist
 Check Column 'type': column card_hold_records.type does not exist
@@ -19,4 +44,4 @@ Check Column 'status': EXISTS
 Check Column 'sale_date': EXISTS
 Check Column 'hold_amount': EXISTS
 Check Column 'amount': column card_hold_records.amount does not exist
-Check Column 'net_amount': column card_hold_records.net_amount does not exist
+Check Column 'net_amount': EXISTS

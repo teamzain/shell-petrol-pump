@@ -12,6 +12,7 @@ export type CardPayment = {
 
 export type NozzleReadingUpdate = {
     nozzle_id: string
+    opening_reading: number
     meter_reading: number
 }
 
@@ -45,29 +46,30 @@ export async function addNozzle(formData: {
 }
 
 /**
- * Record Single Nozzle Reading & Calculate Sales Automatically
+ * Record Multiple Nozzle Readings & Calculate Sales Automatically
  */
-export async function recordNozzleReadings(readings: NozzleReadingUpdate[]) {
+export async function recordNozzleReadings(readings: NozzleReadingUpdate[], date?: string) {
     const supabase = await createClient()
-    const today = getTodayPKT()
+    const targetDate = date || getTodayPKT()
 
     for (const reading of readings) {
-        // 1. Get nozzle's last reading and product info
+        // 1. Get nozzle's product info
         const { data: nozzle, error: nozzleError } = await supabase
             .from('nozzles')
-            .select('last_reading, product_id, nozzle_number')
+            .select('product_id, nozzle_number')
             .eq('id', reading.nozzle_id)
             .single()
 
         if (nozzleError) throw new Error(nozzleError.message)
 
-        const quantitySold = reading.meter_reading - nozzle.last_reading
+        const openingReading = reading.opening_reading
+        const quantitySold = reading.meter_reading - openingReading
 
         if (quantitySold < 0) {
-            throw new Error(`Reading for ${nozzle.nozzle_number} (${reading.meter_reading}) cannot be less than last reading (${nozzle.last_reading})`)
+            throw new Error(`Reading for ${nozzle.nozzle_number} (${reading.meter_reading}) cannot be less than opening reading (${openingReading}) for ${targetDate}`)
         }
 
-        if (quantitySold > 0) {
+        if (quantitySold >= 0) {
             // 2. Fetch Product for Financials
             const { data: product } = await supabase
                 .from('products')
@@ -79,22 +81,21 @@ export async function recordNozzleReadings(readings: NozzleReadingUpdate[]) {
                 // Check if an entry for this day already exists for this nozzle
                 const { data: existingSale } = await supabase
                     .from('daily_sales')
-                    .select('id, opening_reading, quantity, revenue, gross_profit, cogs')
+                    .select('id, quantity')
                     .eq('nozzle_id', reading.nozzle_id)
-                    .eq('sale_date', today)
+                    .eq('sale_date', targetDate)
                     .single()
 
-                const dayOpening = existingSale ? existingSale.opening_reading : nozzle.last_reading
-                const totalQty = reading.meter_reading - dayOpening
+                const totalQty = quantitySold
                 const totalRevenue = totalQty * product.selling_price
                 const totalCogs = totalQty * product.purchase_price
 
                 // 3. Upsert Daily Sale (Consolidated)
                 const { data: saleData, error: saleError } = await supabase.from('daily_sales').upsert([{
                     nozzle_id: reading.nozzle_id,
-                    sale_date: today,
+                    sale_date: targetDate,
                     quantity: totalQty,
-                    opening_reading: dayOpening,
+                    opening_reading: openingReading,
                     closing_reading: reading.meter_reading,
                     unit_price: product.selling_price,
                     revenue: totalRevenue,
@@ -102,25 +103,23 @@ export async function recordNozzleReadings(readings: NozzleReadingUpdate[]) {
                     gross_profit: totalRevenue - totalCogs,
                     is_overnight: false,
                     payment_method: 'cash',
-                    cash_payment_amount: totalRevenue,
-                    card_payment_amount: 0,
                     // Legacy support
                     liters_sold: totalQty,
                     rate_per_liter: product.selling_price,
-                    total_amount: totalRevenue,
-                    payment_type: 'cash'
+                    total_amount: totalRevenue
                 }], { onConflict: 'nozzle_id,sale_date' }).select().single()
 
                 if (saleError) throw new Error(`Failed to save sale: ${saleError.message}`)
 
 
-                // 4. Update Stock (Only decrement the NEW quantity)
+                // 4. Update Stock (Bidirectional Adjustment)
                 const qtyToSubtract = existingSale ? (totalQty - existingSale.quantity) : totalQty
 
-                if (qtyToSubtract > 0) {
-                    const { error: stockError } = await supabase.rpc('decrement_product_stock', {
+                if (qtyToSubtract !== 0) {
+                    const rpcName = qtyToSubtract > 0 ? 'decrement_product_stock' : 'increment_product_stock'
+                    const { error: stockError } = await supabase.rpc(rpcName, {
                         p_product_id: product.id,
-                        p_quantity: qtyToSubtract
+                        p_quantity: Math.abs(qtyToSubtract)
                     })
                     if (stockError) throw new Error(`Stock update failed: ${stockError.message}`)
 
@@ -128,8 +127,8 @@ export async function recordNozzleReadings(readings: NozzleReadingUpdate[]) {
                     const { error: moveError } = await supabase.from('stock_movements').insert([{
                         product_id: product.id,
                         movement_type: 'sale',
-                        quantity: -qtyToSubtract,
-                        reference: `Daily Reading Update - ${today}`
+                        quantity: -qtyToSubtract, // Negative for sale/decrement, Positive for return/increment
+                        reference: `Daily Reading Update - ${targetDate}${existingSale ? ' (Correction)' : ''}`
                     }])
                     if (moveError) throw new Error(`Movement record failed: ${moveError.message}`)
                 }
@@ -137,18 +136,20 @@ export async function recordNozzleReadings(readings: NozzleReadingUpdate[]) {
                 // 6. Save/Update Reading for history
                 const { error: readError } = await supabase.from('nozzle_readings').upsert([{
                     nozzle_id: reading.nozzle_id,
-                    reading_date: today,
+                    reading_date: targetDate,
                     reading_type: 'closing',
                     meter_reading: reading.meter_reading
                 }], { onConflict: 'nozzle_id,reading_date,reading_type' })
                 if (readError) throw new Error(`Reading log failed: ${readError.message}`)
 
-                // 7. Update Nozzle's master record
-                const { error: nozzleUpdateError } = await supabase.from('nozzles').update({
-                    last_reading: reading.meter_reading,
-                    updated_at: new Date().toISOString()
-                }).eq('id', reading.nozzle_id)
-                if (nozzleUpdateError) throw new Error(`Nozzle update failed: ${nozzleUpdateError.message}`)
+                // 7. Update Nozzle's master record ONLY if this is the latest reading
+                if (targetDate === getTodayPKT()) {
+                    const { error: nozzleUpdateError } = await supabase.from('nozzles').update({
+                        last_reading: reading.meter_reading,
+                        updated_at: new Date().toISOString()
+                    }).eq('id', reading.nozzle_id)
+                    if (nozzleUpdateError) throw new Error(`Nozzle update failed: ${nozzleUpdateError.message}`)
+                }
             }
         }
     }

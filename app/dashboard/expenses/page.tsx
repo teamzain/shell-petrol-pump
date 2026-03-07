@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo } from "react"
 import { format } from "date-fns"
 import { getTodayPKT } from "@/lib/utils"
 import { createClient } from "@/lib/supabase/client"
-import { saveDailyExpense } from "@/app/actions/sales-daily"
+import { saveDailyExpense } from "../../actions/sales-daily"
 import { useToast } from "@/components/ui/use-toast"
 import {
     DollarSign,
