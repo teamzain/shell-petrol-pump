@@ -30,7 +30,7 @@ Read Attempt: {
 
 Insert Attempt (Empty): {
   "code": "23502",
-  "details": "Failing row contains (218263d1-f893-4d67-b8d2-3722e97e0378, null, null, null, null, null, null, null, null, pending, null, null, 2026-03-07 11:08:45.697524+00, 2026-03-07 11:08:45.697524+00, null, null, null, 0.00, 0.00, 0.00, null, null).",
+  "details": "Failing row contains (19245a5a-a55d-4eae-9875-964b4e0ec607, null, null, null, null, null, null, null, null, pending, null, null, 2026-03-07 17:38:19.137474+00, 2026-03-07 17:38:19.137474+00, null, null, null, 0.00, 0.00, 0.00, null, null).",
   "hint": null,
   "message": "null value in column \"hold_amount\" of relation \"card_hold_records\" violates not-null constraint"
 }

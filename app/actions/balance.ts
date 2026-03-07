@@ -685,7 +685,7 @@ export async function updateSupplierCard(id: string, data: {
 /**
  * Release a card hold record into a bank account or supplier account
  */
-export async function releaseCardHold(holdId: string, targetId: string) {
+export async function releaseCardHold(holdId: string, targetId: string, releaseDate?: string) {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) throw new Error("Unauthorized")
@@ -703,12 +703,15 @@ export async function releaseCardHold(holdId: string, targetId: string) {
     const isBankTarget = targetId.startsWith('acc_')
     const actualTargetId = targetId.replace(/^(acc_|supp_)/, '')
 
+    const effectiveReleaseDate = releaseDate ? new Date(releaseDate).toISOString() : new Date().toISOString()
+    const effectiveTransactionDate = releaseDate || hold.sale_date
+
     // 2. Update hold record status
     const { error: updateErr } = await supabase
         .from('card_hold_records')
         .update({
             status: 'released',
-            released_at: new Date().toISOString(),
+            released_at: effectiveReleaseDate,
             bank_account_id: isBankTarget ? actualTargetId : null,
             supplier_id: !isBankTarget ? actualTargetId : null
         })
@@ -731,7 +734,7 @@ export async function releaseCardHold(holdId: string, targetId: string) {
             amount: hold.net_amount,
             bank_account_id: actualTargetId,
             description: `Card Settlement: ${hold.card_type} (Hold ID: ${hold.id})`,
-            transaction_date: hold.sale_date,
+            transaction_date: effectiveTransactionDate,
             created_by: user.id
         })
     } else {
@@ -754,7 +757,7 @@ export async function releaseCardHold(holdId: string, targetId: string) {
             amount: hold.net_amount,
             supplier_id: actualTargetId,
             description: `Card Settlement: ${hold.card_type} (Hold ID: ${hold.id})`,
-            transaction_date: hold.sale_date,
+            transaction_date: effectiveTransactionDate,
             created_by: user.id
         })
     }

@@ -1,8 +1,8 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import {
-    History,
+    History as HistoryIcon,
     Filter,
     Download,
     Calendar,
@@ -15,7 +15,11 @@ import {
     Banknote,
     X,
     CheckCircle2,
-    RefreshCw
+    RefreshCw,
+    Wallet,
+    ArrowDownRight,
+    Coins,
+    Layers
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
@@ -56,6 +60,7 @@ export default function SalesHistoryPage() {
     const [isLoading, setIsLoading] = useState(true)
     const [activeTab, setActiveTab] = useState("fuel")
     const [cardHoldings, setCardHoldings] = useState<any[]>([])
+    const [allCardRecords, setAllCardRecords] = useState<any[]>([])
     const [bankAccounts, setBankAccounts] = useState<any[]>([])
     const [suppliers, setSuppliers] = useState<any[]>([])
     const [isSaving, setIsSaving] = useState(false)
@@ -144,7 +149,24 @@ export default function SalesHistoryPage() {
             setFuelSales(fData || [])
             setManualSales(mData || [])
 
-            // Also fetch card holdings, bank accounts, and suppliers for the new tab
+            // Fetch card records for summary and released tab
+            let cardQuery = supabase
+                .from("card_hold_records")
+                .select(`
+                    *,
+                    bank_cards ( card_name, bank_accounts ( bank_name ) ),
+                    supplier_cards ( card_name, suppliers ( name ) ),
+                    bank_accounts ( account_name ),
+                    suppliers ( name )
+                `)
+
+            if (startDate) cardQuery = cardQuery.gte("sale_date", startDate)
+            if (endDate) cardQuery = cardQuery.lte("sale_date", endDate)
+
+            const { data: cRecords } = await cardQuery
+            setAllCardRecords(cRecords || [])
+
+            // Also fetch card holdings (pending only for the tab), bank accounts, and suppliers
             const balanceData = await getBalanceOverviewData()
             setCardHoldings(balanceData.cardHoldings || [])
             setBankAccounts(balanceData.bankAccounts || [])
@@ -156,7 +178,7 @@ export default function SalesHistoryPage() {
         }
     }
 
-    const handleReleaseHold = async (holdId: string, bankAccountId: string) => {
+    const handleReleaseHold = async (holdId: string, bankAccountId: string, releaseDate?: string) => {
         if (!bankAccountId) {
             toast.error("Please select a bank account")
             return
@@ -164,7 +186,7 @@ export default function SalesHistoryPage() {
 
         setIsSaving(true)
         try {
-            await releaseCardHold(holdId, bankAccountId)
+            await releaseCardHold(holdId, bankAccountId, releaseDate)
             toast.success("Card payment released to bank account")
             fetchHistory()
         } catch (err: any) {
@@ -212,6 +234,51 @@ export default function SalesHistoryPage() {
         setSearch("")
         setTimeout(() => fetchHistory(), 10)
     }
+
+    // Calculations for Summary Cards
+    const summaryData = useMemo(() => {
+        const totalFuelRevenue = fuelSales.reduce((sum, s) => sum + (Number(s.revenue) || 0), 0)
+        const totalManualRevenue = manualSales.reduce((sum, s) => sum + (Number(s.total_amount) || 0), 0)
+        const totalSale = totalFuelRevenue + totalManualRevenue
+
+        const totalFuelNetCash = fuelSales.reduce((sum, s) => sum + (Number(s.cash_payment_amount) || 0), 0)
+        const totalManualNetCash = manualSales.reduce((sum, s) => {
+            if (s.payment_method === 'cash') return sum + (Number(s.total_amount) || 0)
+            return sum
+        }, 0)
+        const totalNetCash = totalFuelNetCash + totalManualNetCash
+
+        const totalCardHolding = allCardRecords
+            .filter(r => r.status === 'pending')
+            .reduce((sum, r) => sum + (Number(r.hold_amount) || 0), 0)
+
+        const totalReleased = allCardRecords
+            .filter(r => r.status === 'released')
+            .reduce((sum, r) => sum + (Number(r.net_amount) || 0), 0)
+
+        // Product Breakdown
+        const productMap: Record<string, number> = {}
+
+        fuelSales.forEach(s => {
+            const name = s.nozzles?.products?.name || 'Unknown Fuel'
+            productMap[name] = (productMap[name] || 0) + (Number(s.quantity) || 0)
+        })
+
+        manualSales.forEach(s => {
+            const name = s.products?.name || 'Unknown Item'
+            productMap[name] = (productMap[name] || 0) + (Number(s.quantity) || 0)
+        })
+
+        const productBreakdown = Object.entries(productMap).map(([name, qty]) => ({ name, qty }))
+
+        return {
+            totalSale,
+            totalNetCash,
+            totalCardHolding,
+            totalReleased,
+            productBreakdown
+        }
+    }, [fuelSales, manualSales, allCardRecords])
 
     return (
         <div className="space-y-6">
@@ -303,6 +370,97 @@ export default function SalesHistoryPage() {
                 </CardContent>
             </Card>
 
+            {/* Summary Cards Section */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <Card className="border-l-4 border-l-blue-500 shadow-sm">
+                    <CardContent className="p-6">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Total Sale</p>
+                                <h3 className="text-2xl font-bold mt-1">{formatCurrency(summaryData.totalSale)}</h3>
+                            </div>
+                            <div className="p-3 bg-blue-50 rounded-full">
+                                <TrendingUp className="w-5 h-5 text-blue-600" />
+                            </div>
+                        </div>
+                    </CardContent>
+                </Card>
+
+                <Card className="border-l-4 border-l-emerald-500 shadow-sm">
+                    <CardContent className="p-6">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Total Net Cash</p>
+                                <h3 className="text-2xl font-bold mt-1 text-emerald-600">{formatCurrency(summaryData.totalNetCash)}</h3>
+                            </div>
+                            <div className="p-3 bg-emerald-50 rounded-full">
+                                <Banknote className="w-5 h-5 text-emerald-600" />
+                            </div>
+                        </div>
+                    </CardContent>
+                </Card>
+
+                <Card className="border-l-4 border-l-orange-500 shadow-sm">
+                    <CardContent className="p-6">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Card Holding</p>
+                                <h3 className="text-2xl font-bold mt-1 text-orange-600">{formatCurrency(summaryData.totalCardHolding)}</h3>
+                            </div>
+                            <div className="p-3 bg-orange-50 rounded-full">
+                                <Wallet className="w-5 h-5 text-orange-600" />
+                            </div>
+                        </div>
+                    </CardContent>
+                </Card>
+
+                <Card className="border-l-4 border-l-purple-500 shadow-sm">
+                    <CardContent className="p-6">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Released Amount</p>
+                                <h3 className="text-2xl font-bold mt-1 text-purple-600">{formatCurrency(summaryData.totalReleased)}</h3>
+                            </div>
+                            <div className="p-3 bg-purple-50 rounded-full">
+                                <CheckCircle2 className="w-5 h-5 text-purple-600" />
+                            </div>
+                        </div>
+                    </CardContent>
+                </Card>
+            </div>
+
+            {/* Product Summary Card */}
+            <Card className="overflow-hidden border-none shadow-md bg-gradient-to-br from-slate-50 to-white">
+                <CardHeader className="bg-slate-100/50 pb-3 border-b">
+                    <div className="flex items-center justify-between">
+                        <CardTitle className="text-lg flex items-center gap-2">
+                            <Layers className="w-5 h-5 text-slate-600" />
+                            Product Sales Summary
+                        </CardTitle>
+                        <Badge variant="outline" className="bg-white">
+                            {summaryData.productBreakdown.length} Products
+                        </Badge>
+                    </div>
+                </CardHeader>
+                <CardContent className="p-0">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 divide-x divide-y border-b">
+                        {summaryData.productBreakdown.length === 0 ? (
+                            <div className="col-span-full p-8 text-center text-muted-foreground italic">
+                                No product data for the selected period
+                            </div>
+                        ) : (
+                            summaryData.productBreakdown.map((prod, idx) => (
+                                <div key={idx} className="p-4 flex flex-col items-center justify-center text-center hover:bg-slate-50 transition-colors">
+                                    <span className="text-xs text-muted-foreground font-medium mb-1 truncate w-full">{prod.name}</span>
+                                    <span className="text-lg font-bold text-primary">{prod.qty.toLocaleString()}</span>
+                                    <span className="text-[10px] text-muted-foreground uppercase">Units/Ltr</span>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                </CardContent>
+            </Card>
+
             <Tabs defaultValue="fuel" value={activeTab} onValueChange={setActiveTab} className="w-full">
                 <TabsList>
                     <TabsTrigger value="fuel" className="gap-2">
@@ -314,8 +472,12 @@ export default function SalesHistoryPage() {
                         Manual Sales (Lubricants)
                     </TabsTrigger>
                     <TabsTrigger value="card_holding" className="gap-2 text-orange-600">
-                        <History className="w-4 h-4" />
+                        <HistoryIcon className="w-4 h-4" />
                         Card Holding
+                    </TabsTrigger>
+                    <TabsTrigger value="released_cards" className="gap-2 text-emerald-600">
+                        <CheckCircle2 className="w-4 h-4" />
+                        Released Cards
                     </TabsTrigger>
                 </TabsList>
 
@@ -332,10 +494,10 @@ export default function SalesHistoryPage() {
                                         <TableHead>Date</TableHead>
                                         <TableHead>Nozzle</TableHead>
                                         <TableHead>Product</TableHead>
-                                        <TableHead className="text-right">Quantity</TableHead>
+                                        <TableHead className="text-right">Opening</TableHead>
+                                        <TableHead className="text-right">Closing</TableHead>
+                                        <TableHead className="text-right">Sold Qty</TableHead>
                                         <TableHead className="text-right">Revenue</TableHead>
-                                        <TableHead className="text-right">Cards</TableHead>
-                                        <TableHead className="text-right">Net Cash</TableHead>
                                         <TableHead className="text-right">Profit</TableHead>
                                         <TableHead>Status</TableHead>
                                     </TableRow>
@@ -358,12 +520,6 @@ export default function SalesHistoryPage() {
                                             </TableCell>
                                             <TableCell className="text-right font-mono font-bold">{(sale.quantity || 0).toLocaleString()} L</TableCell>
                                             <TableCell className="text-right font-mono text-xs">{(sale.revenue || 0).toLocaleString()}</TableCell>
-                                            <TableCell className="text-right font-mono text-orange-600 font-bold">
-                                                {sale.card_payment_amount > 0 ? (sale.card_payment_amount || 0).toLocaleString() : '-'}
-                                            </TableCell>
-                                            <TableCell className="text-right font-mono text-emerald-600 font-black">
-                                                {(sale.cash_payment_amount || 0).toLocaleString()}
-                                            </TableCell>
                                             <TableCell className="text-right font-mono text-primary/70 text-xs">{(sale.gross_profit || 0).toLocaleString()}</TableCell>
                                             <TableCell>
                                                 {sale.is_overnight ? (
@@ -434,7 +590,7 @@ export default function SalesHistoryPage() {
                             <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
                                     <div className="p-2 bg-orange-500/10 rounded-lg">
-                                        <History className="h-5 w-5 text-orange-600" />
+                                        <HistoryIcon className="h-5 w-5 text-orange-600" />
                                     </div>
                                     <div>
                                         <CardTitle className="text-xl">Pending Card Settlements</CardTitle>
@@ -452,11 +608,13 @@ export default function SalesHistoryPage() {
                                     <TableHeader>
                                         <TableRow className="bg-muted/30">
                                             <TableHead>Date</TableHead>
+                                            <TableHead className="text-center">Days</TableHead>
                                             <TableHead>Card Type</TableHead>
                                             <TableHead>Card Name</TableHead>
                                             <TableHead className="text-right">Gross Amount</TableHead>
                                             <TableHead className="text-right">Tax (%)</TableHead>
                                             <TableHead className="text-right">Net Amount</TableHead>
+                                            <TableHead>Release Date</TableHead>
                                             <TableHead className="text-center">Action</TableHead>
                                         </TableRow>
                                     </TableHeader>
@@ -465,6 +623,20 @@ export default function SalesHistoryPage() {
                                             <TableRow key={hold.id} className="hover:bg-muted/20">
                                                 <TableCell className="font-medium">
                                                     {format(new Date(hold.sale_date), "dd MMM yyyy")}
+                                                </TableCell>
+                                                <TableCell className="text-center">
+                                                    {(() => {
+                                                        const diffTime = Math.abs(new Date(today).getTime() - new Date(hold.sale_date).getTime());
+                                                        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                                                        return (
+                                                            <Badge
+                                                                variant="outline"
+                                                                className={diffDays > 3 ? "bg-rose-50 text-rose-700 border-rose-200 font-bold" : "bg-slate-50 text-slate-600 border-slate-200"}
+                                                            >
+                                                                {diffDays} {diffDays === 1 ? 'day' : 'days'}
+                                                            </Badge>
+                                                        );
+                                                    })()}
                                                 </TableCell>
                                                 <TableCell>
                                                     <Badge variant="outline" className={(hold.card_type === 'bank' || hold.card_type === 'bank_card') ? "bg-blue-50 text-blue-700 border-blue-100" : "bg-emerald-50 text-emerald-700 border-emerald-100"}>
@@ -486,6 +658,16 @@ export default function SalesHistoryPage() {
                                                     <span className="text-rose-600 font-bold">{hold.tax_percentage}%</span>
                                                 </TableCell>
                                                 <TableCell className="text-right font-black text-emerald-600">{formatCurrency(hold.net_amount)}</TableCell>
+                                                <TableCell>
+                                                    <Input
+                                                        type="date"
+                                                        className="h-8 w-32 text-[11px]"
+                                                        defaultValue={today}
+                                                        onChange={(e) => {
+                                                            hold.__release_date = e.target.value;
+                                                        }}
+                                                    />
+                                                </TableCell>
                                                 <TableCell>
                                                     <div className="flex items-center gap-2 justify-center">
                                                         <Select
@@ -527,7 +709,7 @@ export default function SalesHistoryPage() {
                                                                     toast.error("Please select a target bank account");
                                                                     return;
                                                                 }
-                                                                handleReleaseHold(hold.id, hold.__target_bank_id);
+                                                                handleReleaseHold(hold.id, hold.__target_bank_id, hold.__release_date || today);
                                                             }}
                                                             disabled={isSaving}
                                                         >
@@ -542,6 +724,100 @@ export default function SalesHistoryPage() {
                                             <TableRow>
                                                 <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">
                                                     No pending card settlements found.
+                                                </TableCell>
+                                            </TableRow>
+                                        )}
+                                    </TableBody>
+                                </Table>
+                            </div>
+                        </CardContent>
+                    </Card>
+                </TabsContent>
+
+                <TabsContent value="released_cards" className="mt-6">
+                    <Card className="border-none shadow-xl bg-background/50 backdrop-blur-sm overflow-hidden">
+                        <CardHeader className="pb-4">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                    <div className="p-2 bg-emerald-500/10 rounded-lg">
+                                        <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                                    </div>
+                                    <div>
+                                        <CardTitle className="text-xl">Released Card Settlements</CardTitle>
+                                        <CardDescription>History of card payments released to accounts</CardDescription>
+                                    </div>
+                                </div>
+                                <Badge variant="outline" className="border-emerald-200 text-emerald-700 font-bold px-3">
+                                    {allCardRecords.filter(r => r.status === 'released').length} Released
+                                </Badge>
+                            </div>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="rounded-xl border border-border/50 bg-background/50 overflow-hidden">
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow className="bg-muted/30">
+                                            <TableHead>Sale Date</TableHead>
+                                            <TableHead>Released Date</TableHead>
+                                            <TableHead className="text-center whitespace-nowrap">Hold Period</TableHead>
+                                            <TableHead>Card Name</TableHead>
+                                            <TableHead>Settled To</TableHead>
+                                            <TableHead className="text-right">Gross Amount</TableHead>
+                                            <TableHead className="text-right">Tax (%)</TableHead>
+                                            <TableHead className="text-right">Net Amount</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {allCardRecords
+                                            .filter(r => r.status === 'released')
+                                            .map((hold) => (
+                                                <TableRow key={hold.id} className="hover:bg-muted/20">
+                                                    <TableCell className="font-medium">
+                                                        {format(new Date(hold.sale_date), "dd MMM yyyy")}
+                                                    </TableCell>
+                                                    <TableCell className="text-xs text-muted-foreground">
+                                                        {hold.released_at ? format(new Date(hold.released_at), "dd MMM yyyy HH:mm") : '-'}
+                                                    </TableCell>
+                                                    <TableCell className="text-center">
+                                                        {hold.released_at ? (
+                                                            (() => {
+                                                                const day1 = new Date(hold.sale_date).setHours(0, 0, 0, 0);
+                                                                const day2 = new Date(hold.released_at).setHours(0, 0, 0, 0);
+                                                                const diffDays = Math.ceil(Math.abs(day2 - day1) / (1000 * 60 * 60 * 24));
+                                                                return (
+                                                                    <Badge variant="secondary" className="text-[10px] bg-slate-100 text-slate-700">
+                                                                        {diffDays} {diffDays === 1 ? 'day' : 'days'}
+                                                                    </Badge>
+                                                                );
+                                                            })()
+                                                        ) : '-'}
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <div className="flex flex-col">
+                                                            <span className="font-bold text-xs">
+                                                                {hold.bank_cards?.card_name || hold.supplier_cards?.card_name}
+                                                            </span>
+                                                            <span className="text-[10px] text-muted-foreground uppercase">
+                                                                {hold.card_type.replace('_', ' ')}
+                                                            </span>
+                                                        </div>
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <Badge variant="secondary" className="text-[10px]">
+                                                            {hold.bank_accounts?.account_name || hold.suppliers?.name || 'Unknown'}
+                                                        </Badge>
+                                                    </TableCell>
+                                                    <TableCell className="text-right">{formatCurrency(hold.hold_amount)}</TableCell>
+                                                    <TableCell className="text-right">
+                                                        <span className="text-rose-600 font-bold">{hold.tax_percentage}%</span>
+                                                    </TableCell>
+                                                    <TableCell className="text-right font-black text-emerald-600">{formatCurrency(hold.net_amount)}</TableCell>
+                                                </TableRow>
+                                            ))}
+                                        {allCardRecords.filter(r => r.status === 'released').length === 0 && (
+                                            <TableRow>
+                                                <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">
+                                                    No released card settlements found for the selected period.
                                                 </TableCell>
                                             </TableRow>
                                         )}
