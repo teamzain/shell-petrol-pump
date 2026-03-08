@@ -388,20 +388,39 @@ export function PODetailModal({
                         {/* Section 5: Payment Summary */}
                         <div className="bg-slate-900 text-white p-4 rounded-lg space-y-2 mt-4 ml-auto w-full md:w-80">
                             <h4 className="font-bold text-[10px] uppercase tracking-widest text-slate-400 mb-2">Financial Summary</h4>
-                            <div className="flex justify-between items-center text-sm">
-                                <span className="text-slate-300">Total Value</span>
-                                <span className="font-mono font-bold">{formatCurrency(displayEstimatedTotal)}</span>
+                            <div className="flex justify-between items-center text-sm border-b border-slate-700/50 pb-2 mb-2">
+                                <span className="text-slate-400 text-[10px] uppercase font-bold tracking-tight">
+                                    {deliveryId ? "Current Transaction" : "Total Order Position"}
+                                </span>
                             </div>
+
+                            <div className="flex justify-between items-center text-sm">
+                                <span className="text-slate-300">
+                                    {deliveryId ? "Items Value" : "Expected Order Value"}
+                                </span>
+                                <span className="font-mono font-bold">
+                                    {deliveryId
+                                        ? formatCurrency(mappedItems.reduce((acc: number, item: any) => acc + (Number(item.ordered_quantity) * Number(item.rate_per_liter)), 0))
+                                        : formatCurrency(displayEstimatedTotal)
+                                    }
+                                </span>
+                            </div>
+
                             <div className="flex justify-between items-center text-sm border-b border-slate-700 pb-2">
-                                <span className="text-green-400">- Paid Value / Debited Amount</span>
+                                <span className="text-green-400">- Received / Debited Value</span>
                                 <span className="font-mono font-bold text-green-400">-{formatCurrency(displayDeliveredValue)}</span>
                             </div>
+
                             <div className="flex justify-between items-center text-lg mt-2 pt-2">
                                 <span className="uppercase text-amber-500 text-xs font-bold tracking-tight self-center">
-                                    {deliveryId ? "= Transaction Total" : "= Amount On Hold"}
+                                    = Amount On Hold
                                 </span>
                                 <span className="font-mono font-black text-amber-500">
-                                    {deliveryId ? formatCurrency(displayDeliveredValue) : formatCurrency(Math.max(0, displayEstimatedTotal - displayDeliveredValue))}
+                                    {formatCurrency(
+                                        deliveryId
+                                            ? displayHolds.reduce((acc: number, h: any) => acc + Number(h.hold_amount), 0)
+                                            : (displayEstimatedTotal - displayDeliveredValue)
+                                    )}
                                 </span>
                             </div>
 

@@ -34,7 +34,7 @@ export function PurchaseHistoryReport({ filters, onDetailClick, onDataLoaded }: 
 
                 let query = supabase
                     .from("purchase_orders")
-                    .select("*, suppliers!inner(supplier_name, supplier_type), accounts(account_name)")
+                    .select("*, suppliers!inner(name, supplier_type), accounts(account_name)")
                     .gte("purchase_date", fromDate)
                     .lte("purchase_date", toDate)
 
@@ -166,7 +166,7 @@ export function PurchaseHistoryReport({ filters, onDetailClick, onDataLoaded }: 
                                             <TableCell className="whitespace-nowrap">
                                                 <div className="font-bold text-xs">{order.invoice_number}</div>
                                             </TableCell>
-                                            <TableCell className="text-xs whitespace-nowrap">{order.suppliers?.supplier_name}</TableCell>
+                                            <TableCell className="text-xs whitespace-nowrap">{order.suppliers?.name}</TableCell>
                                             <TableCell className="text-right font-bold text-xs whitespace-nowrap">
                                                 Rs. {Number(order.total_amount).toLocaleString()}
                                             </TableCell>

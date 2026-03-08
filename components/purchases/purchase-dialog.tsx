@@ -46,9 +46,13 @@ import { ShoppingCart as CartIcon } from "lucide-react"
 
 interface Supplier {
   id: string
-  supplier_name: string
+  name: string
   supplier_type: string
-  account_balance: number
+  company_accounts: {
+    current_balance: number
+  } | {
+    current_balance: number
+  }[]
 }
 
 interface BankAccount {
@@ -152,8 +156,12 @@ export function PurchaseDialog({ open, onOpenChange, onSuccess }: PurchaseDialog
 
 
   const fetchSuppliers = async () => {
-    const { data } = await supabase.from("suppliers").select("id, supplier_name, supplier_type, account_balance").eq("status", "active").order("supplier_name")
-    if (data) setSuppliers(data)
+    const { data } = await supabase
+      .from("suppliers")
+      .select("id, name, supplier_type, company_accounts(current_balance)")
+      .eq("status", "active")
+      .order("name")
+    if (data) setSuppliers(data as any)
   }
 
   const fetchProducts = async () => {
@@ -232,7 +240,11 @@ export function PurchaseDialog({ open, onOpenChange, onSuccess }: PurchaseDialog
       const selectedSupp = suppliers.find(s => s.id === formData.supplier_id);
       const { data: orders } = await supabase.from("purchase_orders").select("total_amount").eq("supplier_id", formData.supplier_id).in("status", ["hold", "scheduled"]);
       const outstandingSum = orders?.reduce((sum, o) => sum + Number(o.total_amount), 0) || 0;
-      availableSuppBalance = (selectedSupp?.account_balance || 0) - outstandingSum;
+
+      const account = Array.isArray(selectedSupp?.company_accounts) ? selectedSupp.company_accounts[0] : selectedSupp?.company_accounts
+      const accountBalance = account ? Number(account.current_balance) : 0
+
+      availableSuppBalance = accountBalance - outstandingSum;
     }
 
     if (availableSuppBalance < orderTotal) {
@@ -325,7 +337,15 @@ export function PurchaseDialog({ open, onOpenChange, onSuccess }: PurchaseDialog
                   <Select value={formData.supplier_id} onValueChange={(v) => setFormData({ ...formData, supplier_id: v })}>
                     <SelectTrigger className="h-9 rounded-lg font-medium"><SelectValue placeholder="Select Supplier" /></SelectTrigger>
                     <SelectContent>
-                      {suppliers.map(s => <SelectItem key={s.id} value={s.id}>{s.supplier_name} (Bal: {formatCurrency(s.account_balance)})</SelectItem>)}
+                      {suppliers.map(s => {
+                        const account = Array.isArray(s.company_accounts) ? s.company_accounts[0] : s.company_accounts
+                        const balance = account ? Number(account.current_balance) : 0
+                        return (
+                          <SelectItem key={s.id} value={s.id}>
+                            {s.name} (Bal: {formatCurrency(balance)})
+                          </SelectItem>
+                        )
+                      })}
                     </SelectContent>
                   </Select>
                 </div>

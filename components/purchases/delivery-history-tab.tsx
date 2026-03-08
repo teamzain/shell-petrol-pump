@@ -70,7 +70,7 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
                 purchase_order_id: del.purchase_order_id,
                 company_invoice_number: del.company_invoice_number,
                 po_number: poData?.po_number,
-                supplier_name: del.suppliers?.name,
+                name: del.suppliers?.name,
                 order_date: poData?.created_at,
                 receiving_date: del.delivery_date,
                 total_order_value: poData?.estimated_total || 0,
@@ -111,7 +111,7 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
     const deliveryList = Object.values(groupedDeliveries)
 
     const filteredDeliveries = deliveryList.filter((del: any) =>
-        del.supplier_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        del.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
         del.company_invoice_number?.toLowerCase().includes(searchQuery.toLowerCase()) ||
         del.po_number?.toLowerCase().includes(searchQuery.toLowerCase())
     )
@@ -173,7 +173,7 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
                                 <TableRow key={`${del.purchase_order_id}-${del.company_invoice_number}`} className="hover:bg-slate-50/30">
                                     <TableCell className="font-mono text-[10px] font-bold">{del.company_invoice_number || 'N/A'}</TableCell>
                                     <TableCell className="font-mono text-[10px] text-muted-foreground">{del.po_number}</TableCell>
-                                    <TableCell className="font-medium text-[10px]">{del.supplier_name}</TableCell>
+                                    <TableCell className="font-medium text-[10px]">{del.name}</TableCell>
                                     <TableCell className="text-[10px] whitespace-nowrap">
                                         {del.order_date ? new Date(del.order_date).toLocaleDateString('en-PK') : '-'}
                                     </TableCell>

@@ -695,7 +695,7 @@ export default function SalesHistoryPage() {
                                                                     <>
                                                                         <div className="px-2 py-1.5 text-[10px] font-bold text-muted-foreground uppercase border-t bg-muted/20">Direct Supplier Accounts</div>
                                                                         {suppliers.map(s => (
-                                                                            <SelectItem key={s.id} value={`supp_${s.id}`}>{s.supplier_name}</SelectItem>
+                                                                            <SelectItem key={s.id} value={`supp_${s.id}`}>{s.name}</SelectItem>
                                                                         ))}
                                                                     </>
                                                                 )}

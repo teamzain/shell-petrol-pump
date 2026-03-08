@@ -44,8 +44,6 @@ export async function recordManualSale(data: ManualSaleData) {
             quantity: data.quantity,
             unit_price: data.unit_price,
             total_amount: totalAmount,
-            cash_payment_amount: totalAmount,
-            card_payment_amount: 0,
             payment_method: data.payment_method,
             customer_name: data.customer_name,
             profit: profit,
@@ -64,12 +62,23 @@ export async function recordManualSale(data: ManualSaleData) {
         p_quantity: data.quantity
     })
 
-    // 4. Stock Movement
+    // 4. Stock Movement (Fetch fresh snapshot)
+    const { data: currentProd } = await supabase
+        .from('products')
+        .select('current_stock')
+        .eq('id', data.product_id)
+        .single()
+
+    const prevStock = currentProd?.current_stock ? currentProd.current_stock + data.quantity : product.current_stock
+    const balanceAfter = currentProd?.current_stock || (product.current_stock - data.quantity)
+
     await supabase.from('stock_movements').insert([{
         product_id: data.product_id,
         movement_type: 'sale',
         quantity: -data.quantity,
-        reference: `Manual Sale - ${data.customer_name || 'Walk-in'}`
+        previous_stock: prevStock,
+        balance_after: balanceAfter,
+        notes: `Manual Sale - ${data.customer_name || 'Walk-in'}`
     }])
 
     // 5. Update Cash Balance (if cash)

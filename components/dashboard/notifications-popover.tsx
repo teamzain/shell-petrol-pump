@@ -181,24 +181,28 @@ export function NotificationsPopover() {
 
             // 4. Fetch Supplier Dues (Live) - Only if balance column exists (graceful fallback)
             try {
-                const { data: suppliers } = await supabase
+                const { data: suppliersData } = await supabase
                     .from('suppliers')
-                    .select('id, supplier_name, balance')
-                    .gt('balance', 0)
+                    .select('id, name, company_accounts(current_balance)')
                     .eq('status', 'active')
 
-                if (suppliers) {
-                    suppliers.forEach(s => {
-                        allItems.push({
-                            id: `supplier-${s.id}`,
-                            title: "Payment Due",
-                            message: `Outstanding balance of Rs. ${s.balance} for ${s.supplier_name}.`,
-                            type: "warning",
-                            timestamp: getTodayPKT(),
-                            read: false,
-                            source: "supplier",
-                            link: "/dashboard/suppliers"
-                        })
+                if (suppliersData) {
+                    suppliersData.forEach((s: any) => {
+                        const account = Array.isArray(s.company_accounts) ? s.company_accounts[0] : s.company_accounts
+                        const balance = account ? Number(account.current_balance) : 0
+
+                        if (balance > 0) {
+                            allItems.push({
+                                id: `supplier-${s.id}`,
+                                title: "Payment Due",
+                                message: `Outstanding balance of Rs. ${balance.toLocaleString()} for ${s.name}.`,
+                                type: "warning",
+                                timestamp: getTodayPKT(),
+                                read: false,
+                                source: "supplier",
+                                link: "/dashboard/suppliers"
+                            })
+                        }
                     })
                 }
             } catch (err) {

@@ -58,7 +58,7 @@ export function SupplierPerformanceReport({ filters, onDetailClick, onDataLoaded
                     }
                 }
 
-                const { data: suppliersData } = await query.order("supplier_name")
+                const { data: suppliersData } = await query.order("name")
 
                 if (suppliersData) {
                     const processed = suppliersData.map(s => {
@@ -156,7 +156,7 @@ export function SupplierPerformanceReport({ filters, onDetailClick, onDataLoaded
                                 {suppliers.map((s) => (
                                     <TableRow key={s.id}>
                                         <TableCell className="whitespace-nowrap">
-                                            <div className="font-bold">{s.supplier_name}</div>
+                                            <div className="font-bold">{s.name}</div>
                                             <div className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
                                                 <Phone className="h-3 w-3" /> {s.phone_number}
                                             </div>

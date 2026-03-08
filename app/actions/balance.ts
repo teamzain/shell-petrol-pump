@@ -120,7 +120,7 @@ export async function getBalanceOverviewData(date?: string) {
             }
             return {
                 id: s.id,
-                supplier_name: s.name,
+                name: s.name,
                 account_balance: balance,
                 tax_percentage: Number(s.tax_percentage || 0)
             }

@@ -108,7 +108,7 @@ interface BankAccount {
 
 interface Supplier {
   id: string
-  supplier_name: string
+  name: string
   account_balance: number
   tax_percentage: number
 }
@@ -955,7 +955,7 @@ export default function BalanceManagementPage() {
                 {suppliers.map(supplier => (
                   <div key={supplier.id} className="p-4 border rounded-xl bg-amber-500/[0.03] hover:bg-amber-500/[0.08] transition-colors border-amber-200/50 group">
                     <div className="flex justify-between items-start">
-                      <p className="text-xs font-bold text-muted-foreground uppercase">{supplier.supplier_name}</p>
+                      <p className="text-xs font-bold text-muted-foreground uppercase">{supplier.name}</p>
                       <Button
                         variant="ghost"
                         size="icon"
@@ -1578,7 +1578,7 @@ export default function BalanceManagementPage() {
                           <div className="px-2 py-1 text-xs font-semibold text-muted-foreground">🚚 Supplier Accounts</div>
                           {suppliers.map(supp => (
                             <SelectItem key={supp.id} value={`supp_${supp.id}`}>
-                              {supp.supplier_name} — {formatCurrency(supp.account_balance)}
+                              {supp.name} — {formatCurrency(supp.account_balance)}
                             </SelectItem>
                           ))}
                         </>
@@ -1782,7 +1782,7 @@ export default function BalanceManagementPage() {
                 </SelectTrigger>
                 <SelectContent>
                   {suppliers.map(supp => (
-                    <SelectItem key={supp.id} value={supp.id}>{supp.supplier_name}</SelectItem>
+                    <SelectItem key={supp.id} value={supp.id}>{supp.name}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -1911,7 +1911,7 @@ export default function BalanceManagementPage() {
           <DialogHeader>
             <DialogTitle>Supplier Tax Settings</DialogTitle>
             <DialogDescription>
-              Set the default withholding tax percentage for {selectedSupplier?.supplier_name}.
+              Set the default withholding tax percentage for {selectedSupplier?.name}.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">

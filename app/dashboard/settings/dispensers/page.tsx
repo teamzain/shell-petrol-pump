@@ -33,7 +33,7 @@ import {
 } from "lucide-react"
 import { BrandLoader as Loader } from "@/components/ui/brand-loader"
 import { toast } from "sonner"
-import { getDispensers, saveDispenser, deleteDispenser, saveNozzle, deleteNozzle } from "@/app/actions/sales-setup"
+import { getDispensers, saveDispenser, deleteDispenser, saveNozzle, deleteNozzle } from "@/app/actions/dispenser-actions"
 import { getProducts } from "@/app/actions/products"
 import { getTanks } from "@/app/actions/tanks"
 import { Badge } from "@/components/ui/badge"
@@ -55,6 +55,7 @@ export default function DispensersPage() {
         dispenser_id: "",
         nozzle_number: "",
         product_id: "",
+        nozzle_side: "",
         status: "active"
     })
 
@@ -199,6 +200,7 @@ export default function DispensersPage() {
                                                 <p className="text-[10px] text-muted-foreground uppercase font-black items-center flex gap-1 tracking-tighter">
                                                     <Droplet className="w-3 h-3 text-primary" />
                                                     Rs. {nozzle.products?.selling_price || 0} / Liter
+                                                    {nozzle.nozzle_side && <span className="ml-2 px-1 rounded bg-muted">Side: {nozzle.nozzle_side}</span>}
                                                 </p>
                                             </div>
                                         </div>
@@ -209,6 +211,7 @@ export default function DispensersPage() {
                                                     dispenser_id: dispenser.id,
                                                     nozzle_number: nozzle.nozzle_number.toString(),
                                                     product_id: nozzle.product_id,
+                                                    nozzle_side: nozzle.nozzle_side || "",
                                                     status: nozzle.status
                                                 })
                                                 setIsNozzleDialogOpen(true)
@@ -231,6 +234,7 @@ export default function DispensersPage() {
                                             dispenser_id: dispenser.id,
                                             nozzle_number: (dispenser.nozzles?.length + 1 || 1).toString(),
                                             product_id: "",
+                                            nozzle_side: "",
                                             status: "active"
                                         })
                                         setIsNozzleDialogOpen(true)
@@ -342,6 +346,16 @@ export default function DispensersPage() {
                                         ))}
                                     </SelectContent>
                                 </Select>
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="nozzle_side" className="text-xs font-black uppercase tracking-widest ml-1 text-muted-foreground">Location/Side (Optional)</Label>
+                                <Input
+                                    id="nozzle_side"
+                                    placeholder="e.g. Left Side"
+                                    value={nozzleData.nozzle_side || ""}
+                                    onChange={(e) => setNozzleData({ ...nozzleData, nozzle_side: e.target.value })}
+                                    className="h-12 rounded-xl border-2 focus-visible:ring-primary/20 font-bold"
+                                />
                             </div>
                         </div>
                         <DialogFooter>

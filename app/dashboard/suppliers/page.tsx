@@ -39,9 +39,10 @@ import {
   Filter
 } from "lucide-react"
 import { BrandLoader } from "@/components/ui/brand-loader"
-import { getSuppliers } from "@/app/actions/suppliers"
+import { getSuppliers, createCompanyAccount } from "@/app/actions/suppliers"
 import { SupplierWizard } from "@/components/suppliers/supplier-wizard"
 import { SupplierDialog } from "@/components/suppliers/supplier-dialog"
+import { toast } from "sonner"
 
 export default function SuppliersPage() {
   const [suppliers, setSuppliers] = useState<any[]>([])
@@ -71,6 +72,18 @@ export default function SuppliersPage() {
   useEffect(() => {
     fetchSuppliers()
   }, [])
+
+  const handleCreateAccount = async (supplierId: string) => {
+    try {
+      const result = await createCompanyAccount(supplierId)
+      if (result.success) {
+        toast.success("Company account created successfully")
+        fetchSuppliers()
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to create account")
+    }
+  }
 
   const filteredSuppliers = suppliers.filter(s => {
     const matchesSearch = s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -291,7 +304,12 @@ export default function SuppliersPage() {
                             ) : (
                               <Tooltip>
                                 <TooltipTrigger asChild>
-                                  <Button variant="ghost" size="icon" className="h-8 w-8 text-orange-500">
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 text-orange-500"
+                                    onClick={() => handleCreateAccount(supplier.id)}
+                                  >
                                     <UserPlus className="h-4 w-4" />
                                   </Button>
                                 </TooltipTrigger>

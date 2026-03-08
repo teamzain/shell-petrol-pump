@@ -22,7 +22,8 @@ export type NozzleReadingUpdate = {
 export async function addNozzle(formData: {
     nozzle_number: string
     product_id: string
-    location?: string
+    dispenser_id?: string
+    nozzle_side?: string
     initial_reading: number
 }) {
     const supabase = await createClient()
@@ -32,9 +33,11 @@ export async function addNozzle(formData: {
         .insert([{
             nozzle_number: formData.nozzle_number,
             product_id: formData.product_id,
-            location: formData.location,
+            dispenser_id: formData.dispenser_id || null,
+            nozzle_side: formData.nozzle_side,
             initial_reading: formData.initial_reading,
             last_reading: formData.initial_reading,
+            current_reading: formData.initial_reading,
             status: 'active'
         }])
         .select()
@@ -73,7 +76,7 @@ export async function recordNozzleReadings(readings: NozzleReadingUpdate[], date
             // 2. Fetch Product for Financials
             const { data: product } = await supabase
                 .from('products')
-                .select('id, name, selling_price, purchase_price')
+                .select('id, name, selling_price, purchase_price, current_stock')
                 .eq('id', nozzle.product_id)
                 .single()
 
@@ -123,12 +126,24 @@ export async function recordNozzleReadings(readings: NozzleReadingUpdate[], date
                     })
                     if (stockError) throw new Error(`Stock update failed: ${stockError.message}`)
 
-                    // 5. Stock Movement Record
+                    // 5. Stock Movement Record (Fetch fresh snapshot)
+                    const { data: currentProduct } = await supabase
+                        .from('products')
+                        .select('current_stock')
+                        .eq('id', product.id)
+                        .single()
+
+                    const prevStock = currentProduct?.current_stock ? currentProduct.current_stock + qtyToSubtract : product.current_stock
+                    const balanceAfter = currentProduct?.current_stock || (product.current_stock - qtyToSubtract)
+
                     const { error: moveError } = await supabase.from('stock_movements').insert([{
                         product_id: product.id,
                         movement_type: 'sale',
                         quantity: -qtyToSubtract, // Negative for sale/decrement, Positive for return/increment
-                        reference: `Daily Reading Update - ${targetDate}${existingSale ? ' (Correction)' : ''}`
+                        previous_stock: prevStock,
+                        balance_after: balanceAfter,
+                        reference_number: `Nozzle ${nozzle.nozzle_number}`,
+                        notes: `Daily Reading Update - ${targetDate}${existingSale ? ' (Correction)' : ''}`
                     }])
                     if (moveError) throw new Error(`Movement record failed: ${moveError.message}`)
                 }

@@ -18,6 +18,7 @@ import {
     Printer
 } from "lucide-react"
 import { BrandLoader } from "@/components/ui/brand-loader"
+import { createClient } from "@/lib/supabase/client"
 import { format, startOfMonth, endOfMonth, startOfToday, subDays, startOfWeek, endOfWeek, startOfYear, endOfYear } from "date-fns"
 
 import { Skeleton } from "@/components/ui/skeleton"
@@ -46,6 +47,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Calendar } from "@/components/ui/calendar"
 import { Separator } from "@/components/ui/separator"
 import { cn, getTodayPKT } from "@/lib/utils"
+import { getSuppliers } from "@/app/actions/suppliers"
 
 // Report Components
 import { SupplierPerformanceReport } from "@/components/reports/supplier-tracking"
@@ -84,6 +86,8 @@ export default function ReportsPage() {
         status: "all"
     })
 
+    const supabase = createClient()
+
     const [activeTab, setActiveTab] = useState("supplier-tracking")
     const [reportData, setReportData] = useState<any>(null)
     const [isRefreshing, setIsRefreshing] = useState(false)
@@ -93,10 +97,26 @@ export default function ReportsPage() {
     const [selectedItem, setSelectedItem] = useState<any>(null)
     const [isDetailOpen, setIsDetailOpen] = useState(false)
 
-    // Fetch suppliers for filter
+    // Fetch suppliers & products for filter
     useEffect(() => {
-        // Backend logic removed for system recreation
-    }, [])
+        const loadMetadata = async () => {
+            try {
+                const [sData, pData] = await Promise.all([
+                    getSuppliers(),
+                    supabase.from("products").select("id, name, product_type").order("name")
+                ])
+                setSuppliers(sData || [])
+                setProducts(pData.data?.map((p: any) => ({
+                    id: p.id,
+                    product_name: p.name,
+                    product_type: p.product_type
+                })) || [])
+            } catch (err) {
+                console.error("Error loading report metadata:", err)
+            }
+        }
+        loadMetadata()
+    }, [supabase])
 
     // Trigger global loader on filter change
     useEffect(() => {
@@ -320,7 +340,7 @@ export default function ReportsPage() {
                                     <SelectContent>
                                         <SelectItem value="all">All Suppliers</SelectItem>
                                         {suppliers.map(s => (
-                                            <SelectItem key={s.id} value={s.id}>{s.supplier_name}</SelectItem>
+                                            <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
                                         ))}
                                     </SelectContent>
                                 </Select>

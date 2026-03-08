@@ -512,6 +512,7 @@ export async function getPurchaseOrderDetail(poId: string) {
             ),
             po_hold_records (
                 id,
+                delivery_id,
                 hold_quantity,
                 hold_amount,
                 expected_return_date,

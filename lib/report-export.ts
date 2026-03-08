@@ -42,7 +42,7 @@ function exportToCSV(activeTab: string, reportData: any, dateRangeStr: string) {
             const row = [
                 o.purchase_date,
                 o.invoice_number,
-                o.suppliers?.supplier_name || "N/A",
+                o.suppliers?.name || "N/A",
                 o.total_amount,
                 o.status
             ]
@@ -66,7 +66,7 @@ function exportToCSV(activeTab: string, reportData: any, dateRangeStr: string) {
         csvContent += headers.join(",") + "\n"
         reportData.forEach((s: any) => {
             const row = [
-                s.supplier_name,
+                s.name,
                 s.supplier_type,
                 s.periodPurchases,
                 s.total_purchases,
@@ -135,7 +135,7 @@ function exportToPDF(activeTab: string, reportData: any, dateRangeStr: string, s
         tableData = reportData.orders.map((o: any) => [
             o.purchase_date,
             o.invoice_number,
-            o.suppliers?.supplier_name || "N/A",
+            o.suppliers?.name || "N/A",
             o.total_amount.toLocaleString(),
             o.status
         ])
@@ -162,7 +162,7 @@ function exportToPDF(activeTab: string, reportData: any, dateRangeStr: string, s
 
         tableHeaders = ["Supplier", "Type", "Period Purchases", "Lifetime Total", "Outstanding Dues"]
         tableData = reportData.suppliers.map((s: any) => [
-            s.supplier_name,
+            s.name,
             s.supplier_type,
             s.periodPurchases.toLocaleString(),
             s.total_purchases.toLocaleString(),

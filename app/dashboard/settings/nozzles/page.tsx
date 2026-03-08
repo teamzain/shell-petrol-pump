@@ -52,9 +52,11 @@ export default function NozzleSettingsPage() {
     const [formData, setFormData] = useState({
         nozzle_number: "",
         product_id: "",
-        location: "",
+        dispenser_id: "",
+        nozzle_side: "",
         initial_reading: "",
     })
+    const [dispensers, setDispensers] = useState<any[]>([])
 
     const supabase = createClient()
 
@@ -69,7 +71,8 @@ export default function NozzleSettingsPage() {
                 .from("nozzles")
                 .select(`
           *,
-          products(name)
+          products(name),
+          dispensers(name)
         `)
                 .order("nozzle_number")
 
@@ -79,8 +82,14 @@ export default function NozzleSettingsPage() {
                 .eq("type", "fuel")
                 .eq("status", "active")
 
+            const { data: dispenserData } = await supabase
+                .from("dispensers")
+                .select("id, name")
+                .eq("status", "active")
+
             setNozzles(nozzleData || [])
             setProducts(productData || [])
+            setDispensers(dispenserData || [])
         } catch (error) {
             console.error("Fetch error:", error)
             toast.error("Failed to load settings")
@@ -97,13 +106,14 @@ export default function NozzleSettingsPage() {
             await addNozzle({
                 nozzle_number: formData.nozzle_number,
                 product_id: formData.product_id,
-                location: formData.location,
+                dispenser_id: formData.dispenser_id,
+                nozzle_side: formData.nozzle_side,
                 initial_reading: parseFloat(formData.initial_reading),
             })
 
             toast.success("Nozzle configured successfully!")
             setIsDialogOpen(false)
-            setFormData({ nozzle_number: "", product_id: "", location: "", initial_reading: "" })
+            setFormData({ nozzle_number: "", product_id: "", dispenser_id: "", nozzle_side: "", initial_reading: "" })
             fetchData()
         } catch (error: any) {
             toast.error(error.message || "Failed to add nozzle")
@@ -166,12 +176,30 @@ export default function NozzleSettingsPage() {
                                     </Select>
                                 </div>
                                 <div className="grid gap-2">
-                                    <Label htmlFor="location">Location/Position (Optional)</Label>
+                                    <Label htmlFor="dispenser">Dispenser</Label>
+                                    <Select
+                                        value={formData.dispenser_id}
+                                        onValueChange={(v) => setFormData({ ...formData, dispenser_id: v })}
+                                    >
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Select dispenser (Optional)" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {dispensers.map((d) => (
+                                                <SelectItem key={d.id} value={d.id}>
+                                                    {d.name}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label htmlFor="nozzle_side">Location/Side (Optional)</Label>
                                     <Input
-                                        id="location"
+                                        id="nozzle_side"
                                         placeholder="e.g. Left Side - Bay 1"
-                                        value={formData.location}
-                                        onChange={(e) => setFormData({ ...formData, location: e.target.value })}
+                                        value={formData.nozzle_side}
+                                        onChange={(e) => setFormData({ ...formData, nozzle_side: e.target.value })}
                                     />
                                 </div>
                                 <div className="grid gap-2">
@@ -225,7 +253,8 @@ export default function NozzleSettingsPage() {
                                 <TableRow>
                                     <TableHead>Nozzle</TableHead>
                                     <TableHead>Fuel Type</TableHead>
-                                    <TableHead>Location</TableHead>
+                                    <TableHead>Dispenser</TableHead>
+                                    <TableHead>Location/Side</TableHead>
                                     <TableHead className="text-right">Last Reading</TableHead>
                                     <TableHead>Status</TableHead>
                                     <TableHead className="text-right">Actions</TableHead>
@@ -236,7 +265,8 @@ export default function NozzleSettingsPage() {
                                     <TableRow key={nozzle.id}>
                                         <TableCell className="font-medium">{nozzle.nozzle_number}</TableCell>
                                         <TableCell>{nozzle.products?.name}</TableCell>
-                                        <TableCell>{nozzle.location || "-"}</TableCell>
+                                        <TableCell>{nozzle.dispensers?.name || "Unassigned"}</TableCell>
+                                        <TableCell>{nozzle.nozzle_side || "-"}</TableCell>
                                         <TableCell className="text-right font-mono">
                                             {(nozzle.last_reading || 0).toLocaleString()} L
                                         </TableCell>

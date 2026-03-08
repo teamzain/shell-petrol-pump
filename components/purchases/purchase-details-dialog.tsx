@@ -43,7 +43,7 @@ interface PurchaseOrder {
   quantity_remaining: number
   estimated_total: number
   suppliers: {
-    supplier_name: string
+    name: string
     contact_person?: string
     phone?: string
   }
@@ -245,7 +245,7 @@ export function PurchaseDetailsDialog({
           <div className="flex justify-between items-start border-b pb-4">
             <div className="space-y-1">
               <p className="text-xs text-muted-foreground uppercase tracking-wider">Supplier</p>
-              <p className="font-bold text-lg">{order.suppliers?.supplier_name}</p>
+              <p className="font-bold text-lg">{order.suppliers?.name}</p>
               <p className="text-sm text-muted-foreground">{order.suppliers?.phone}</p>
             </div>
             <div className="text-right space-y-1">

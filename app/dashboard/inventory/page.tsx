@@ -421,25 +421,21 @@ export default function InventoryPage() {
                         <TableHead>Date</TableHead>
                         <TableHead>Product</TableHead>
                         <TableHead>Type</TableHead>
-                        <TableHead className="text-right">Previous</TableHead>
-                        <TableHead className="text-right">Ordered</TableHead>
-                        <TableHead className="text-right">Received</TableHead>
-                        <TableHead className="text-right">Current</TableHead>
+                        <TableHead className="text-right">Prev. Stock</TableHead>
+                        <TableHead className="text-right">Sale Qty</TableHead>
+                        <TableHead className="text-right">Purchase</TableHead>
+                        <TableHead className="text-right">Net Stock</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {movements.map((movement) => {
                         const rawQty = Number(movement.quantity)
-                        let signedQty = rawQty
+                        const isNegative = rawQty < 0
+                        const isPositive = rawQty > 0
 
-                        // Force sign based on type for known inconsistent types
-                        if (movement.movement_type === "sale") {
-                          signedQty = -Math.abs(rawQty)
-                        } else if (movement.movement_type === "purchase" || movement.movement_type === "initial") {
-                          signedQty = Math.abs(rawQty)
-                        }
+                        const quantityLabel = isNegative ? Math.abs(rawQty).toLocaleString() : "-"
+                        const receivedLabel = isPositive ? rawQty.toLocaleString() : "-"
 
-                        const isPositive = signedQty > 0
                         const typeLabel = movement.movement_type === "purchase" ? "Purchase"
                           : movement.movement_type === "sale" ? "Sale"
                             : movement.movement_type === "initial" ? "Opening"
@@ -469,15 +465,13 @@ export default function InventoryPage() {
                             <TableCell className="text-right text-xs font-mono">
                               {Number(movement.previous_stock || 0).toLocaleString()}
                             </TableCell>
-                            <TableCell className="text-right text-xs text-muted-foreground">
-                              {movement.ordered_quantity !== null ? movement.ordered_quantity.toLocaleString() : "-"}
+                            <TableCell className="text-right font-bold text-destructive">
+                              {isNegative ? `-${quantityLabel}` : "-"}
                             </TableCell>
-                            <TableCell className="text-right">
-                              <span className={`font-bold ${isPositive ? "text-green-600" : "text-destructive"}`}>
-                                {isPositive ? "+" : ""}{signedQty.toLocaleString()}
-                              </span>
+                            <TableCell className="text-right font-bold text-green-600">
+                              {isPositive ? `+${receivedLabel}` : "-"}
                             </TableCell>
-                            <TableCell className="text-right font-mono text-xs">
+                            <TableCell className="text-right font-mono text-xs font-bold">
                               {Number(movement.balance_after).toLocaleString()}
                             </TableCell>
                           </TableRow>

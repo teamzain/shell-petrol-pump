@@ -90,6 +90,9 @@ const navItems: NavItem[] = [
     children: [
       { title: "Profile", href: "/dashboard/settings" },
       { title: "Nozzle Config", href: "/dashboard/settings/nozzles" },
+      { title: "Dispenser Config", href: "/dashboard/settings/dispensers" },
+      { title: "Tank Config", href: "/dashboard/settings/tanks" },
+      { title: "Lubricant Config", href: "/dashboard/settings/lubricants" },
       { title: "Payment Methods", href: "/dashboard/settings/payment-methods" },
     ],
   },

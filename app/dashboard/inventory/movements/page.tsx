@@ -48,7 +48,7 @@ interface StockMovement {
     product_type: string
   }
   suppliers: {
-    supplier_name: string
+    name: string
   } | null
 }
 
@@ -145,7 +145,7 @@ export default function StockMovementsPage() {
         product_type: m.products?.type || 'other'
       },
       suppliers: m.suppliers ? {
-        supplier_name: m.suppliers.name
+        name: m.suppliers.name
       } : null
     })) as StockMovement[]
 
@@ -156,7 +156,7 @@ export default function StockMovementsPage() {
         m.products?.product_name?.toLowerCase().includes(q) ||
         m.notes?.toLowerCase().includes(q) ||
         m.reference_number?.toLowerCase().includes(q) ||
-        m.suppliers?.supplier_name?.toLowerCase().includes(q)
+        m.suppliers?.name?.toLowerCase().includes(q)
       )
     }
 
@@ -292,10 +292,10 @@ export default function StockMovementsPage() {
                   <TableHead>Date & Time</TableHead>
                   <TableHead>Product</TableHead>
                   <TableHead>Type</TableHead>
-                  <TableHead className="text-right">Previous Stock</TableHead>
-                  <TableHead className="text-right">Order Qty</TableHead>
-                  <TableHead className="text-right">Received Qty</TableHead>
-                  <TableHead className="text-right">Current Stock</TableHead>
+                  <TableHead className="text-right">Prev. Stock</TableHead>
+                  <TableHead className="text-right">Sale Qty</TableHead>
+                  <TableHead className="text-right">Purchase</TableHead>
+                  <TableHead className="text-right">Net Stock</TableHead>
                   <TableHead>Reference / Note</TableHead>
                 </TableRow>
               </TableHeader>
@@ -308,12 +308,12 @@ export default function StockMovementsPage() {
                   </TableRow>
                 ) : (
                   movements.map((m) => {
-                    const diff = Number(m.balance_after) - Number(m.previous_stock)
-                    const isIncrease = diff > 0
-                    const displayChange = Math.abs(diff)
+                    const rawQty = Math.abs(Number(m.quantity))
+                    const isPositive = Number(m.quantity) > 0
+                    const isNegative = Number(m.quantity) < 0
 
-                    const isPurchase = m.movement_type === "purchase"
-                    const isSale = m.movement_type === "sale"
+                    const saleLabel = isNegative ? `-${rawQty.toLocaleString(undefined, { minimumFractionDigits: 2 })}` : "-"
+                    const purchaseLabel = isPositive ? `+${rawQty.toLocaleString(undefined, { minimumFractionDigits: 2 })}` : "-"
 
                     return (
                       <TableRow key={m.id}>
@@ -332,21 +332,19 @@ export default function StockMovementsPage() {
                           <div className="text-xs text-muted-foreground">{m.products?.product_type?.replace('_', ' ')}</div>
                         </TableCell>
                         <TableCell>
-                          <Badge variant={isPurchase ? "secondary" : isSale ? "outline" : "outline"}
-                            className={isPurchase ? "bg-green-100 text-green-800 hover:bg-green-100" : isSale ? "bg-red-50 text-red-700 hover:bg-red-50" : ""}>
+                          <Badge variant={isPositive ? "secondary" : isNegative ? "outline" : "outline"}
+                            className={isPositive ? "bg-green-100 text-green-800 hover:bg-green-100" : isNegative ? "bg-red-50 text-red-700 hover:bg-red-50" : ""}>
                             {m.movement_type}
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right font-mono">
                           {Number(m.previous_stock || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                         </TableCell>
-                        <TableCell className="text-right font-mono text-muted-foreground">
-                          {m.ordered_quantity !== null ? Number(m.ordered_quantity).toLocaleString(undefined, { minimumFractionDigits: 2 }) : "-"}
+                        <TableCell className="text-right font-bold text-destructive">
+                          {isNegative ? saleLabel : "-"}
                         </TableCell>
-                        <TableCell className="text-right">
-                          <span className={`font-bold ${isIncrease ? "text-green-600" : "text-destructive"}`}>
-                            {isIncrease ? "+" : "-"}{displayChange.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                          </span>
+                        <TableCell className="text-right font-bold text-green-600">
+                          {isPositive ? purchaseLabel : "-"}
                         </TableCell>
                         <TableCell className="text-right font-mono font-bold">
                           {Number(m.balance_after).toLocaleString(undefined, { minimumFractionDigits: 2 })}
