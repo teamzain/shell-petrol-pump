@@ -17,7 +17,11 @@ import {
     Download,
     Search,
     Lock,
-    Unlock
+    Unlock,
+    History,
+    Calendar,
+    ArrowDown,
+    ArrowUp
 } from "lucide-react"
 import { AdminPinDialog } from "@/components/auth/admin-pin-dialog"
 import { createClient } from "@/lib/supabase/client"
@@ -66,8 +70,11 @@ import {
 import { toast } from "sonner"
 import { recordNozzleReadings } from "@/app/actions/nozzle-actions"
 import { recordDailyCardPayments, type DailyCardEntry } from "@/app/actions/card-actions"
+import { recordTankReconciliation, getReconciliationHistory } from "@/app/actions/dip-chart-actions"
 import { getTodayPKT } from "@/lib/utils"
 import { exportToCSV } from "@/lib/export-utils"
+import { getTanksWithCharts, getDipChartEntries } from "@/app/actions/dip-chart-actions"
+import { getSystemActiveDate } from "@/app/actions/balance"
 
 export default function NozzleReadingsPage() {
     const [nozzles, setNozzles] = useState<any[]>([])
@@ -79,15 +86,41 @@ export default function NozzleReadingsPage() {
     // Card Summary State
     const [bankCards, setBankCards] = useState<any[]>([])
     const [supplierCards, setSupplierCards] = useState<any[]>([])
-    const [workingDate, setWorkingDate] = useState(getTodayPKT())
+    const [workingDate, setWorkingDate] = useState("")
     const [cardEntries, setCardEntries] = useState<DailyCardEntry[]>([
-        { card_type: 'bank_card', card_id: '', amount: 0, date: getTodayPKT() }
+        { card_type: 'bank_card', card_id: '', amount: 0, date: "" }
     ])
+
+    // Reconciliation History State
+    const [history, setHistory] = useState<any[]>([])
+    const [isHistoryLoading, setIsHistoryLoading] = useState(false)
+    const [historyStartDate, setHistoryStartDate] = useState("")
+    const [historyEndDate, setHistoryEndDate] = useState("")
+
+    useEffect(() => {
+        const initDate = async () => {
+            const activeDate = await getSystemActiveDate()
+            setWorkingDate(activeDate)
+            setCardEntries([{ card_type: 'bank_card', card_id: '', amount: 0, date: activeDate }])
+            setHistoryStartDate(activeDate)
+            setHistoryEndDate(activeDate)
+        }
+        initDate()
+    }, [])
 
     // Security Lock State
     const [lockedNozzleIds, setLockedNozzleIds] = useState<Set<string>>(new Set())
     const [isPinDialogOpen, setIsPinDialogOpen] = useState(false)
     const [activeNozzleId, setActiveNozzleId] = useState<string | null>(null)
+
+    // Dip Chart Calculator State
+    const [tanks, setTanks] = useState<any[]>([])
+    const [dipChartEntriesMap, setDipChartEntriesMap] = useState<Record<string, any[]>>({})
+    const [dipReadings, setDipReadings] = useState<Record<string, string>>({})
+    const [isDipLoading, setIsDipLoading] = useState(false)
+    const [isDipSaving, setIsDipSaving] = useState(false)
+
+
 
     const supabase = createClient()
     const today = getTodayPKT()
@@ -95,7 +128,31 @@ export default function NozzleReadingsPage() {
     useEffect(() => {
         fetchNozzles()
         fetchCardOptions()
+        fetchDipChartData()
     }, [workingDate])
+
+    async function fetchDipChartData() {
+        setIsDipLoading(true)
+        try {
+            const tanksData = await getTanksWithCharts()
+            setTanks(tanksData || [])
+
+            // Fetch entries for each unique dip chart
+            const uniqueChartIds = Array.from(new Set(tanksData.map(t => t.dip_chart_id).filter(Boolean))) as string[]
+            const entriesMap: Record<string, any[]> = {}
+
+            await Promise.all(uniqueChartIds.map(async (chartId) => {
+                const entries = await getDipChartEntries(chartId)
+                entriesMap[chartId] = entries
+            }))
+
+            setDipChartEntriesMap(entriesMap)
+        } catch (error) {
+            console.error("Failed to fetch dip chart data", error)
+        } finally {
+            setIsDipLoading(false)
+        }
+    }
 
     async function fetchCardOptions() {
         try {
@@ -107,6 +164,23 @@ export default function NozzleReadingsPage() {
             console.error("Failed to fetch card options", error)
         }
     }
+
+    async function fetchHistory() {
+        setIsHistoryLoading(true)
+        try {
+            const data = await getReconciliationHistory(historyStartDate, historyEndDate)
+            setHistory(data || [])
+        } catch (error) {
+            console.error("Failed to fetch history", error)
+            toast.error("Failed to load reconciliation history")
+        } finally {
+            setIsHistoryLoading(false)
+        }
+    }
+
+    useEffect(() => {
+        fetchHistory()
+    }, [historyStartDate, historyEndDate])
 
     async function fetchNozzles() {
         setIsLoading(true)
@@ -275,6 +349,118 @@ export default function NozzleReadingsPage() {
         n.products?.name.toLowerCase().includes(searchQuery.toLowerCase())
     )
 
+    const getVolumeForDip = (tank: any, dipValue: string) => {
+        const dip = parseFloat(dipValue)
+        if (isNaN(dip) || !tank.dip_chart_id) return null
+
+        let entries = dipChartEntriesMap[tank.dip_chart_id]
+        let isFallbackApplied = false
+
+        // Special case: Tank 4 fallback to Tank 1
+        const isTank4 = tank.name.toLowerCase().includes("tank 4")
+        if (isTank4 && entries && entries.length > 0) {
+            const maxDipInTank4 = Math.max(...entries.map(e => e.dip_mm))
+            if (dip > maxDipInTank4) {
+                // Find Tank 1
+                const tank1 = tanks.find(t => t.name.toLowerCase().includes("tank 1"))
+                if (tank1 && tank1.dip_chart_id) {
+                    const tank1Entries = dipChartEntriesMap[tank1.dip_chart_id]
+                    if (tank1Entries && tank1Entries.length > 0) {
+                        entries = tank1Entries
+                        isFallbackApplied = true
+                    }
+                }
+            }
+        }
+
+        if (!entries || entries.length === 0) return null
+
+        let calculatedVolume = null
+
+        // Find exact match or neighbors
+        const exactMatch = entries.find(e => e.dip_mm === dip)
+        if (exactMatch) {
+            calculatedVolume = exactMatch.volume_liters
+        } else {
+            // Sort just in case, though action should return sorted
+            const sorted = [...entries].sort((a, b) => a.dip_mm - b.dip_mm)
+
+            if (dip <= sorted[0].dip_mm) {
+                calculatedVolume = sorted[0].volume_liters
+            } else if (dip >= sorted[sorted.length - 1].dip_mm) {
+                calculatedVolume = sorted[sorted.length - 1].volume_liters
+            } else {
+                // Interpolation
+                for (let i = 0; i < sorted.length - 1; i++) {
+                    const low = sorted[i]
+                    const high = sorted[i + 1]
+
+                    if (dip > low.dip_mm && dip < high.dip_mm) {
+                        // Formula: y = y0 + (x - x0) * (y1 - y0) / (x1 - x0)
+                        const volume = low.volume_liters + (dip - low.dip_mm) * (high.volume_liters - low.volume_liters) / (high.dip_mm - low.dip_mm)
+                        calculatedVolume = Math.round(volume * 100) / 100
+                        break
+                    }
+                }
+            }
+        }
+
+        if (calculatedVolume !== null) {
+            // Add 150 liters if fallback was applied (user request)
+            if (isFallbackApplied) {
+                calculatedVolume += 150
+            }
+            return calculatedVolume
+        }
+
+        return null
+    }
+
+    const handleSaveDipReadings = async () => {
+        const recordsToSave: any[] = []
+
+        tanks.forEach(tank => {
+            const dipValue = dipReadings[tank.id]
+            if (dipValue && dipValue.trim() !== "") {
+                const volume = getVolumeForDip(tank, dipValue)
+                if (volume !== null) {
+                    const diff = volume - tank.current_level
+                    recordsToSave.push({
+                        tank_id: tank.id,
+                        dip_mm: parseFloat(dipValue),
+                        dip_volume: volume,
+                        current_stock: tank.current_level,
+                        gain_amount: diff > 0 ? diff : 0,
+                        loss_amount: diff < 0 ? Math.abs(diff) : 0,
+                        actual_stock: volume
+                    })
+                }
+            }
+        })
+
+        if (recordsToSave.length === 0) {
+            toast.error("Please enter at least one valid dip reading")
+            return
+        }
+
+        setIsDipSaving(true)
+        try {
+            await recordTankReconciliation(recordsToSave, workingDate)
+            toast.success("Dip readings saved and tank stock updated!")
+            setDipReadings({})
+            fetchDipChartData() // Refresh current levels
+            fetchHistory() // Refresh history tab
+        } catch (error: any) {
+            toast.error(error.message || "Failed to save dip readings")
+        } finally {
+            setIsDipSaving(false)
+        }
+    }
+
+    const handleDipInputChange = (tankId: string, value: string) => {
+        setDipReadings(prev => ({ ...prev, [tankId]: value }))
+    }
+
     return (
         <div className="space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -311,6 +497,14 @@ export default function NozzleReadingsPage() {
                     <TabsTrigger value="cards" className="gap-2 data-[state=active]:bg-orange-600 data-[state=active]:text-white">
                         <CreditCard className="w-4 h-4" />
                         Daily Card Summary
+                    </TabsTrigger>
+                    <TabsTrigger value="dip" className="gap-2 data-[state=active]:bg-blue-600 data-[state=active]:text-white">
+                        <Plus className="w-4 h-4" />
+                        Dip Chart
+                    </TabsTrigger>
+                    <TabsTrigger value="history" className="gap-2 data-[state=active]:bg-slate-700 data-[state=active]:text-white">
+                        <History className="w-4 h-4" />
+                        Reconciliation History
                     </TabsTrigger>
                 </TabsList>
 
@@ -534,6 +728,237 @@ export default function NozzleReadingsPage() {
                                 Save Card Summary
                             </Button>
                         </CardFooter>
+                    </Card>
+                </TabsContent>
+
+                <TabsContent value="dip">
+                    <Card className="border-blue-200 bg-blue-50/10 shadow-none">
+                        <CardHeader>
+                            <div className="flex items-center gap-2 text-blue-600">
+                                <Plus className="w-5 h-5" />
+                                <CardTitle>Dip Chart Calculator</CardTitle>
+                            </div>
+                            <CardDescription>
+                                Enter tank dip readings (mm) to calculate corresponding fuel volume in liters.
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="rounded-md border bg-background overflow-hidden">
+                                <Table>
+                                    <TableHeader className="bg-muted/50">
+                                        <TableRow>
+                                            <TableHead>Tank Name</TableHead>
+                                            <TableHead>Fuel Type</TableHead>
+                                            <TableHead className="w-[120px]">Current Stock</TableHead>
+                                            <TableHead className="w-[130px]">Dip (mm)</TableHead>
+                                            <TableHead className="text-right">Dip Volume</TableHead>
+                                            <TableHead className="text-right w-[90px]">Gain</TableHead>
+                                            <TableHead className="text-right w-[90px]">Loss</TableHead>
+                                            <TableHead className="text-right w-[110px]">Actual Stock</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {isDipLoading ? (
+                                            <TableRow>
+                                                <TableCell colSpan={8} className="text-center py-10">
+                                                    <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-blue-600" />
+                                                    Loading tanks and charts...
+                                                </TableCell>
+                                            </TableRow>
+                                        ) : tanks.length === 0 ? (
+                                            <TableRow>
+                                                <TableCell colSpan={8} className="text-center py-10 text-muted-foreground">
+                                                    No tanks found. Please configure tanks in Settings.
+                                                </TableCell>
+                                            </TableRow>
+                                        ) : (
+                            tanks.map((tank) => {
+                                                const volume = getVolumeForDip(tank, dipReadings[tank.id] || "")
+                                                const hasChart = !!tank.dip_chart_id
+                                                // Gain/Loss = Physical - System
+                                                const diff = volume !== null ? (volume - tank.current_level) : null
+                                                const gain = diff !== null && diff > 0 ? diff : null
+                                                const loss = diff !== null && diff < 0 ? Math.abs(diff) : null
+                                                // Actual Stock = Physical Volume
+                                                const actualStock = volume
+
+                                                return (
+                                                    <TableRow key={tank.id}>
+                                                        <TableCell className="font-medium">{tank.name}</TableCell>
+                                                        <TableCell>
+                                                            <Badge variant="outline" className="capitalize">
+                                                                {tank.products?.name || "Unknown"}
+                                                            </Badge>
+                                                        </TableCell>
+                                                        <TableCell className="font-mono text-xs text-muted-foreground">
+                                                            {tank.current_level?.toLocaleString() || "0"} L
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            <Input
+                                                                type="number"
+                                                                placeholder={hasChart ? "Enter mm" : "No chart"}
+                                                                disabled={!hasChart}
+                                                                value={dipReadings[tank.id] || ""}
+                                                                onChange={(e) => handleDipInputChange(tank.id, e.target.value)}
+                                                                className="font-mono h-8"
+                                                            />
+                                                        </TableCell>
+                                                        <TableCell className="text-right font-medium text-muted-foreground">
+                                                            {volume !== null ? `${volume.toLocaleString()} L` : "-"}
+                                                        </TableCell>
+                                                        <TableCell className="text-right">
+                                                            {gain !== null ? (
+                                                                <span className="font-bold text-green-600">
+                                                                    +{gain.toLocaleString()}
+                                                                </span>
+                                                            ) : "-"}
+                                                        </TableCell>
+                                                        <TableCell className="text-right">
+                                                            {loss !== null ? (
+                                                                <span className="font-bold text-red-600">
+                                                                    -{loss.toLocaleString()}
+                                                                </span>
+                                                            ) : "-"}
+                                                        </TableCell>
+                                                        <TableCell className="text-right font-bold text-blue-600">
+                                                            {actualStock !== null ? `${actualStock.toLocaleString()} L` : "-"}
+                                                        </TableCell>
+                                                    </TableRow>
+                                                )
+                                            })
+                                        )}
+                                    </TableBody>
+                                </Table>
+                            </div>
+                        </CardContent>
+                        <CardFooter className="bg-blue-50/30 p-6 border-t flex flex-col sm:flex-row items-center justify-between gap-4">
+                            <div className="text-xs text-muted-foreground italic flex items-center gap-1">
+                                <AlertTriangle className="w-3 h-3 text-amber-500" />
+                                Saving will update the <b>actual tank stock</b> in the system inventory.
+                            </div>
+                            <Button
+                                onClick={handleSaveDipReadings}
+                                disabled={isDipSaving || tanks.length === 0 || Object.keys(dipReadings).length === 0}
+                                className="bg-blue-600 hover:bg-blue-700 shadow-md px-8 gap-2 w-full sm:w-auto"
+                            >
+                                {isDipSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                                Save Dip Readings & Update Stock
+                            </Button>
+                        </CardFooter>
+                    </Card>
+                </TabsContent>
+
+                <TabsContent value="history">
+                    <Card className="border-slate-200 bg-slate-50/30 shadow-none">
+                        <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                            <div>
+                                <div className="flex items-center gap-2 text-slate-800">
+                                    <History className="w-5 h-5" />
+                                    <CardTitle>Reconciliation History</CardTitle>
+                                </div>
+                                <CardDescription>View past dip readings and stock adjustments.</CardDescription>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                                <div className="flex items-center gap-2 bg-background border p-1 px-2 rounded-md shadow-sm">
+                                    <Calendar className="w-3.5 h-3.5 text-muted-foreground" />
+                                    <Input
+                                        type="date"
+                                        value={historyStartDate}
+                                        onChange={(e) => setHistoryStartDate(e.target.value)}
+                                        className="border-0 p-0 h-7 w-28 text-xs focus-visible:ring-0"
+                                    />
+                                    <span className="text-muted-foreground text-xs">to</span>
+                                    <Input
+                                        type="date"
+                                        value={historyEndDate}
+                                        onChange={(e) => setHistoryEndDate(e.target.value)}
+                                        className="border-0 p-0 h-7 w-28 text-xs focus-visible:ring-0"
+                                    />
+                                </div>
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={fetchHistory}
+                                    className="h-9 px-3"
+                                >
+                                    <RefreshCcw className="w-3.5 h-3.5" />
+                                </Button>
+                            </div>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="rounded-md border bg-background overflow-hidden shadow-sm">
+                                <Table>
+                                    <TableHeader className="bg-muted/50">
+                                        <TableRow>
+                                            <TableHead>Date</TableHead>
+                                            <TableHead>Tank</TableHead>
+                                            <TableHead>Fuel Type</TableHead>
+                                            <TableHead className="text-right">Dip (mm)</TableHead>
+                                            <TableHead className="text-right">Dip Volume</TableHead>
+                                            <TableHead className="text-right">System Stock</TableHead>
+                                            <TableHead className="text-right">Actual Stock</TableHead>
+                                            <TableHead className="text-right">Gain/Loss</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {isHistoryLoading ? (
+                                            <TableRow>
+                                                <TableCell colSpan={8} className="text-center py-10">
+                                                    <Loader2 className="w-6 h-6 animate-spin mx-auto text-slate-400" />
+                                                </TableCell>
+                                            </TableRow>
+                                        ) : history.length === 0 ? (
+                                            <TableRow>
+                                                <TableCell colSpan={8} className="text-center py-12 text-muted-foreground">
+                                                    No reconciliation records found for this period.
+                                                </TableCell>
+                                            </TableRow>
+                                        ) : (
+                                            history.map((record) => (
+                                                <TableRow key={record.id} className="hover:bg-slate-50/50 transition-colors">
+                                                    <TableCell className="font-medium whitespace-nowrap">
+                                                        {new Date(record.reading_date).toLocaleDateString("en-PK", { day: 'numeric', month: 'short', year: 'numeric' })}
+                                                    </TableCell>
+                                                    <TableCell className="font-semibold">{record.tanks?.name}</TableCell>
+                                                    <TableCell>
+                                                        <Badge variant="secondary" className="font-normal">
+                                                            {record.tanks?.products?.name}
+                                                        </Badge>
+                                                    </TableCell>
+                                                    <TableCell className="text-right font-mono text-xs">
+                                                        {record.dip_mm} mm
+                                                    </TableCell>
+                                                    <TableCell className="text-right font-mono text-xs text-slate-600">
+                                                        {record.dip_volume?.toLocaleString()} L
+                                                    </TableCell>
+                                                    <TableCell className="text-right font-mono text-xs text-muted-foreground">
+                                                        {record.current_stock?.toLocaleString()} L
+                                                    </TableCell>
+                                                    <TableCell className="text-right font-bold text-blue-600 font-mono">
+                                                        {record.actual_stock?.toLocaleString()} L
+                                                    </TableCell>
+                                                    <TableCell className="text-right">
+                                                        {record.gain_amount > 0 ? (
+                                                            <span className="flex items-center justify-end gap-1 font-bold text-green-600">
+                                                                <ArrowUp className="w-3 h-3" />
+                                                                {record.gain_amount.toLocaleString()}
+                                                            </span>
+                                                        ) : record.loss_amount > 0 ? (
+                                                            <span className="flex items-center justify-end gap-1 font-bold text-red-600">
+                                                                <ArrowDown className="w-3 h-3" />
+                                                                {record.loss_amount.toLocaleString()}
+                                                            </span>
+                                                        ) : (
+                                                            <span className="text-muted-foreground">-</span>
+                                                        )}
+                                                    </TableCell>
+                                                </TableRow>
+                                            ))
+                                        )}
+                                    </TableBody>
+                                </Table>
+                            </div>
+                        </CardContent>
                     </Card>
                 </TabsContent>
             </Tabs>

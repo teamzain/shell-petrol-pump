@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { getTodayPKT } from "@/lib/utils"
+import { getSystemActiveDate } from "@/app/actions/balance"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -27,6 +28,7 @@ export default function CloseDayPage() {
     const [submitting, setSubmitting] = useState(false)
     const [step, setStep] = useState(1)
     const [error, setError] = useState("")
+    const [today, setToday] = useState(getTodayPKT())
 
     // Data State
     const [dayData, setDayData] = useState<any>(null)
@@ -47,9 +49,13 @@ export default function CloseDayPage() {
     const [bankVarianceNote, setBankVarianceNote] = useState("")
     const [cashVarianceNote, setCashVarianceNote] = useState("")
 
-    const today = getTodayPKT()
 
     useEffect(() => {
+        const initDate = async () => {
+            const date = await getSystemActiveDate()
+            setToday(date)
+        }
+        initDate()
         // Backend logic removed for system recreation
     }, [])
 

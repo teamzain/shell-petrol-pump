@@ -5,6 +5,7 @@ import { format } from "date-fns"
 import { getTodayPKT } from "@/lib/utils"
 import { createClient } from "@/lib/supabase/client"
 import { saveDailyExpense } from "../../actions/sales-daily"
+import { getSystemActiveDate } from "@/app/actions/balance"
 import { useToast } from "@/components/ui/use-toast"
 import {
     DollarSign,
@@ -120,6 +121,7 @@ export default function ExpensesPage() {
     const [isCategoryDialogOpen, setIsCategoryDialogOpen] = useState(false)
     const [newCategory, setNewCategory] = useState({ name: "", type: "operating" })
     const [addingCategory, setAddingCategory] = useState(false)
+    const [activeDate, setActiveDate] = useState<string>("")
 
     // Search & Filter
     const [searchQuery, setSearchQuery] = useState("")
@@ -135,7 +137,19 @@ export default function ExpensesPage() {
     const { toast } = useToast()
 
     useEffect(() => {
-        fetchData()
+        const initDate = async () => {
+            const sysActiveDate = await getSystemActiveDate()
+            setActiveDate(sysActiveDate)
+            setDateRange({ start: sysActiveDate, end: sysActiveDate })
+            setFormData(prev => ({ ...prev, date: sysActiveDate }))
+        }
+        initDate()
+    }, [])
+
+    useEffect(() => {
+        if (dateRange.start && dateRange.end) {
+            fetchData()
+        }
     }, [dateRange.start, dateRange.end])
 
     const fetchData = async () => {
@@ -168,7 +182,8 @@ export default function ExpensesPage() {
             })) || [])
 
             // Fetch global month stats (independent of filter)
-            const startOfMonth = format(new Date(new Date().getFullYear(), new Date().getMonth(), 1), "yyyy-MM-dd")
+            const targetEndDate = new Date(dateRange.end || getTodayPKT())
+            const startOfMonth = format(new Date(targetEndDate.getFullYear(), targetEndDate.getMonth(), 1), "yyyy-MM-dd")
             const { data: monthData } = await supabase
                 .from('daily_expenses')
                 .select('amount, expense_date')
@@ -210,16 +225,14 @@ export default function ExpensesPage() {
 
     // --- Derived Stats ---
     const stats = useMemo(() => {
-        const today = getTodayPKT()
-        // Today total from ALL expenses of today, not just from the filtered list
-        // However, usually today is in the filtered list if range is today.
-        // Let's use the monthlyStatsData for accurate "Global" stats
+        const targetDate = activeDate || getTodayPKT()
 
         const todayTotal = monthlyStatsData
-            .filter(e => e.expense_date === today)
+            .filter(e => e.expense_date === targetDate)
             .reduce((sum, e) => sum + Number(e.amount), 0)
 
-        const startOfMonth = format(new Date(new Date().getFullYear(), new Date().getMonth(), 1), "yyyy-MM-dd")
+        const targetDateObj = new Date(targetDate)
+        const startOfMonth = format(new Date(targetDateObj.getFullYear(), targetDateObj.getMonth(), 1), "yyyy-MM-dd")
         const monthTotal = monthlyStatsData
             .filter(e => e.expense_date >= startOfMonth)
             .reduce((sum, e) => sum + Number(e.amount), 0)
@@ -228,7 +241,7 @@ export default function ExpensesPage() {
         const filteredTotal = filteredExpenses.reduce((sum, e) => sum + Number(e.amount), 0)
 
         return { todayTotal, monthTotal, filteredTotal }
-    }, [monthlyStatsData, filteredExpenses])
+    }, [monthlyStatsData, filteredExpenses, activeDate])
 
     const currentCash = todayBalance?.closing_cash ?? todayBalance?.opening_cash ?? 0
     const currentBank = todayBalance?.closing_bank ?? todayBalance?.opening_bank ?? 0
@@ -550,7 +563,7 @@ export default function ExpensesPage() {
                 <Card className="border-l-4 border-l-primary shadow-sm bg-primary/5">
                     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                         <CardTitle className="text-sm font-bold uppercase tracking-wider text-primary">
-                            {dateRange.start === dateRange.end && dateRange.start === getTodayPKT()
+                            {dateRange.start === dateRange.end && dateRange.start === activeDate
                                 ? "Today's Expenses"
                                 : "Period Total"}
                         </CardTitle>
@@ -588,18 +601,18 @@ export default function ExpensesPage() {
                 <Card className="border-l-4 border-l-blue-500 shadow-sm">
                     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                         <CardTitle className="text-sm font-medium">
-                            {dateRange.end === getTodayPKT() ? "Total Bank Balance" : "Historical Bank Balance"}
+                            {dateRange.end === activeDate ? "Total Bank Balance" : "Historical Bank Balance"}
                         </CardTitle>
                         <PiggyBank className="h-4 w-4 text-blue-500" />
                     </CardHeader>
                     <CardContent>
                         <div className="text-2xl font-bold">
-                            {dateRange.end === getTodayPKT()
+                            {dateRange.end === activeDate
                                 ? formatCurrency(bankAccounts.reduce((sum, b) => sum + Number(b.current_balance), 0))
                                 : formatCurrency(currentBank)}
                         </div>
                         <p className="text-xs text-muted-foreground mt-1 font-medium">
-                            {dateRange.end === getTodayPKT() ? "Across all bank accounts" : `As of ${format(new Date(dateRange.end), "MMM dd")}`}
+                            {dateRange.end === activeDate ? "Across all bank accounts" : `As of ${format(new Date(dateRange.end), "MMM dd")}`}
                         </p>
                     </CardContent>
                 </Card>

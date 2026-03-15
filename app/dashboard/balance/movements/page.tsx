@@ -29,13 +29,32 @@ import {
     Filter,
     Wallet,
     ArrowLeft,
-    Eye
+    Eye,
+    Calendar as CalendarIcon,
+    ChevronDown,
+    FileText
 } from "lucide-react"
 import { getBalanceMovement, getBalanceMovementSummary } from "@/app/actions/balance-movement"
 import { BrandLoader } from "@/components/ui/brand-loader"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import Link from "next/link"
+import { format } from "date-fns"
+import { cn } from "@/lib/utils"
+import {
+    Popover,
+    PopoverContent,
+    PopoverTrigger,
+} from "@/components/ui/popover"
+import { Calendar } from "@/components/ui/calendar"
+import { Label } from "@/components/ui/label"
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { exportReport } from "@/lib/report-export"
 
 export default function BalanceMovementsPage() {
     const router = useRouter()
@@ -50,10 +69,56 @@ export default function BalanceMovementsPage() {
     })
     const [searchQuery, setSearchQuery] = useState("")
     const [typeFilter, setTypeFilter] = useState("all")
-    const [dateRange, setDateRange] = useState({
-        from: "",
-        to: ""
+    const [dateRange, setDateRange] = useState<{ from: Date | undefined; to: Date | undefined }>({
+        from: undefined,
+        to: undefined
     })
+
+    const handleExport = (type: "pdf" | "csv") => {
+        if (!transactions || transactions.length === 0) {
+            toast.error("No data to export")
+            return
+        }
+        
+        // Structure data for report-export.ts
+        const exportData = {
+            transactions: transactions.map(t => {
+                const isInternal = t.source_table === 'balance_transactions';
+                const isCredit = isInternal 
+                    ? ["add_cash", "add_bank", "cash_to_bank"].includes(t.transaction_type)
+                    : t.transaction_type === 'credit';
+                    
+                let desc = t.note || "";
+                if (isInternal) {
+                    if (t.transaction_type === 'cash_to_bank') desc = "Cash to Bank Transfer";
+                    else if (t.transaction_type === 'bank_to_cash') desc = "Bank to Cash Withdrawal";
+                    else if (t.transaction_type === 'add_cash') desc = t.is_opening ? "Opening Cash Balance" : "Manual Cash Addition";
+                    else if (t.transaction_type === 'add_bank') desc = t.is_opening ? "Opening Bank Balance" : "Manual Bank Deposit";
+                    else if (t.transaction_type === 'transfer_to_supplier') desc = "Transfer to Supplier Account";
+                    else desc = t.description || t.transaction_type.replace("_", " ");
+                }
+
+                return {
+                    ...t,
+                    display_date: format(new Date(t.transaction_date || t.created_at), "dd-MMM-yyyy"),
+                    display_entity: t.entity_name || "General",
+                    display_desc: desc || t.note || t.description || "General Transaction",
+                    is_credit: isCredit
+                }
+            }),
+            summary
+        }
+
+        exportReport({
+            activeTab: "balance-ledger",
+            reportData: exportData,
+            filters: {
+                dateRange,
+                search: searchQuery,
+                type: typeFilter
+            }
+        }, type)
+    }
 
     const fetchData = async () => {
         setLoading(true)
@@ -61,8 +126,8 @@ export default function BalanceMovementsPage() {
             const filters = {
                 search: searchQuery || undefined,
                 transaction_type: typeFilter === 'all' ? undefined : typeFilter as any,
-                date_from: dateRange.from || undefined,
-                date_to: dateRange.to || undefined
+                date_from: dateRange.from ? format(dateRange.from, "yyyy-MM-dd") : undefined,
+                date_to: dateRange.to ? format(dateRange.to, "yyyy-MM-dd") : undefined
             }
 
             const [txResult, stats] = await Promise.all([
@@ -82,6 +147,13 @@ export default function BalanceMovementsPage() {
     useEffect(() => {
         fetchData()
     }, [typeFilter])
+
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            fetchData()
+        }, 500)
+        return () => clearTimeout(timer)
+    }, [searchQuery])
 
     const formatCurrency = (val: number) => {
         if (val === undefined || val === null) return "Rs. 0.00"
@@ -109,8 +181,12 @@ export default function BalanceMovementsPage() {
                         <p className="text-muted-foreground text-sm uppercase tracking-wider font-medium">Detailed audit trail of all financial movements across accounts.</p>
                     </div>
                 </div>
-                <Button variant="outline" className="font-bold border-2">
-                    <Download className="mr-2 h-4 w-4" /> EXPORT LEDGER
+                <Button 
+                    variant="outline" 
+                    className="font-bold border-2"
+                    onClick={() => handleExport("pdf")}
+                >
+                    <Download className="mr-2 h-4 w-4" /> EXPORT PDF
                 </Button>
             </div>
 
@@ -205,6 +281,45 @@ export default function BalanceMovementsPage() {
                                     <SelectItem value="debit">Debits</SelectItem>
                                 </SelectContent>
                             </Select>
+                            <div className="flex items-center gap-2">
+                                <Popover>
+                                    <PopoverTrigger asChild>
+                                        <Button
+                                            variant="outline"
+                                            className={cn(
+                                                "h-10 w-[240px] justify-start text-left font-normal border-2",
+                                                !dateRange.from && "text-muted-foreground"
+                                            )}
+                                        >
+                                            <CalendarIcon className="mr-2 h-4 w-4" />
+                                            {dateRange.from ? (
+                                                dateRange.to ? (
+                                                    <>
+                                                        {format(dateRange.from, "LLL dd, y")} -{" "}
+                                                        {format(dateRange.to, "LLL dd, y")}
+                                                    </>
+                                                ) : (
+                                                    format(dateRange.from, "LLL dd, y")
+                                                )
+                                            ) : (
+                                                <span>Filter by Date</span>
+                                            )}
+                                        </Button>
+                                    </PopoverTrigger>
+                                    <PopoverContent className="w-auto p-0" align="end">
+                                        <Calendar
+                                            initialFocus
+                                            mode="range"
+                                            defaultMonth={dateRange.from}
+                                            selected={dateRange}
+                                            onSelect={(range: any) => {
+                                                setDateRange({ from: range?.from, to: range?.to })
+                                            }}
+                                            numberOfMonths={2}
+                                        />
+                                    </PopoverContent>
+                                </Popover>
+                            </div>
                             <Button variant="outline" onClick={fetchData} className="font-bold border-2 h-10">
                                 <Filter className="h-4 w-4 mr-2" /> APPLY
                             </Button>
@@ -236,17 +351,31 @@ export default function BalanceMovementsPage() {
                                     </TableRow>
                                 ) : (
                                     transactions.map((tx) => {
-                                        const isCredit = tx.transaction_type === 'credit';
-                                        const supplierId = tx.company_accounts?.suppliers?.id;
-
-                                        // Generate a detailed description similar to Supplier Ledger
-                                        let displayDescription = tx.note || "General Transaction";
-                                        if (tx.transaction_source === 'purchase_order') {
-                                            displayDescription = `Purchase Order #${tx.reference_number || 'N/A'}`;
-                                        } else if (tx.transaction_source === 'delivery') {
-                                            displayDescription = `Purchase Delivery | Ref# ${tx.reference_number || 'N/A'}`;
-                                        } else if (tx.transaction_source === 'opening_balance') {
-                                            displayDescription = "Opening Balance Initialization";
+                                        const isInternal = tx.source_table === 'balance_transactions';
+                                        const isCredit = isInternal 
+                                            ? ["add_cash", "add_bank", "cash_to_bank"].includes(tx.transaction_type)
+                                            : tx.transaction_type === 'credit';
+                                        
+                                        // Generate a detailed description
+                                        let displayDescription = tx.note || "";
+                                        
+                                        if (isInternal) {
+                                            if (tx.transaction_type === 'cash_to_bank') displayDescription = "Cash to Bank Transfer";
+                                            else if (tx.transaction_type === 'bank_to_cash') displayDescription = "Bank to Cash Withdrawal";
+                                            else if (tx.transaction_type === 'add_cash') displayDescription = tx.is_opening ? "Opening Cash Balance" : "Manual Cash Addition";
+                                            else if (tx.transaction_type === 'add_bank') displayDescription = tx.is_opening ? "Opening Bank Balance" : "Manual Bank Deposit";
+                                            else if (tx.transaction_type === 'transfer_to_supplier') displayDescription = "Transfer to Supplier Account";
+                                            else displayDescription = tx.description || tx.transaction_type.replace("_", " ");
+                                        } else {
+                                            if (tx.transaction_source === 'purchase_order') {
+                                                displayDescription = `Purchase Order #${tx.reference_number || 'N/A'}`;
+                                            } else if (tx.transaction_source === 'delivery') {
+                                                displayDescription = `Purchase Delivery | Ref# ${tx.reference_number || 'N/A'}`;
+                                            } else if (tx.transaction_source === 'opening_balance') {
+                                                displayDescription = "Opening Balance Initialization";
+                                            } else if (!displayDescription) {
+                                                displayDescription = "General Transaction";
+                                            }
                                         }
 
                                         const handleRowClick = () => {
@@ -260,7 +389,7 @@ export default function BalanceMovementsPage() {
                                                 onClick={handleRowClick}
                                             >
                                                 <TableCell className="font-medium text-xs whitespace-nowrap">
-                                                    {new Date(tx.created_at).toLocaleDateString('en-PK', {
+                                                    {new Date(tx.transaction_date || tx.created_at).toLocaleDateString('en-PK', {
                                                         day: '2-digit',
                                                         month: 'short',
                                                         year: 'numeric'
@@ -276,12 +405,12 @@ export default function BalanceMovementsPage() {
                                                     <span>{tx.reference_number || "N/A"}</span>
                                                     {tx.transaction_source && (
                                                         <Badge variant="outline" className="text-[8px] w-fit">
-                                                            {tx.transaction_source.replace("_", " ")}
+                                                            {(tx.transaction_source || tx.transaction_type).replace("_", " ")}
                                                         </Badge>
                                                     )}
                                                 </TableCell>
                                                 <TableCell className="font-bold text-xs">
-                                                    {tx.company_accounts?.suppliers?.name || "General"}
+                                                    {tx.entity_name || "General"}
                                                 </TableCell>
                                                 <TableCell className="text-xs max-w-xs truncate font-semibold">
                                                     {displayDescription}

@@ -79,6 +79,7 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
                 release_value: 0,
                 short_units: {} as { [key: string]: number },
                 extra_units: {} as { [key: string]: number },
+                tank_distributions: {} as { [key: string]: number },
                 unit_type: del.unit_type || poData?.unit_type
             }
         }
@@ -94,6 +95,15 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
             acc[key].short_units[unit] = (acc[key].short_units[unit] || 0) + (ordered - received)
         } else if (received > ordered) {
             acc[key].extra_units[unit] = (acc[key].extra_units[unit] || 0) + (received - ordered)
+        }
+
+        // Aggregate Tank distributions for the delivery grouping
+        if (del.tank_distribution && Array.isArray(del.tank_distribution)) {
+            del.tank_distribution.forEach((td: any) => {
+                if (td.tank_name && td.quantity > 0) {
+                    acc[key].tank_distributions[td.tank_name] = (acc[key].tank_distributions[td.tank_name] || 0) + Number(td.quantity)
+                }
+            })
         }
 
         // Sum release values from hold records (if any)
@@ -142,6 +152,7 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
                             <TableHead className="font-bold">Invoice #</TableHead>
                             <TableHead className="font-bold">PO #</TableHead>
                             <TableHead className="font-bold">Supplier</TableHead>
+                            <TableHead className="font-bold">Allocations</TableHead>
                             <TableHead className="font-bold">Order Date</TableHead>
                             <TableHead className="font-bold">Received Date</TableHead>
                             <TableHead className="font-bold text-right text-amber-600">Short Qty</TableHead>
@@ -156,7 +167,7 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
                     <TableBody>
                         {loading ? (
                             <TableRow>
-                                <TableCell colSpan={12} className="h-48">
+                                <TableCell colSpan={13} className="h-48">
                                     <div className="flex items-center justify-center w-full h-full">
                                         <BrandLoader size="lg" />
                                     </div>
@@ -164,7 +175,7 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
                             </TableRow>
                         ) : filteredDeliveries.length === 0 ? (
                             <TableRow>
-                                <TableCell colSpan={12} className="h-24 text-center text-muted-foreground">
+                                <TableCell colSpan={13} className="h-24 text-center text-muted-foreground">
                                     No delivery records found.
                                 </TableCell>
                             </TableRow>
@@ -174,6 +185,17 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
                                     <TableCell className="font-mono text-[10px] font-bold">{del.company_invoice_number || 'N/A'}</TableCell>
                                     <TableCell className="font-mono text-[10px] text-muted-foreground">{del.po_number}</TableCell>
                                     <TableCell className="font-medium text-[10px]">{del.name}</TableCell>
+                                    <TableCell className="text-[9px]">
+                                        {Object.keys(del.tank_distributions).length > 0 ? (
+                                            <div className="flex flex-col gap-1 max-w-[120px]">
+                                                {Object.entries(del.tank_distributions).map(([tank, qty], i) => (
+                                                    <span key={i} className="bg-slate-100 text-slate-600 px-1 py-0.5 rounded whitespace-nowrap">
+                                                        {tank}: {Number(qty).toLocaleString()}L
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        ) : "-"}
+                                    </TableCell>
                                     <TableCell className="text-[10px] whitespace-nowrap">
                                         {del.order_date ? new Date(del.order_date).toLocaleDateString('en-PK') : '-'}
                                     </TableCell>

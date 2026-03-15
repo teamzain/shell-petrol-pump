@@ -26,7 +26,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { toast } from "sonner"
 import { BrandLoader } from "@/components/ui/brand-loader"
 import { getPurchaseOrders } from "@/app/actions/purchase-orders"
+import { getTanks } from "@/app/actions/tanks"
 import { recordDelivery } from "@/app/actions/deliveries"
+import { getSystemActiveDate } from "@/app/actions/balance"
 import { Truck, Info, AlertTriangle, CheckCircle2, ChevronRight } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
@@ -50,6 +52,11 @@ const deliverySchema = z.object({
     vehicle_number: z.string().optional(),
     driver_name: z.string().optional(),
     notes: z.string().optional(),
+    tank_distribution: z.array(z.object({
+        tank_id: z.string(),
+        tank_name: z.string().optional(),
+        quantity: z.number().min(0)
+    })).optional()
 })
 
 interface RecordDeliveryTabProps {
@@ -60,6 +67,7 @@ interface RecordDeliveryTabProps {
 export function RecordDeliveryTab({ initialPO, onSuccess }: RecordDeliveryTabProps) {
     const [loading, setLoading] = useState(false)
     const [pos, setPOs] = useState<any[]>([])
+    const [tanks, setTanks] = useState<any[]>([])
     const [selectedPO, setSelectedPO] = useState<any>(initialPO || null)
     const [selectedItemIndex, setSelectedItemIndex] = useState<number | null>(null)
     const [showWarning, setShowWarning] = useState(false)
@@ -82,12 +90,19 @@ export function RecordDeliveryTab({ initialPO, onSuccess }: RecordDeliveryTabPro
     })
 
     useEffect(() => {
-        const fetchPOs = async () => {
-            const data = await getPurchaseOrders({ status: 'all' })
-            const availablePOs = data.filter((po: any) => po.status === 'pending' || po.status === 'partially_delivered')
+        const fetchData = async () => {
+            const [poData, tankData, activeDate] = await Promise.all([
+                getPurchaseOrders({ status: 'all' }),
+                getTanks(),
+                getSystemActiveDate()
+            ])
+            
+            const availablePOs = poData.filter((po: any) => po.status === 'pending' || po.status === 'partially_delivered')
             setPOs(availablePOs)
+            setTanks(tankData || [])
+            form.setValue("delivery_date", activeDate)
         }
-        fetchPOs()
+        fetchData()
     }, [])
 
     useEffect(() => {
@@ -139,14 +154,30 @@ export function RecordDeliveryTab({ initialPO, onSuccess }: RecordDeliveryTabPro
     const remainingQty = currentItem ? (Number(currentItem.ordered_quantity || 0) - Number(currentItem.delivered_quantity || 0)) : (selectedPO ? Number(selectedPO.quantity_remaining) : 0)
     const productLabel = currentItem ? currentItem.product_name : (selectedPO?.products?.name || "Product")
     const categoryLabel = currentItem ? (currentItem.product_category || 'other') : (selectedPO?.products?.category || selectedPO?.product_type || "-")
+    const productId = currentItem ? currentItem.product_id : selectedPO?.product_id
+    const isFuel = categoryLabel.toLowerCase() === 'fuel' || selectedPO?.product_type === 'fuel'
     const shortUnitLabel = currentItem ? (currentItem.unit_type === 'unit' ? 'U' : 'L') : (selectedPO?.unit_type === 'unit' ? 'U' : 'L')
     const unitLabel = currentItem ? (currentItem.unit_type === 'unit' ? 'Units' : 'Liters') : (selectedPO?.unit_type === 'unit' ? 'Units' : 'Liters')
 
     const orderedQty = currentItem ? Number(currentItem.ordered_quantity || 0) : Number(selectedPO?.ordered_quantity || 0)
     const alreadyDelivered = currentItem ? Number(currentItem.delivered_quantity || 0) : Number(selectedPO?.delivered_quantity || 0)
 
-    const watchQty = form.watch("delivered_quantity")
     const watchPrice = form.watch("rate_per_liter")
+    const watchTankDistribution = form.watch("tank_distribution") || []
+
+    // Calculate total qty from tanks if applicable
+    const isUsingTanks = isFuel && tanks.filter(t => t.product_id === productId).length > 0;
+    const computedTankQty = isUsingTanks ? watchTankDistribution.reduce((sum, t) => sum + (Number(t.quantity) || 0), 0) : 0;
+
+    // Update delivered_quantity dynamically if using tanks
+    useEffect(() => {
+        if (isUsingTanks) {
+            form.setValue("delivered_quantity", computedTankQty, { shouldValidate: true })
+        }
+    }, [computedTankQty, isUsingTanks, form])
+
+    const watchQty = isUsingTanks ? computedTankQty : form.watch("delivered_quantity")
+
     // Cap total amount at remaining quantity value for over-delivery scenarios
     const totalAmount = (Math.min(Number(watchQty) || 0, remainingQty)) * (Number(watchPrice) || 0)
 
@@ -275,7 +306,21 @@ export function RecordDeliveryTab({ initialPO, onSuccess }: RecordDeliveryTabPro
                                             render={({ field }) => (
                                                 <FormItem>
                                                     <FormLabel>Quantity Delivered NOW</FormLabel>
-                                                    <FormControl><Input type="number" step="0.01" placeholder="0.00" {...field} /></FormControl>
+                                                    <FormControl>
+                                                        <Input
+                                                            type="number"
+                                                            step="0.01"
+                                                            placeholder="0.00"
+                                                            {...field}
+                                                            value={field.value || ""}
+                                                            disabled={isUsingTanks}
+                                                            onChange={(e) => {
+                                                                if (!isUsingTanks) {
+                                                                    field.onChange(e)
+                                                                }
+                                                            }}
+                                                        />
+                                                    </FormControl>
                                                     <FormDescription className="text-[10px] text-primary font-bold">Max: {remainingQty} {shortUnitLabel}</FormDescription>
                                                     <FormMessage />
                                                 </FormItem>
@@ -295,7 +340,64 @@ export function RecordDeliveryTab({ initialPO, onSuccess }: RecordDeliveryTabPro
                                         />
                                     </div>
 
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    {isUsingTanks && (
+                                        <div className="bg-slate-50 border rounded-lg p-4 space-y-3 mt-4">
+                                            <div className="flex items-center gap-2 mb-2">
+                                                <Truck className="h-4 w-4 text-slate-500" />
+                                                <h4 className="text-sm font-bold uppercase text-slate-700">Tank Allocation Dashboard</h4>
+                                            </div>
+                                            <p className="text-xs text-muted-foreground mb-3 leading-tight">
+                                                Specify how much quantity goes into each connected tank. The total quantity above is automatically calculated from these values.
+                                            </p>
+                                            <div className="grid gap-3">
+                                                {tanks.filter(t => t.product_id === productId).map((tank) => {
+                                                    const currentTankIdx = watchTankDistribution.findIndex(td => td.tank_id === tank.id);
+                                                    const currentVal = currentTankIdx >= 0 ? watchTankDistribution[currentTankIdx].quantity : 0;
+
+                                                    const fillPercentage = tank.capacity > 0 ? ((tank.current_level + currentVal) / tank.capacity) * 100 : 0;
+                                                    const isOverCapacity = fillPercentage > 100;
+
+                                                    return (
+                                                        <div key={tank.id} className="flex items-center gap-4 bg-white p-2 rounded-md border text-sm">
+                                                            <div className="flex-1">
+                                                                <div className="font-bold flex items-center justify-between">
+                                                                    <span>{tank.name}</span>
+                                                                    <span className={`text-[10px] ${isOverCapacity ? 'text-red-500' : 'text-slate-500'}`}>
+                                                                        Cap: {tank.capacity}L
+                                                                    </span>
+                                                                </div>
+                                                                <div className="text-xs text-muted-foreground">Current: {tank.current_level}L</div>
+                                                            </div>
+                                                            <div className="w-32">
+                                                                <Input
+                                                                    type="number"
+                                                                    step="0.01"
+                                                                    min="0"
+                                                                    placeholder="0"
+                                                                    value={currentVal || ""}
+                                                                    onChange={(e) => {
+                                                                        const val = parseFloat(e.target.value) || 0;
+                                                                        const currentDist = [...watchTankDistribution];
+                                                                        const existingIdx = currentDist.findIndex(x => x.tank_id === tank.id);
+
+                                                                        if (existingIdx >= 0) {
+                                                                            currentDist[existingIdx].quantity = val;
+                                                                        } else {
+                                                                            currentDist.push({ tank_id: tank.id, tank_name: tank.name, quantity: val });
+                                                                        }
+                                                                        form.setValue("tank_distribution", currentDist.filter(d => d.quantity > 0));
+                                                                    }}
+                                                                    className={`h-8 font-mono ${isOverCapacity ? 'border-red-500 focus-visible:ring-red-500' : ''}`}
+                                                                />
+                                                            </div>
+                                                        </div>
+                                                    )
+                                                })}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
                                         <FormField control={form.control} name="delivery_date" render={({ field }) => (
                                             <FormItem><FormLabel>Date</FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>
                                         )} />
@@ -469,7 +571,7 @@ export function RecordDeliveryTab({ initialPO, onSuccess }: RecordDeliveryTabPro
                         </DialogFooter>
                     </DialogContent>
                 </Dialog>
-            </div>
+            </div >
             <HoldAmountPopup
                 open={!!holdData}
                 onOpenChange={(open) => !open && setHoldData(null)}

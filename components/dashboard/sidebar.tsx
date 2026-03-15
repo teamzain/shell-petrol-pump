@@ -69,6 +69,7 @@ const navItems: NavItem[] = [
       { title: "Nozzle Readings", href: "/dashboard/sales/nozzle-readings" },
       { title: "Manual Entry", href: "/dashboard/sales/manual-entry" },
       { title: "Sales History", href: "/dashboard/sales/history" },
+      { title: "Dip Charts", href: "/dashboard/sales/dip-charts" },
     ],
   },
   {

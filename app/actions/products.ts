@@ -21,16 +21,13 @@ export async function upsertProduct(formData: any, productId?: string) {
 
     const purchasePrice = parseFloat(formData.purchase_price)
     const sellingPrice = parseFloat(formData.selling_price)
-    const currentStock = parseFloat(formData.current_stock)
-    const tankCapacity = formData.tank_capacity ? parseFloat(formData.tank_capacity) : null
+    const currentStock = formData.current_stock ? parseFloat(formData.current_stock) : 0
+    const tankCapacity = formData.tank_capacity ? parseFloat(formData.tank_capacity) : 0
+    const minStockLevel = formData.min_stock_level ? parseFloat(formData.min_stock_level) : 0
 
     // Strict Validations
     if (sellingPrice < purchasePrice) {
         throw new Error("Selling price must be greater than or equal to purchase price")
-    }
-
-    if (formData.type === 'fuel' && tankCapacity !== null && currentStock > tankCapacity) {
-        throw new Error("Current stock cannot exceed tank capacity")
     }
 
     const productData = {
@@ -39,7 +36,7 @@ export async function upsertProduct(formData: any, productId?: string) {
         category: formData.category || (formData.type === 'fuel' ? "Fuel" : null),
         unit: formData.unit || "Liters",
         current_stock: currentStock,
-        min_stock_level: parseFloat(formData.min_stock_level || "10"),
+        min_stock_level: minStockLevel,
         purchase_price: purchasePrice,
         selling_price: sellingPrice,
         tank_capacity: tankCapacity,

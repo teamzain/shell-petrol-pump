@@ -138,14 +138,16 @@ export function PODetailModal({
                             ...item,
                             original_index: idx,
                             delivered_quantity: recordedInThisTrans.delivered_quantity,
-                            total_amount: Number(recordedInThisTrans.delivered_amount || (Math.min(Number(recordedInThisTrans.delivered_quantity), Number(item.ordered_quantity)) * Number(item.rate_per_liter)))
+                            total_amount: Number(recordedInThisTrans.delivered_amount || (Math.min(Number(recordedInThisTrans.delivered_quantity), Number(item.ordered_quantity)) * Number(item.rate_per_liter))),
+                            tank_distribution: recordedInThisTrans.tank_distribution // Copy over the array for visual rendering
                         };
                     }
                     return {
                         ...item,
                         original_index: idx,
                         delivered_quantity: 0,
-                        total_amount: 0
+                        total_amount: 0,
+                        tank_distribution: null
                     };
                 });
 
@@ -157,6 +159,21 @@ export function PODetailModal({
                 const totalDeliveredInTrans = displayDeliveries.reduce((acc: number, d: any) => acc + Number(d.delivered_quantity || 0), 0);
                 const totalAmountInTrans = displayDeliveries.reduce((acc: number, d: any) => acc + Number(d.delivered_amount || 0), 0);
 
+                const aggregatedTanks = displayDeliveries.reduce((acc: any, d: any) => {
+                    if (d.tank_distribution && Array.isArray(d.tank_distribution)) {
+                        d.tank_distribution.forEach((td: any) => {
+                            if (td.tank_name && td.quantity > 0) {
+                                acc[td.tank_name] = (acc[td.tank_name] || 0) + Number(td.quantity);
+                            }
+                        });
+                    }
+                    return acc;
+                }, {});
+
+                const tankDistArray = Object.keys(aggregatedTanks).length > 0
+                    ? Object.entries(aggregatedTanks).map(([tank_name, quantity]) => ({ tank_name, quantity }))
+                    : null;
+
                 displayItems = [{
                     product_id: po.product_id,
                     product_name: po.products?.name || "Product",
@@ -166,6 +183,7 @@ export function PODetailModal({
                     rate_per_liter: po.rate_per_liter || (po.ordered_quantity > 0 ? po.estimated_total / po.ordered_quantity : 0),
                     total_amount: totalAmountInTrans,
                     unit_type: po.unit_type,
+                    tank_distribution: tankDistArray,
                     original_index: -1 // special index for legacy
                 }];
                 displayDeliveredValue = totalAmountInTrans;
@@ -252,6 +270,28 @@ export function PODetailModal({
                                                                 {item.status === 'cancelled' && <Badge variant="destructive" className="h-4 px-1 pb-0 scale-90">Cancelled</Badge>}
                                                             </div>
                                                             <span className="text-xs text-muted-foreground capitalize">{item.product_category?.replace("_", " ")}</span>
+
+                                                            {item.tank_distribution ? (
+                                                                (Array.isArray(item.tank_distribution) && item.tank_distribution.length > 0) && (
+                                                                    <div className="mt-1 flex flex-wrap gap-1 text-[10px]">
+                                                                        {item.tank_distribution.map((td: any, i: number) => (
+                                                                            <Badge key={i} variant="outline" className="bg-slate-50 text-slate-600 font-mono py-0 h-4 px-1 rounded-sm border-slate-200">
+                                                                                {td.tank_name}: {Number(td.quantity).toLocaleString()}L
+                                                                            </Badge>
+                                                                        ))}
+                                                                    </div>
+                                                                )
+                                                            ) : (
+                                                                (itemDelivery?.tank_distribution && Array.isArray(itemDelivery.tank_distribution) && itemDelivery.tank_distribution.length > 0) && (
+                                                                    <div className="mt-1 flex flex-wrap gap-1 text-[10px]">
+                                                                        {itemDelivery.tank_distribution.map((td: any, i: number) => (
+                                                                            <Badge key={i} variant="outline" className="bg-slate-50 text-slate-600 font-mono py-0 h-4 px-1 rounded-sm border-slate-200">
+                                                                                {td.tank_name}: {Number(td.quantity).toLocaleString()}L
+                                                                            </Badge>
+                                                                        ))}
+                                                                    </div>
+                                                                )
+                                                            )}
                                                         </div>
                                                     </TableCell>
                                                     <TableCell className="text-right py-2 font-medium">
@@ -339,6 +379,19 @@ export function PODetailModal({
                                                 <p className="text-[10px] text-muted-foreground uppercase font-bold">Notes</p>
                                                 <p className="truncate">{del.notes || "-"}</p>
                                             </div>
+                                            {del.tank_distribution && Array.isArray(del.tank_distribution) && del.tank_distribution.length > 0 && (
+                                                <div className="col-span-2 md:col-span-6 mt-2 pt-2 border-t text-xs">
+                                                    <p className="text-[10px] text-muted-foreground uppercase font-bold mb-1 border-b pb-1">Tank Distribution</p>
+                                                    <div className="flex flex-wrap gap-x-4 gap-y-1">
+                                                        {del.tank_distribution.map((td: any, idx: number) => (
+                                                            <div key={idx} className="flex gap-2">
+                                                                <span className="font-semibold text-slate-700">{td.tank_name || "Unknown Tank"}:</span>
+                                                                <span className="font-mono">{Number(td.quantity).toLocaleString()} L</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
                                         </div>
                                     ))}
                                 </div>

@@ -3,6 +3,7 @@
 import React from "react"
 import { useState, useEffect } from "react"
 import { getTodayPKT } from "@/lib/utils"
+import { getSystemActiveDate } from "@/app/actions/balance"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -125,12 +126,13 @@ export function OilPurchaseDialog({ open, onOpenChange, onSuccess }: OilPurchase
     }
   }, [open])
 
-  const resetForm = () => {
+  const resetForm = async () => {
+    const activeDate = await getSystemActiveDate()
     setStep("form")
     setError("")
     setCart([])
     setFormData({
-      purchase_date: getTodayPKT(),
+      purchase_date: activeDate,
       supplier_id: "",
       invoice_number: `OIL-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`,
       notes: "",
@@ -159,8 +161,8 @@ export function OilPurchaseDialog({ open, onOpenChange, onSuccess }: OilPurchase
   }
 
   const fetchTodayBalance = async () => {
-    const today = getTodayPKT()
-    const { data } = await supabase.from("daily_balances").select("*").eq("balance_date", today).maybeSingle()
+    const activeDate = await getSystemActiveDate()
+    const { data } = await supabase.from("daily_balances").select("*").eq("balance_date", activeDate).maybeSingle()
     if (data) setTodayBalance(data)
     else {
       const { data: latest } = await supabase.from("daily_balances").select("*").order("balance_date", { ascending: false }).limit(1).maybeSingle()

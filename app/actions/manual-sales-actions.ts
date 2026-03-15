@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
 import { getTodayPKT } from "@/lib/utils"
+import { validateTransactionDate } from "./balance"
 
 export type ManualSaleData = {
     product_id: string
@@ -17,8 +18,13 @@ export type ManualSaleData = {
  * Record a manual lubricant sale
  */
 export async function recordManualSale(data: ManualSaleData) {
-    const supabase = await createClient()
     const today = getTodayPKT()
+
+    // --- DATE VALIDATION ---
+    await validateTransactionDate(today)
+    // -----------------------
+
+    const supabase = await createClient()
 
     // 1. Get product cost for profit calc
     const { data: product, error: pError } = await supabase
@@ -48,7 +54,7 @@ export async function recordManualSale(data: ManualSaleData) {
             customer_name: data.customer_name,
             profit: profit,
             notes: data.notes,
-            sale_date: new Date().toISOString()
+            sale_date: today 
         }])
         .select()
         .single()

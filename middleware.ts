@@ -3,12 +3,18 @@ import { type NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 
 export async function middleware(request: NextRequest) {
-  // Update session first
-  const response = await updateSession(request)
+  // Log initialization for debugging (Edge runtime)
+  console.log('Middleware initialized for path:', request.nextUrl.pathname)
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+    console.error('CRITICAL: Supabase environment variables missing in Edge runtime!')
+  }
+
+  // Update session and get user in one go
+  const { supabaseResponse: response, user } = await updateSession(request)
 
   const { pathname } = request.nextUrl
 
-  // Create a Supabase client to check auth status
+  // Create a Supabase client for database checks
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -24,8 +30,6 @@ export async function middleware(request: NextRequest) {
     }
   )
 
-  const { data: { user } } = await supabase.auth.getUser()
-
   // Public routes that don't require authentication
   const publicRoutes = ['/login', '/auth/login', '/auth/sign-up', '/auth/sign-up-success', '/auth/error']
   const isPublicRoute = publicRoutes.some(route => pathname.startsWith(route))
@@ -33,12 +37,20 @@ export async function middleware(request: NextRequest) {
   // If user is authenticated via Supabase Auth, verify they exist in the public.profiles table
   let dbUser = null
   if (user) {
-    const { data } = await supabase
-      .from('profiles')
-      .select('id')
-      .eq('id', user.id)
-      .single()
-    dbUser = data
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('id', user.id)
+        .single()
+
+      if (error && error.code !== 'PGRST116') { // PGRST116 is "not found"
+        console.error('Error fetching profile in middleware:', error)
+      }
+      dbUser = data
+    } catch (e) {
+      console.error('Exception fetching profile in middleware:', e)
+    }
   }
 
   // If user is NOT logged in OR missing from the database, redirect to login (unless already on a public route)

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -10,6 +10,7 @@ import { setPOHoldExpectedDate } from "@/app/actions/purchase-orders"
 import { toast } from "sonner"
 import { format } from "date-fns"
 import { getTodayPKT } from "@/lib/utils"
+import { getSystemActiveDate } from "@/app/actions/balance"
 
 interface HoldAmountPopupProps {
     open: boolean
@@ -33,7 +34,16 @@ export function HoldAmountPopup({
     onSuccess
 }: HoldAmountPopupProps) {
     const [expectedDate, setExpectedDate] = useState<string>("")
+    const [minDate, setMinDate] = useState<string>(getTodayPKT())
     const [loading, setLoading] = useState(false)
+
+    useEffect(() => {
+        const init = async () => {
+            const date = await getSystemActiveDate()
+            setMinDate(date)
+        }
+        init()
+    }, [])
 
     const handleSave = async () => {
         if (!expectedDate) {
@@ -94,7 +104,7 @@ export function HoldAmountPopup({
                             <Input
                                 id="expected-date"
                                 type="date"
-                                min={getTodayPKT()} // Today or future only
+                                min={minDate} // Active system date or future only
                                 className="pl-9"
                                 value={expectedDate}
                                 onChange={(e) => setExpectedDate(e.target.value)}

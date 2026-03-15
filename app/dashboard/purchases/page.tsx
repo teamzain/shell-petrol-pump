@@ -23,6 +23,7 @@ import { getPurchaseSummary } from "@/app/actions/purchase-orders"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { ActiveHoldsTab } from "@/components/purchases/active-holds-tab"
 import { getTodayPKT } from "@/lib/utils"
+import { getSystemActiveDate } from "@/app/actions/balance"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Calendar as CalendarIcon, Filter as FilterIcon } from "lucide-react"
@@ -41,8 +42,16 @@ export default function PurchasesPage() {
 
   const [dateRange, setDateRange] = useState({
     from: "2024-01-01",
-    to: getTodayPKT()
+    to: ""
   })
+
+  useEffect(() => {
+    const initDate = async () => {
+      const activeDate = await getSystemActiveDate()
+      setDateRange(prev => ({ ...prev, to: activeDate }))
+    }
+    initDate()
+  }, [])
 
   useEffect(() => {
     const fetchStats = async () => {

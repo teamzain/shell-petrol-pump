@@ -20,6 +20,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select"
+
 import {
     Plus,
     Pencil,
@@ -47,7 +48,7 @@ export default function DispensersPage() {
     const [isDispenserDialogOpen, setIsDispenserDialogOpen] = useState(false)
     const [editingDispenser, setEditingDispenser] = useState<any>(null)
     const [dispenserName, setDispenserName] = useState("")
-    const [tankId, setTankId] = useState("")
+    const [tankIds, setTankIds] = useState<string[]>([])
 
     const [isNozzleDialogOpen, setIsNozzleDialogOpen] = useState(false)
     const [editingNozzle, setEditingNozzle] = useState<any>(null)
@@ -88,7 +89,7 @@ export default function DispensersPage() {
             await saveDispenser({
                 id: editingDispenser?.id,
                 name: dispenserName,
-                tank_id: tankId
+                tank_ids: tankIds
             })
             toast.success("Dispenser saved successfully")
             setIsDispenserDialogOpen(false)
@@ -155,7 +156,7 @@ export default function DispensersPage() {
                 <Button onClick={() => {
                     setEditingDispenser(null)
                     setDispenserName("")
-                    setTankId("")
+                    setTankIds([])
                     setIsDispenserDialogOpen(true)
                 }} className="h-12 px-6 rounded-xl font-bold shadow-lg shadow-primary/20 transition-all hover:scale-105 active:scale-95">
                     <Plus className="w-5 h-5 mr-2" /> Add Dispenser
@@ -170,14 +171,19 @@ export default function DispensersPage() {
                             <div>
                                 <CardTitle className="text-xl font-black">{dispenser.name}</CardTitle>
                                 <CardDescription className="text-xs uppercase font-bold tracking-widest text-muted-foreground">
-                                    {dispenser.tanks?.name || "No Tank Linked"} • {dispenser.nozzles?.length || 0} Nozzles
+                                    {dispenser.tank_ids && dispenser.tank_ids.length > 0
+                                        ? tanks
+                                            .filter((t: any) => dispenser.tank_ids.includes(t.id))
+                                            .map((t: any) => t.name)
+                                            .join(" • ") || `${dispenser.tank_ids.length} Tank(s) Linked`
+                                        : "No Tank Linked"} • {dispenser.nozzles?.length || 0} Nozzles
                                 </CardDescription>
                             </div>
                             <div className="flex items-center gap-2">
                                 <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg" onClick={() => {
                                     setEditingDispenser(dispenser)
                                     setDispenserName(dispenser.name)
-                                    setTankId(dispenser.tank_id || "")
+                                    setTankIds(dispenser.tank_ids || (dispenser.tank_id ? [dispenser.tank_id] : []))
                                     setIsDispenserDialogOpen(true)
                                 }}>
                                     <Pencil className="w-4 h-4" />
@@ -280,19 +286,41 @@ export default function DispensersPage() {
                                 />
                             </div>
                             <div className="space-y-2">
-                                <Label className="text-xs font-black uppercase tracking-widest ml-1 text-muted-foreground">Linked Tank</Label>
-                                <Select value={tankId} onValueChange={setTankId}>
-                                    <SelectTrigger className="h-12 rounded-xl border-2 font-bold">
-                                        <SelectValue placeholder="Select a tank..." />
-                                    </SelectTrigger>
-                                    <SelectContent className="rounded-xl border-2 shadow-xl">
-                                        {tanks.map(t => (
-                                            <SelectItem key={t.id} value={t.id} className="font-bold rounded-lg focus:bg-primary/10">
-                                                {t.name}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
+                                <Label className="text-xs font-black uppercase tracking-widest ml-1 text-muted-foreground">Linked Tanks</Label>
+                                <div className="border-2 rounded-xl p-3 space-y-2 max-h-48 overflow-y-auto">
+                                    {tanks.length === 0 && (
+                                        <p className="text-sm text-muted-foreground text-center py-2">No tanks available</p>
+                                    )}
+                                    {tanks.map(t => {
+                                        const checked = tankIds.includes(t.id)
+                                        return (
+                                            <label
+                                                key={t.id}
+                                                className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-colors ${checked
+                                                    ? "bg-primary/10 border border-primary/30"
+                                                    : "hover:bg-muted"
+                                                    }`}
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    className="accent-primary w-4 h-4"
+                                                    checked={checked}
+                                                    onChange={(e) => {
+                                                        if (e.target.checked) {
+                                                            setTankIds(prev => [...prev, t.id])
+                                                        } else {
+                                                            setTankIds(prev => prev.filter(id => id !== t.id))
+                                                        }
+                                                    }}
+                                                />
+                                                <span className="font-bold text-sm text-foreground">{t.name}</span>
+                                            </label>
+                                        )
+                                    })}
+                                </div>
+                                {tankIds.length > 0 && (
+                                    <p className="text-xs text-primary font-semibold ml-1">{tankIds.length} tank(s) selected</p>
+                                )}
                             </div>
                         </div>
                         <DialogFooter>

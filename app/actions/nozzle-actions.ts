@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
 import { getTodayPKT } from "@/lib/utils"
+import { validateTransactionDate } from "./balance"
 
 export type CardPayment = {
     card_type: 'shell_card' | 'bank_card' | 'other'
@@ -52,8 +53,13 @@ export async function addNozzle(formData: {
  * Record Multiple Nozzle Readings & Calculate Sales Automatically
  */
 export async function recordNozzleReadings(readings: NozzleReadingUpdate[], date?: string) {
-    const supabase = await createClient()
     const targetDate = date || getTodayPKT()
+
+    // --- DATE VALIDATION ---
+    await validateTransactionDate(targetDate)
+    // -----------------------
+
+    const supabase = await createClient()
 
     for (const reading of readings) {
         // 1. Get nozzle's product info
@@ -126,6 +132,46 @@ export async function recordNozzleReadings(readings: NozzleReadingUpdate[], date
                     })
                     if (stockError) throw new Error(`Stock update failed: ${stockError.message}`)
 
+                    // 4b. Update specific connected tank
+                    const { data: nozzleDispenser } = await supabase
+                        .from('nozzles')
+                        .select('dispenser_id')
+                        .eq('id', reading.nozzle_id)
+                        .single()
+
+                    if (nozzleDispenser && nozzleDispenser.dispenser_id) {
+                        const { data: dispenser } = await supabase
+                            .from('dispensers')
+                            .select('tank_ids')
+                            .eq('id', nozzleDispenser.dispenser_id)
+                            .single()
+
+                        if (dispenser && dispenser.tank_ids && dispenser.tank_ids.length > 0) {
+                            // Find the tank that has the matching product_id
+                            const { data: matchingTanks } = await supabase
+                                .from('tanks')
+                                .select('id, product_id')
+                                .in('id', dispenser.tank_ids)
+                                .eq('product_id', product.id)
+                                .limit(1)
+
+                            if (matchingTanks && matchingTanks.length > 0) {
+                                const targetTankId = matchingTanks[0].id
+                                const tankRpcName = qtyToSubtract > 0 ? 'decrement_tank_stock' : 'increment_tank_stock'
+
+                                const { error: tankStockError } = await supabase.rpc(tankRpcName, {
+                                    p_tank_id: targetTankId,
+                                    p_quantity: Math.abs(qtyToSubtract)
+                                })
+
+                                if (tankStockError) {
+                                    console.error(`Tank stock update failed: ${tankStockError.message}`)
+                                    // Non-fatal error for now, as we at least updated the main product stock
+                                }
+                            }
+                        }
+                    }
+
                     // 5. Stock Movement Record (Fetch fresh snapshot)
                     const { data: currentProduct } = await supabase
                         .from('products')
@@ -172,5 +218,48 @@ export async function recordNozzleReadings(readings: NozzleReadingUpdate[], date
     revalidatePath('/dashboard/sales/nozzle-readings')
     revalidatePath('/dashboard/sales/history')
     revalidatePath('/dashboard/balance')
+    return { success: true }
+}
+
+/**
+ * Update an existing nozzle
+ */
+export async function updateNozzle(id: string, formData: {
+    nozzle_number: string
+    product_id: string
+    dispenser_id?: string
+    nozzle_side?: string
+    status?: string
+}) {
+    const supabase = await createClient()
+
+    const { data, error } = await supabase
+        .from('nozzles')
+        .update({
+            nozzle_number: formData.nozzle_number,
+            product_id: formData.product_id,
+            dispenser_id: formData.dispenser_id || null,
+            nozzle_side: formData.nozzle_side,
+            status: formData.status || 'active',
+            updated_at: new Date().toISOString()
+        })
+        .eq('id', id)
+        .select()
+
+    if (error) throw new Error(error.message)
+
+    revalidatePath('/dashboard/settings/nozzles')
+    return data[0]
+}
+
+/**
+ * Delete a nozzle
+ */
+export async function deleteNozzle(id: string) {
+    const supabase = await createClient()
+    const { error } = await supabase.from('nozzles').delete().eq('id', id)
+    if (error) throw new Error(error.message)
+
+    revalidatePath('/dashboard/settings/nozzles')
     return { success: true }
 }

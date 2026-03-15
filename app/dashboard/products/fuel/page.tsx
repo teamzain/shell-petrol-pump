@@ -21,6 +21,7 @@ import { Progress } from "@/components/ui/progress"
 import { createClient } from "@/lib/supabase/client"
 import { toast } from "sonner"
 import { getProducts, deleteProduct as deleteProductAction } from "@/app/actions/products"
+import { getTanks } from "@/app/actions/tanks"
 
 type Product = {
   id: string
@@ -39,6 +40,7 @@ type Product = {
 export default function FuelProductsPage() {
   const [products, setProducts] = useState<Product[]>([])
   const [filteredProducts, setFilteredProducts] = useState<Product[]>([])
+  const [tanks, setTanks] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
   const [isDialogOpen, setIsDialogOpen] = useState(false)
@@ -48,8 +50,12 @@ export default function FuelProductsPage() {
   const fetchProducts = async () => {
     setIsLoading(true)
     try {
-      const data = await getProducts('fuel')
+      const [data, tankData] = await Promise.all([
+        getProducts('fuel'),
+        getTanks()
+      ])
       setProducts(data || [])
+      setTanks(tankData || [])
     } catch (error) {
       console.error("Error fetching products:", error)
       toast.error("Failed to load fuel products")
@@ -103,13 +109,28 @@ export default function FuelProductsPage() {
     handleDialogClose()
   }
 
+  const getLinkedTanks = (productId: string) => {
+    return tanks.filter((t: any) => t.product_id === productId)
+  }
+
+  const getTotalCapacity = (productId: string) => {
+    return getLinkedTanks(productId).reduce((sum: number, t: any) => sum + (t.capacity || 0), 0)
+  }
+
+  const getTotalStock = (productId: string) => {
+    const linked = getLinkedTanks(productId)
+    if (linked.length === 0) return null // fall back to product.current_stock
+    return linked.reduce((sum: number, t: any) => sum + (t.current_level || 0), 0)
+  }
+
   const getStockPercentage = (current: number, capacity: number) => {
     if (!capacity) return 0
     return Math.min((current / capacity) * 100, 100)
   }
 
   const isLowStock = (product: Product) => {
-    return product.current_stock <= product.min_stock_level
+    const totalStock = getTotalStock(product.id) ?? product.current_stock
+    return totalStock <= product.min_stock_level
   }
 
   return (
@@ -237,30 +258,62 @@ export default function FuelProductsPage() {
                           </div>
                           <div>
                             <p className="font-medium">{product.name}</p>
-                            <p className="text-sm text-muted-foreground">
-                              Capacity: {product.tank_capacity?.toLocaleString()} {product.unit}
-                            </p>
+                            {(() => {
+                              const linked = getLinkedTanks(product.id)
+                              if (linked.length > 0) {
+                                const totalCap = getTotalCapacity(product.id)
+                                return (
+                                  <>
+                                    <p className="text-xs text-muted-foreground">
+                                      {linked.map((t: any) => t.name).join(" • ")}
+                                    </p>
+                                    <p className="text-xs text-muted-foreground">
+                                      Capacity: {totalCap.toLocaleString()} {product.unit}
+                                    </p>
+                                  </>
+                                )
+                              }
+                              return (
+                                <p className="text-sm text-muted-foreground">
+                                  Capacity: {product.tank_capacity?.toLocaleString() || 0} {product.unit}
+                                </p>
+                              )
+                            })()}
                           </div>
                         </div>
                       </TableCell>
                       <TableCell>
-                        <div className="space-y-1 min-w-[150px]">
-                          <div className="flex items-center justify-between text-sm">
-                            <span>{product.current_stock.toLocaleString()} {product.unit}</span>
-                            <span className="text-muted-foreground">
-                              {getStockPercentage(product.current_stock, product.tank_capacity).toFixed(0)}%
-                            </span>
-                          </div>
-                          <Progress
-                            value={getStockPercentage(product.current_stock, product.tank_capacity)}
-                            className={isLowStock(product) ? "[&>div]:bg-destructive" : ""}
-                          />
-                          {isLowStock(product) && (
-                            <p className="text-xs text-destructive flex items-center gap-1">
-                              <AlertTriangle className="w-3 h-3" />
-                              Below minimum ({product.min_stock_level} {product.unit})
-                            </p>
-                          )}
+                        <div className="space-y-1 min-w-[160px]">
+                          {(() => {
+                            const linked = getLinkedTanks(product.id)
+                            const totalStock = getTotalStock(product.id) ?? product.current_stock
+                            const totalCap = linked.length > 0 ? getTotalCapacity(product.id) : product.tank_capacity
+                            const pct = getStockPercentage(totalStock, totalCap)
+                            const low = totalStock <= product.min_stock_level
+                            return (
+                              <>
+                                {linked.length > 0 && (
+                                  <p className="text-xs font-medium text-foreground">
+                                    {linked.map((t: any) => t.name).join(" & ")}
+                                  </p>
+                                )}
+                                <div className="flex items-center justify-between text-sm">
+                                  <span>{totalStock.toLocaleString()} {product.unit}</span>
+                                  <span className="text-muted-foreground">{pct.toFixed(0)}%</span>
+                                </div>
+                                <Progress
+                                  value={pct}
+                                  className={low ? "[&>div]:bg-destructive" : ""}
+                                />
+                                {low && (
+                                  <p className="text-xs text-destructive flex items-center gap-1">
+                                    <AlertTriangle className="w-3 h-3" />
+                                    Below minimum ({product.min_stock_level} {product.unit})
+                                  </p>
+                                )}
+                              </>
+                            )
+                          })()}
                         </div>
                       </TableCell>
                       <TableCell>

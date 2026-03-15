@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
+import { validateTransactionDate } from "./balance"
 
 export async function recordDelivery(formData: {
     purchase_order_id: string;
@@ -12,8 +13,13 @@ export async function recordDelivery(formData: {
     vehicle_number?: string;
     driver_name?: string;
     notes?: string;
+    tank_distribution?: { tank_id: string; tank_name?: string; quantity: number }[];
 }) {
     const supabase = await createClient()
+
+    // --- DATE VALIDATION ---
+    await validateTransactionDate(formData.delivery_date)
+    // -----------------------
 
     // 1. Get User ID
     const { data: { user } } = await supabase.auth.getUser()
@@ -33,7 +39,8 @@ export async function recordDelivery(formData: {
         p_vehicle_number: formData.vehicle_number,
         p_driver_name: formData.driver_name,
         p_notes: formData.notes,
-        p_user_id: user.id
+        p_user_id: user.id,
+        p_tank_distribution: formData.tank_distribution || null
     })
 
     if (error) throw error

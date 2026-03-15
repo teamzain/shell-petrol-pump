@@ -12,7 +12,6 @@ export async function getDispensers() {
         .from('dispensers')
         .select(`
             *,
-            tanks(name),
             nozzles(
                 *,
                 products(name, selling_price)
@@ -34,13 +33,17 @@ export async function getDispensers() {
 export async function saveDispenser(dispenser: {
     id?: string
     name: string
-    tank_id?: string | null
+    tank_ids?: string[]
 }) {
     const supabase = await createClient()
 
+    const tankIds = dispenser.tank_ids && dispenser.tank_ids.length > 0 ? dispenser.tank_ids : []
+    const primaryTankId = tankIds.length > 0 ? tankIds[0] : null
+
     const payload = {
         name: dispenser.name,
-        tank_id: dispenser.tank_id || null,
+        tank_id: primaryTankId,
+        tank_ids: tankIds,
         status: 'active'
     }
 

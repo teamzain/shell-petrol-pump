@@ -17,7 +17,8 @@ export async function getBalanceMovement(filters?: {
     const from = (page - 1) * pageSize
     const to = from + pageSize - 1
 
-    let query = supabase
+    // 1. Fetch Company Account Transactions
+    let companyQuery = supabase
         .from("company_account_transactions")
         .select(`
             *,
@@ -29,25 +30,79 @@ export async function getBalanceMovement(filters?: {
                     name
                 )
             )
-        `, { count: 'exact' })
-        .order("transaction_date", { ascending: false })
-        .order("created_at", { ascending: false })
+        `)
 
-    if (filters?.date_from) query = query.gte("transaction_date", filters.date_from)
-    if (filters?.date_to) query = query.lte("transaction_date", filters.date_to)
-    if (filters?.transaction_type && filters.transaction_type !== 'all') query = query.eq("transaction_type", filters.transaction_type)
-    if (filters?.supplier_id && filters.supplier_id !== 'all') query = query.eq("company_accounts.supplier_id", filters.supplier_id)
-    if (filters?.search) query = query.ilike("reference_number", `%${filters.search}%`)
+    if (filters?.date_from) companyQuery = companyQuery.gte("transaction_date", filters.date_from)
+    if (filters?.date_to) companyQuery = companyQuery.lte("transaction_date", filters.date_to)
+    if (filters?.transaction_type && filters.transaction_type !== 'all') companyQuery = companyQuery.eq("transaction_type", filters.transaction_type)
+    if (filters?.supplier_id && filters.supplier_id !== 'all') companyQuery = companyQuery.eq("company_accounts.supplier_id", filters.supplier_id)
+    if (filters?.search) companyQuery = companyQuery.ilike("reference_number", `%${filters.search}%`)
 
-    const { data, error, count } = await query.range(from, to)
+    const { data: companyTx, error: compErr } = await companyQuery
 
-    if (error) throw error
+    // 2. Fetch Balance Transactions (Internal)
+    // Only fetch if no supplier filter is active or if we want global visibility
+    let balanceTx: any[] = []
+    if (!filters?.supplier_id || filters.supplier_id === 'all') {
+        let balanceQuery = supabase
+            .from("balance_transactions")
+            .select(`
+                *,
+                bank_accounts ( account_name )
+            `)
+            .not("transaction_type", "in", "(transfer_to_supplier,supplier_to_bank)")
+
+        if (filters?.date_from) balanceQuery = balanceQuery.gte("transaction_date", filters.date_from)
+        if (filters?.date_to) balanceQuery = balanceQuery.lte("transaction_date", filters.date_to)
+        // Note: transaction_type filter might need mapping if we want to filter 'credit' vs 'cash_to_bank'
+        // For now, if type is 'all', we show both.
+        if (filters?.transaction_type && filters.transaction_type !== 'all') {
+            // Map 'credit' to 'add_cash', 'add_bank', 'cash_to_bank' for balance_transactions
+            // Map 'debit' to 'bank_to_cash' for balance_transactions
+            if (filters.transaction_type === 'credit') {
+                balanceQuery = balanceQuery.in("transaction_type", ["add_cash", "add_bank", "cash_to_bank"])
+            } else if (filters.transaction_type === 'debit') {
+                balanceQuery = balanceQuery.eq("transaction_type", "bank_to_cash")
+            }
+        }
+
+
+        const { data: bTx, error: bErr } = await balanceQuery
+        if (!bErr) balanceTx = bTx || []
+    }
+
+    if (compErr) throw compErr
+
+    // 3. Unify and Transform
+    const unified = [
+        ...(companyTx || []).map(tx => ({
+            ...tx,
+            source_table: 'company_account_transactions',
+            entity_name: tx.company_accounts?.suppliers?.name || 'Supplier',
+            display_type: tx.transaction_type // 'credit' or 'debit'
+        })),
+        ...balanceTx.map(tx => ({
+            ...tx,
+            source_table: 'balance_transactions',
+            entity_name: tx.bank_accounts?.account_name || 'System / Cash',
+            display_type: tx.transaction_type // 'cash_to_bank', 'add_cash' etc.
+        }))
+    ]
+
+    // 4. Sort and Paginate in JS (since we're merging)
+    unified.sort((a, b) => {
+        const dateA = new Date(a.transaction_date + 'T' + (a.created_at?.split('T')[1]?.split('+')[0] || '00:00:00')).getTime()
+        const dateB = new Date(b.transaction_date + 'T' + (b.created_at?.split('T')[1]?.split('+')[0] || '00:00:00')).getTime()
+        return dateB - dateA
+    })
+
+    const paginated = unified.slice(from, to + 1)
 
     return {
-        data,
-        total: count || 0,
+        data: paginated,
+        total: unified.length,
         page,
-        totalPages: Math.ceil((count || 0) / pageSize)
+        totalPages: Math.ceil(unified.length / pageSize)
     }
 }
 
@@ -71,28 +126,51 @@ export async function getBalanceMovementSummary(filters?: {
 
     const credits = txs.filter(t => t.transaction_type === 'credit' && !t.is_hold).reduce((acc, t) => acc + Number(t.amount), 0)
     const debits = txs.filter(t => t.transaction_type === 'debit' && !t.is_hold).reduce((acc, t) => acc + Number(t.amount), 0)
-    const holds = txs.filter(t => t.is_hold).reduce((acc, t) => acc + Number(t.amount), 0) // Note: is_hold records are saved as credits (returns) or nothing currently. Actually they aren't even saved in this table. Wait, they are. They are saved as 'credit' with transaction_source='hold_return' when released or... no, hold RECORD is separate. 
-    // Let's actually fetch holds from po_hold_records.
+    
+    // Add internal inflows (add_cash, add_bank)
+    let internalInflow = 0
+    if (!filters?.supplier_id || filters.supplier_id === 'all') {
+        let bQuery = supabase.from("balance_transactions").select("amount, transaction_type")
+        if (filters?.date_from) bQuery = bQuery.gte("transaction_date", filters.date_from)
+        if (filters?.date_to) bQuery = bQuery.lte("transaction_date", filters.date_to)
+        bQuery = bQuery.in("transaction_type", ["add_cash", "add_bank"])
+        
+        const { data: bTxs } = await bQuery
+        internalInflow = bTxs?.reduce((acc, t) => acc + Number(t.amount), 0) || 0
+    }
+
+    const totalCredits = credits + internalInflow
+
+    const holds = txs.filter(t => t.is_hold).reduce((acc, t) => acc + Number(t.amount), 0) 
+    
     let balanceQuery = supabase.from("company_accounts").select("current_balance")
     if (filters?.supplier_id && filters.supplier_id !== 'all') balanceQuery = balanceQuery.eq("supplier_id", filters.supplier_id)
 
     const { data: balances } = await balanceQuery
-    const currentBalance = balances?.reduce((acc, b) => acc + Number(b.current_balance), 0) || 0
+    const supplierBalance = balances?.reduce((acc, b) => acc + Number(b.current_balance), 0) || 0
+
+    // Fetch total physical cash/bank too for a true "Combined Balance"
+    let physicalBalance = 0
+    if (!filters?.supplier_id || filters.supplier_id === 'all') {
+        const { data: bankAccs } = await supabase.from("bank_accounts").select("current_balance")
+        const totalBank = bankAccs?.reduce((acc, b) => acc + Number(b.current_balance), 0) || 0
+
+        const today = getTodayPKT()
+        const { data: dayStatus } = await supabase.from("daily_accounts_status").select("closing_cash, opening_cash").eq("status_date", today).single()
+        const currentCash = dayStatus?.closing_cash ?? dayStatus?.opening_cash ?? 0
+
+        physicalBalance = totalBank + currentCash
+    }
 
     let holdsQuery = supabase.from("po_hold_records").select("hold_amount").eq("status", "on_hold")
-    if (filters?.supplier_id && filters.supplier_id !== 'all') {
-        // Need to join through PO... this might get tricky. For now, we'll just get all holds if supplier_id is missing, 
-        // or we fetch active holds directly. To keep it simple, let's fetch total active holds system-wide unless supplier is set.
-        // If supplier is set, we need to join. Since we can't easily join here without a complex query, let's just do a basic one.
-    }
     const { data: activeHolds } = await holdsQuery
     const totalHolds = activeHolds?.reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
 
     return {
-        totalCredits: credits,
+        totalCredits,
         totalDebits: debits,
-        netMovement: credits - debits,
-        currentBalance,
+        netMovement: totalCredits - debits,
+        currentBalance: supplierBalance + physicalBalance,
         totalHolds
     }
 }

@@ -51,7 +51,7 @@ import {
     SelectValue,
 } from "@/components/ui/select"
 import { exportToCSV } from "@/lib/export-utils"
-import { getBalanceOverviewData, releaseCardHold } from "@/app/actions/balance"
+import { getBalanceOverviewData, releaseCardHold, getSystemActiveDate } from "@/app/actions/balance"
 import { format } from "date-fns"
 
 export default function SalesHistoryPage() {
@@ -89,9 +89,20 @@ export default function SalesHistoryPage() {
     const today = getTodayPKT()
 
     useEffect(() => {
+        const initDate = async () => {
+            const activeDate = await getSystemActiveDate()
+            setStartDate(activeDate)
+            setEndDate(activeDate)
+        }
+        initDate()
         fetchMetadata()
-        fetchHistory()
     }, [])
+
+    useEffect(() => {
+        if (startDate && endDate) {
+            fetchHistory()
+        }
+    }, [startDate, endDate])
 
     async function fetchMetadata() {
         const { data: nData } = await supabase.from("nozzles").select("id, nozzle_number").order("nozzle_number")

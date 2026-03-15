@@ -36,3 +36,11 @@ export function getNextDate(dateStr: string): string {
   date.setDate(date.getDate() + 1)
   return date.toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' })
 }
+/**
+ * Returns the previous day for a given date string (YYYY-MM-DD) in PKT.
+ */
+export function getPreviousDate(dateStr: string): string {
+  const date = new Date(dateStr)
+  date.setDate(date.getDate() - 1)
+  return date.toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' })
+}

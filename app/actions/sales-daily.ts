@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
+import { validateTransactionDate } from "./balance"
 
 export type ExpenseData = {
     expense_date: string
@@ -20,6 +21,10 @@ export type ExpenseData = {
  * Database triggers in atomic_balance_fix.sql handle the actual balance deductions.
  */
 export async function saveDailyExpense(data: ExpenseData) {
+    // --- DATE VALIDATION ---
+    await validateTransactionDate(data.expense_date)
+    // -----------------------
+
     const supabase = await createClient()
 
     const { error } = await supabase

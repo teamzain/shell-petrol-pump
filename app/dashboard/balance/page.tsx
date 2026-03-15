@@ -78,7 +78,8 @@ import {
   closeDayForBalance,
   syncOpeningFromPreviousClosing,
   addBankCard,
-  addBankAccount
+  addBankAccount,
+  getSystemActiveDate
 } from "@/app/actions/balance"
 import { recordDailyCardPayments, type DailyCardEntry } from "@/app/actions/card-actions"
 import { toast } from "sonner"
@@ -145,8 +146,17 @@ export default function BalanceManagementPage() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
-  const [workingDate, setWorkingDate] = useState<string>(getTodayPKT())
-  const isFutureDate = isAfter(new Date(workingDate), new Date(getTodayPKT()))
+  const [workingDate, setWorkingDate] = useState<string>("") // Initialize empty to fetch on mount
+  
+  useEffect(() => {
+    const initDate = async () => {
+      const activeDate = await getSystemActiveDate()
+      setWorkingDate(activeDate)
+    }
+    initDate()
+  }, [])
+
+  const isFutureDate = workingDate ? isAfter(new Date(workingDate), new Date(getTodayPKT())) : false
   const [openingDialogOpen, setOpeningDialogOpen] = useState(false)
   const [closeDialogOpen, setCloseDialogOpen] = useState(false)
   const [cardDialogOpen, setCardDialogOpen] = useState(false)
@@ -173,7 +183,8 @@ export default function BalanceManagementPage() {
     supplierId: "",
     selectedSupplierTarget: "",
     taxDeduction: "",
-    isOpeningBalance: false
+    isOpeningBalance: false,
+    date: ""
   })
 
   const [openingBalances, setOpeningBalances] = useState({
@@ -207,6 +218,9 @@ export default function BalanceManagementPage() {
     { card_type: 'bank_card', card_id: '', amount: 0, date: workingDate }
   ])
 
+  const unclosedPriorDays = balanceHistory.filter(h => !h.is_closed && h.status_date < workingDate)
+  const hasUnclosedPriorDay = unclosedPriorDays.length > 0
+
   const fetchData = async (date?: string) => {
     setLoading(true)
     const targetDate = date || workingDate
@@ -226,54 +240,6 @@ export default function BalanceManagementPage() {
     }
   }
 
-  // Initial load logic to find current working date
-  useEffect(() => {
-    const init = async () => {
-      const data = await getBalanceOverviewData(getTodayPKT())
-
-      // Determine the best initial working date
-      // 1. If today is already closed, maybe we want to look at history? 
-      // Actually, the requirement: "find the first open day or the day after the last closed day"
-      // Let's look at the history provided
-      let initialDate = getTodayPKT()
-      if (data.balanceHistory && data.balanceHistory.length > 0) {
-        // Sort history by date ascending to find the earliest unclosed day
-        const sortedHistory = [...data.balanceHistory].sort((a, b) => new Date(a.status_date).getTime() - new Date(b.status_date).getTime())
-        const firstOpenDay = sortedHistory.find(h => !h.is_closed)
-
-        if (firstOpenDay) {
-          initialDate = firstOpenDay.status_date
-        } else {
-          // All history is closed. Go to next day *only if it's not in the future*.
-          const lastClosedDay = sortedHistory[sortedHistory.length - 1]
-          const nextDay = getNextDate(lastClosedDay.status_date)
-          const today = getTodayPKT()
-          // nextDay <= today means it has arrived
-          if (nextDay <= today) {
-            initialDate = nextDay
-          } else {
-            initialDate = today
-          }
-        }
-      }
-
-      setWorkingDate(initialDate)
-
-      // We still need to populate initial state if it happens to be today, 
-      // but the other useEffect will trigger fetchData(workingDate) anyway when workingDate changes.
-      // However, if workingDate is already today, it won't change, so we set data here.
-      if (initialDate === getTodayPKT()) {
-        setTodayBalance(data.todayBalance)
-        setBalanceHistory(data.balanceHistory)
-        setBankAccounts(data.bankAccounts)
-        setBankCards(data.bankCards)
-        setSupplierCards(data.supplierCards || [])
-        setSuppliers(data.suppliers)
-        setLoading(false)
-      }
-    }
-    init()
-  }, [])
 
   useEffect(() => {
     fetchData(workingDate)
@@ -383,14 +349,11 @@ export default function BalanceManagementPage() {
       toast.success("Day closed successfully")
       setCloseDialogOpen(false)
 
-      // Only shift to next day if it has already arrived (not a future date)
-      if (result.nextDateOpened && result.nextDate) {
+      if (result.nextDate) {
         setWorkingDate(result.nextDate)
-        toast.info(`Moved to ${result.nextDate}`)
+        toast.info(`Moved to ${result.nextDate}. Balances carried forward.`)
       } else {
-        // Next day is in the future — stay on current date and just refresh
         fetchData(workingDate)
-        toast.info("Day closed. Next day will open when it arrives.")
       }
     } catch (err: any) {
       toast.error(err.message || "Failed to close day")
@@ -427,7 +390,7 @@ export default function BalanceManagementPage() {
         supplier_card_id: supplierCardId,
         description: transactionData.description,
         isOpeningBalance: transactionData.isOpeningBalance,
-        date: workingDate
+        date: transactionData.date || workingDate
       })
 
       // If it's a supplier transfer and tax is specified, we could handle it here or in the server action.
@@ -443,7 +406,8 @@ export default function BalanceManagementPage() {
         supplierId: "",
         selectedSupplierTarget: "",
         taxDeduction: "",
-        isOpeningBalance: false
+        isOpeningBalance: false,
+        date: ""
       })
       fetchData(workingDate)
     } catch (err: any) {
@@ -645,7 +609,7 @@ export default function BalanceManagementPage() {
 
   // daily_accounts_status uses opening_cash / closing_cash / opening_bank / closing_bank
   // We sum them for "Total Cash" as requested by user
-  const totalCashBalance = (todayBalance?.opening_cash || 0) + (todayBalance?.closing_cash || 0)
+  const totalCashBalance = todayBalance?.closing_cash ?? todayBalance?.opening_cash ?? 0
   const currentBankBalance = todayBalance?.closing_bank ?? todayBalance?.opening_bank ?? 0
   const totalBankAssets = bankAccounts.reduce((acc, bank) => acc + (bank.current_balance || 0), 0)
 
@@ -663,6 +627,17 @@ export default function BalanceManagementPage() {
           <AlertCircle className="h-4 w-4" />
           <AlertTitle>Error</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {hasUnclosedPriorDay && (
+        <Alert variant="destructive" className="bg-amber-50 text-amber-800 border-amber-200">
+          <AlertCircle className="h-4 w-4 text-amber-600" />
+          <AlertTitle className="text-amber-800 font-bold">Unclosed Previous Days Found</AlertTitle>
+          <AlertDescription>
+            You cannot open <strong>{format(new Date(workingDate), "dd MMM yyyy")}</strong> because previous days are still open. 
+            Please navigate back to <strong>{format(new Date(unclosedPriorDays[0].status_date), "dd MMM yyyy")}</strong> and close it first.
+          </AlertDescription>
         </Alert>
       )}
 
@@ -790,39 +765,6 @@ export default function BalanceManagementPage() {
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-black tracking-tight text-foreground">{formatCurrency(totalCashBalance)}</div>
-            <div className="mt-4 pt-4 border-t space-y-2 text-xs font-semibold">
-              <div className="flex justify-between items-center">
-                <span className="text-muted-foreground uppercase flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-primary/40" />
-                  Opening
-                </span>
-                <span className="text-foreground">{formatCurrency(todayBalance?.opening_cash ?? 0)}</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-muted-foreground uppercase flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500/40" />
-                  Gross Sales (+)
-                </span>
-                <span className="text-emerald-600">+{formatCurrency((todayBalance?.total_fuel_sale || 0) + (todayBalance?.total_lube_sale || 0))}</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-muted-foreground uppercase flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-orange-500/40" />
-                  Card Holds (-)
-                </span>
-                <span className="text-orange-600">-{formatCurrency(todayBalance?.total_card_hold || 0)}</span>
-              </div>
-              <div className="flex justify-between items-center pb-1">
-                <span className="text-muted-foreground uppercase flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-rose-500/40" />
-                  Expenses (-)
-                </span>
-                <span className="text-rose-600">-{formatCurrency(todayBalance?.total_expenses ?? 0)}</span>
-              </div>
-              <p className="text-[10px] text-muted-foreground italic leading-tight mt-3 p-2 bg-primary/5 rounded border border-primary/10">
-                Note: Total Cash includes Opening Balance + Cash Intake (Sales minus Card Holds and Expenses).
-              </p>
-            </div>
           </CardContent>
         </Card>
 
@@ -1170,8 +1112,8 @@ export default function BalanceManagementPage() {
               })
               setOpeningDialogOpen(true)
             }}
-            disabled={todayBalance?.is_closed || todayBalance?.opening_balances_set || isFutureDate}
-            variant={todayBalance?.is_closed || todayBalance?.opening_balances_set ? "secondary" : "default"}
+            disabled={todayBalance?.is_closed || todayBalance?.opening_balances_set || isFutureDate || hasUnclosedPriorDay}
+            variant={todayBalance?.is_closed || todayBalance?.opening_balances_set || hasUnclosedPriorDay ? "secondary" : "default"}
             className="w-full sm:w-auto"
           >
             <Save className="mr-2 h-4 w-4" />
@@ -1481,8 +1423,18 @@ export default function BalanceManagementPage() {
                       : "Manually add funds to the balance with a reason."}
             </DialogDescription>
           </DialogHeader>
-
+          
           <div className="grid gap-4 py-4">
+            <div className="space-y-2">
+              <Label>Transaction Date</Label>
+              <Input
+                type="date"
+                value={transactionData.date || workingDate}
+                max={getTodayPKT()}
+                onChange={(e) => setTransactionData(prev => ({ ...prev, date: e.target.value }))}
+              />
+            </div>
+
             <div className="space-y-2">
               <Label>Transaction Type</Label>
               <Select

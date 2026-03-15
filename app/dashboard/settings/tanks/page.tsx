@@ -206,7 +206,7 @@ export default function TanksPage() {
                             </div>
                         </div>
                         <div className="grid gap-2">
-                            <Label htmlFor="current">Current Reading (L)</Label>
+                            <Label htmlFor="current">Tank Stock (L)</Label>
                             <Input id="current" type="number" value={formData.current_level} onChange={(e) => setFormData({ ...formData, current_level: parseFloat(e.target.value) || 0 })} />
                         </div>
                     </div>

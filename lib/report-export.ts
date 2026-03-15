@@ -16,8 +16,8 @@ export function exportReport({ activeTab, reportData, filters, stationName = "Un
     if (!reportData) return
 
     try {
-        const dateRangeStr = filters.dateRange.from && filters.dateRange.to
-            ? `${format(filters.dateRange.from, "MMM dd, yyyy")} - ${format(filters.dateRange.to, "MMM dd, yyyy")}`
+        const dateRangeStr = filters.dateRange?.from && filters.dateRange?.to
+            ? `${format(new Date(filters.dateRange.from), "MMM dd, yyyy")} - ${format(new Date(filters.dateRange.to), "MMM dd, yyyy")}`
             : format(new Date(), "MMM dd, yyyy")
 
         if (type === "csv") {
@@ -71,6 +71,21 @@ function exportToCSV(activeTab: string, reportData: any, dateRangeStr: string) {
                 s.periodPurchases,
                 s.total_purchases,
                 s.outstandingDues
+            ]
+            csvContent += row.join(",") + "\n"
+        })
+    } else if (activeTab === "balance-ledger" && reportData.transactions) {
+        const headers = ["Date", "Entity", "Description", "Balance Before", "Amount", "Balance After", "Type"]
+        csvContent += headers.join(",") + "\n"
+        reportData.transactions.forEach((t: any) => {
+            const row = [
+                t.display_date,
+                `"${t.display_entity}"`,
+                `"${t.display_desc}"`,
+                t.balance_before,
+                `${t.is_credit ? '+' : '-'}${t.amount}`,
+                t.balance_after,
+                t.is_credit ? "Inflow" : "Outflow"
             ]
             csvContent += row.join(",") + "\n"
         })
@@ -152,6 +167,24 @@ function exportToPDF(activeTab: string, reportData: any, dateRangeStr: string, s
             e.amount.toLocaleString(),
             e.payment_method,
             e.description || ""
+        ])
+    } else if (activeTab === "balance-ledger" && reportData.transactions) {
+        const summary = reportData.summary || {};
+        nextY = addSummarySection("Ledger Position", [
+            ["Total Combined Balance", `Rs. ${summary.currentBalance?.toLocaleString() || "0"}`],
+            ["Total Inflow", `Rs. ${summary.totalCredits?.toLocaleString() || "0"}`],
+            ["Total Outflow", `Rs. ${summary.totalDebits?.toLocaleString() || "0"}`],
+            ["Net Movement", `Rs. ${summary.netMovement?.toLocaleString() || "0"}`],
+        ])
+
+        tableHeaders = ["Date", "Entity", "Description", "Before (Rs.)", "Amount (Rs.)", "After (Rs.)"]
+        tableData = reportData.transactions.map((t: any) => [
+            t.display_date,
+            t.display_entity,
+            t.display_desc,
+            t.balance_before?.toLocaleString() || "0",
+            `${t.is_credit ? '+' : '-'} ${t.amount.toLocaleString()}`,
+            t.balance_after?.toLocaleString() || "0"
         ])
     } else if (activeTab === "supplier-tracking" && reportData.suppliers) {
         nextY = addSummarySection("Supplier Position", [

@@ -39,7 +39,19 @@ import {
 } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { toast } from "sonner"
-import { addNozzle } from "@/app/actions/nozzle-actions"
+import { addNozzle, updateNozzle, deleteNozzle } from "@/app/actions/nozzle-actions"
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+    AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
+import { Trash2 } from "lucide-react"
 
 export default function NozzleSettingsPage() {
     const [nozzles, setNozzles] = useState<any[]>([])
@@ -55,7 +67,9 @@ export default function NozzleSettingsPage() {
         dispenser_id: "",
         nozzle_side: "",
         initial_reading: "",
+        status: "active"
     })
+    const [editingNozzle, setEditingNozzle] = useState<any>(null)
     const [dispensers, setDispensers] = useState<any[]>([])
 
     const supabase = createClient()
@@ -103,23 +117,69 @@ export default function NozzleSettingsPage() {
         setIsSaving(true)
 
         try {
-            await addNozzle({
-                nozzle_number: formData.nozzle_number,
-                product_id: formData.product_id,
-                dispenser_id: formData.dispenser_id,
-                nozzle_side: formData.nozzle_side,
-                initial_reading: parseFloat(formData.initial_reading),
-            })
+            if (editingNozzle) {
+                await updateNozzle(editingNozzle.id, {
+                    nozzle_number: formData.nozzle_number,
+                    product_id: formData.product_id,
+                    dispenser_id: formData.dispenser_id,
+                    nozzle_side: formData.nozzle_side,
+                    status: formData.status
+                })
+                toast.success("Nozzle updated successfully!")
+            } else {
+                await addNozzle({
+                    nozzle_number: formData.nozzle_number,
+                    product_id: formData.product_id,
+                    dispenser_id: formData.dispenser_id,
+                    nozzle_side: formData.nozzle_side,
+                    initial_reading: parseFloat(formData.initial_reading),
+                })
+                toast.success("Nozzle configured successfully!")
+            }
 
-            toast.success("Nozzle configured successfully!")
             setIsDialogOpen(false)
-            setFormData({ nozzle_number: "", product_id: "", dispenser_id: "", nozzle_side: "", initial_reading: "" })
+            setFormData({ nozzle_number: "", product_id: "", dispenser_id: "", nozzle_side: "", initial_reading: "", status: "active" })
+            setEditingNozzle(null)
             fetchData()
-        } catch (error: any) {
-            toast.error(error.message || "Failed to add nozzle")
         } finally {
             setIsSaving(false)
         }
+    }
+
+    async function handleDelete(id: string) {
+        try {
+            await deleteNozzle(id)
+            toast.success("Nozzle deleted")
+            fetchData()
+        } catch (error: any) {
+            toast.error(error.message || "Failed to delete nozzle")
+        }
+    }
+
+    const openEditDialog = (nozzle: any) => {
+        setEditingNozzle(nozzle)
+        setFormData({
+            nozzle_number: nozzle.nozzle_number,
+            product_id: nozzle.product_id,
+            dispenser_id: nozzle.dispenser_id || "",
+            nozzle_side: nozzle.nozzle_side || "",
+            initial_reading: nozzle.initial_reading?.toString() || "0",
+            status: nozzle.status || "active"
+        })
+        setIsDialogOpen(true)
+    }
+
+    const openAddDialog = () => {
+        setEditingNozzle(null)
+        setFormData({
+            nozzle_number: "",
+            product_id: "",
+            dispenser_id: "",
+            nozzle_side: "",
+            initial_reading: "",
+            status: "active"
+        })
+        setIsDialogOpen(true)
     }
 
     return (
@@ -129,9 +189,15 @@ export default function NozzleSettingsPage() {
                     <h1 className="text-2xl font-bold tracking-tight">Nozzle Configuration</h1>
                     <p className="text-muted-foreground">Manage your fuel dispensers and meter readings.</p>
                 </div>
-                <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+                <Dialog open={isDialogOpen} onOpenChange={(open) => {
+                    setIsDialogOpen(open)
+                    if (!open) {
+                        setEditingNozzle(null)
+                        setFormData({ nozzle_number: "", product_id: "", dispenser_id: "", nozzle_side: "", initial_reading: "", status: "active" })
+                    }
+                }}>
                     <DialogTrigger asChild>
-                        <Button className="gap-2">
+                        <Button className="gap-2" onClick={openAddDialog}>
                             <Plus className="w-4 h-4" />
                             Add Nozzle
                         </Button>
@@ -139,9 +205,9 @@ export default function NozzleSettingsPage() {
                     <DialogContent className="sm:max-w-[425px]">
                         <form onSubmit={handleSubmit}>
                             <DialogHeader>
-                                <DialogTitle>Configure New Nozzle</DialogTitle>
+                                <DialogTitle>{editingNozzle ? 'Edit Nozzle' : 'Configure New Nozzle'}</DialogTitle>
                                 <DialogDescription>
-                                    Enter the details for the new fuel dispenser nozzle.
+                                    {editingNozzle ? 'Update the details for this fuel nozzle.' : 'Enter the details for the new fuel dispenser nozzle.'}
                                 </DialogDescription>
                             </DialogHeader>
                             <div className="grid gap-4 py-4">
@@ -210,11 +276,32 @@ export default function NozzleSettingsPage() {
                                         step="0.01"
                                         placeholder="0.00"
                                         required
+                                        disabled={!!editingNozzle}
                                         value={formData.initial_reading}
                                         onChange={(e) => setFormData({ ...formData, initial_reading: e.target.value })}
                                     />
-                                    <p className="text-[10px] text-muted-foreground">Current cumulative reading on meter</p>
+                                    <p className="text-[10px] text-muted-foreground">
+                                        {editingNozzle ? "Initial reading cannot be changed after configuration" : "Current cumulative reading on meter"}
+                                    </p>
                                 </div>
+                                {editingNozzle && (
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="status">Status</Label>
+                                        <Select
+                                            value={formData.status}
+                                            onValueChange={(v) => setFormData({ ...formData, status: v })}
+                                        >
+                                            <SelectTrigger>
+                                                <SelectValue placeholder="Select status" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="active">Active</SelectItem>
+                                                <SelectItem value="inactive">Inactive</SelectItem>
+                                                <SelectItem value="maintenance">Maintenance</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                )}
                             </div>
                             <DialogFooter>
                                 <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
@@ -275,10 +362,36 @@ export default function NozzleSettingsPage() {
                                                 {nozzle.status}
                                             </Badge>
                                         </TableCell>
-                                        <TableCell className="text-right">
-                                            <Button variant="ghost" size="icon">
+                                        <TableCell className="text-right flex items-center justify-end gap-2">
+                                            <Button variant="ghost" size="icon" onClick={() => openEditDialog(nozzle)}>
                                                 <Edit2 className="w-4 h-4" />
                                             </Button>
+
+                                            <AlertDialog>
+                                                <AlertDialogTrigger asChild>
+                                                    <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive">
+                                                        <Trash2 className="w-4 h-4" />
+                                                    </Button>
+                                                </AlertDialogTrigger>
+                                                <AlertDialogContent>
+                                                    <AlertDialogHeader>
+                                                        <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                                                        <AlertDialogDescription>
+                                                            This will permanently delete nozzle <strong>{nozzle.nozzle_number}</strong>.
+                                                            This action cannot be undone.
+                                                        </AlertDialogDescription>
+                                                    </AlertDialogHeader>
+                                                    <AlertDialogFooter>
+                                                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                                        <AlertDialogAction
+                                                            onClick={() => handleDelete(nozzle.id)}
+                                                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                                        >
+                                                            Delete
+                                                        </AlertDialogAction>
+                                                    </AlertDialogFooter>
+                                                </AlertDialogContent>
+                                            </AlertDialog>
                                         </TableCell>
                                     </TableRow>
                                 ))}

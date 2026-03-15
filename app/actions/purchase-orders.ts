@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
+import { validateTransactionDate } from "./balance"
 
 export async function createPurchaseOrder(formData: {
     supplier_id: string;
@@ -19,6 +20,10 @@ export async function createPurchaseOrder(formData: {
 }) {
     const supabase = await createClient()
 
+    // --- DATE VALIDATION ---
+    await validateTransactionDate(formData.order_date)
+    // -----------------------
+    
     const poNumber = formData.po_number || `PO-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`
 
     let estimatedTotal = 0
@@ -508,7 +513,8 @@ export async function getPurchaseOrderDetail(poId: string) {
                 notes,
                 po_item_index,
                 delivered_quantity,
-                delivered_amount
+                delivered_amount,
+                tank_distribution
             ),
             po_hold_records (
                 id,

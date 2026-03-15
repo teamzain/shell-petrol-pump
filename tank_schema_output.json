@@ -1,0 +1,11 @@
+[
+  "id",
+  "name",
+  "product_id",
+  "capacity",
+  "dry_level",
+  "current_level",
+  "created_at",
+  "updated_at",
+  "dip_chart_id"
+]

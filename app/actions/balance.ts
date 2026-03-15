@@ -1,7 +1,7 @@
 "use server"
 
 import { createClient } from "@/lib/supabase/server"
-import { getTodayPKT, getTomorrowPKT, getNextDate } from "@/lib/utils"
+import { getTodayPKT, getTomorrowPKT, getNextDate, getPreviousDate } from "@/lib/utils"
 import { revalidatePath } from "next/cache"
 
 export async function getBalanceOverviewData(date?: string) {
@@ -9,11 +9,65 @@ export async function getBalanceOverviewData(date?: string) {
     const targetDate = date || getTodayPKT()
 
     // 1. Fetch Today's Daily Status
-    const { data: todayBalance, error: balErr } = await supabase
+    let { data: todayBalance, error: balErr } = await supabase
         .from("daily_accounts_status")
         .select("*")
         .eq("status_date", targetDate)
         .single()
+
+    // --- ROBUST AUTO-INITIALIZATION ---
+    // If today is missing or opening_balances_set is false, check if yesterday is closed
+    if (!todayBalance || !todayBalance.opening_balances_set) {
+        const prevDate = getPreviousDate(targetDate)
+        const { data: prevDay } = await supabase
+            .from("daily_accounts_status")
+            .select("*")
+            .eq("status_date", prevDate)
+            .eq("is_closed", true)
+            .single()
+
+        if (prevDay) {
+            console.log(`Auto-initializing ${targetDate} from closed ${prevDate}`)
+            const initialCash = prevDay.closing_cash ?? 0
+            const initialBank = prevDay.closing_bank ?? 0
+
+            // A. Upsert daily_accounts_status
+            const { data: newStatus, error: autoErr } = await supabase
+                .from("daily_accounts_status")
+                .upsert({
+                    status_date: targetDate,
+                    opening_cash: initialCash,
+                    closing_cash: initialCash,
+                    opening_bank: initialBank,
+                    closing_bank: initialBank,
+                    is_closed: false,
+                    opening_balances_set: true, // Mark as set to skip "Set Opening"
+                    updated_at: new Date().toISOString()
+                }, { onConflict: 'status_date' })
+                .select()
+                .single()
+
+            if (!autoErr && newStatus) {
+                todayBalance = newStatus
+
+                // B. Also ensure daily_operations is initialized
+                const { data: { user } } = await supabase.auth.getUser()
+                await supabase
+                    .from("daily_operations")
+                    .upsert({
+                        operation_date: targetDate,
+                        status: 'open',
+                        opening_cash: initialCash,
+                        opening_cash_actual: initialCash,
+                        opening_cash_variance: 0,
+                        opening_bank: initialBank,
+                        opened_by: user?.id,
+                        opened_at: new Date().toISOString()
+                    }, { onConflict: 'operation_date' })
+            }
+        }
+    }
+    // -----------------------------------
 
     // 2. Fetch Balance History (last 30 days)
     const { data: balanceHistory, error: histErr } = await supabase
@@ -213,6 +267,10 @@ export async function updateDailyOpeningBalances(
     const supabase = await createClient()
     const targetDate = date || getTodayPKT()
 
+    // --- DATE VALIDATION ---
+    await validateTransactionDate(targetDate)
+    // -----------------------
+
     // 1. Check if already set
     const { data: existingStatus } = await supabase
         .from("daily_accounts_status")
@@ -222,6 +280,18 @@ export async function updateDailyOpeningBalances(
 
     if (existingStatus?.opening_balances_set) {
         throw new Error("Opening balances have already been set for this day.")
+    }
+
+    // 1b. Check for unclosed prior days
+    const { data: unclosedPrior } = await supabase
+        .from("daily_accounts_status")
+        .select("status_date")
+        .lt("status_date", targetDate)
+        .eq("is_closed", false)
+        .limit(1)
+
+    if (unclosedPrior && unclosedPrior.length > 0) {
+        throw new Error(`Cannot open ${targetDate} because a previous day (${unclosedPrior[0].status_date}) is still open. Please close previous days first.`)
     }
 
     // 2. Record transactions for cash
@@ -266,6 +336,69 @@ export async function updateDailyOpeningBalances(
     return { success: true }
 }
 
+async function getGlobalNetBalance() {
+    const supabase = await createClient()
+
+    // 1. Get total supplier debt
+    const { data: accounts } = await supabase
+        .from("company_accounts")
+        .select("current_balance")
+
+    const totalDebt = accounts?.reduce((acc, b) => acc + Number(b.current_balance), 0) || 0
+
+    // For this business logic, we'll consider the "Ledger Balance" to be the supplier debt total
+    // because that's what the current movements page shows.
+    // If we want it to show internal transfers too, we can either:
+    // a) Use global balance (Cash + Bank - Debt)
+    // b) Or keep it focused on debt but show transfers as "Non-debt" rows with N/A balance.
+    // Given the user wants "remaining remains same" for transfers, they likely want Global Balance.
+
+    const { data: bankAccs } = await supabase.from("bank_accounts").select("current_balance")
+    const totalBank = bankAccs?.reduce((acc, b) => acc + Number(b.current_balance), 0) || 0
+
+    const today = getTodayPKT()
+    const { data: dayStatus } = await supabase.from("daily_accounts_status").select("closing_cash, opening_cash").eq("status_date", today).single()
+    const currentCash = dayStatus?.closing_cash ?? dayStatus?.opening_cash ?? 0
+
+    return (totalDebt + totalBank + currentCash)
+}
+
+/**
+ * Finds the earliest unclosed date in the system.
+ * This is considered the "Active Date" for data entry.
+ */
+export async function getSystemActiveDate(): Promise<string> {
+    const supabase = await createClient()
+    const { data, error } = await supabase
+        .from("daily_accounts_status")
+        .select("status_date")
+        .eq("is_closed", false)
+        .order("status_date", { ascending: true })
+        .limit(1)
+        .single()
+
+    if (error || !data) {
+        // Fallback to today PKT if no unclosed day found
+        return getTodayPKT()
+    }
+    return data.status_date
+}
+
+/**
+ * Validates that a given date is NOT in the future relative to the system's active open date.
+ */
+export async function validateTransactionDate(transactionDate: string) {
+    const activeDate = await getSystemActiveDate()
+    
+    // Convert to Date objects for robust comparison
+    const txDateObj = new Date(transactionDate)
+    const activeDateObj = new Date(activeDate)
+
+    if (txDateObj > activeDateObj) {
+        throw new Error(`Transaction blocked. You are currently working on ${activeDate}. Data for future dates (like ${transactionDate}) cannot be entered until ${activeDate} is closed.`)
+    }
+}
+
 export async function recordBalanceTransaction(data: {
     transaction_type: 'cash_to_bank' | 'bank_to_cash' | 'add_cash' | 'add_bank' | 'transfer_to_supplier' | 'supplier_to_bank';
     amount: number;
@@ -282,6 +415,10 @@ export async function recordBalanceTransaction(data: {
     if (!user) throw new Error("Unauthorized")
 
     const targetDate = data.date || getTodayPKT()
+
+    // --- DATE VALIDATION ---
+    await validateTransactionDate(targetDate)
+    // -----------------------
 
     // 0. Check if opening balances are already set if this is an opening adjustment
     if (data.isOpeningBalance) {
@@ -309,6 +446,30 @@ export async function recordBalanceTransaction(data: {
         supplier_card_id: data.supplier_card_id,
         is_opening: data.isOpeningBalance || false
     }
+
+    // --- TRACK RUNNING BALANCE ---
+    // Fetch current global balance before this transaction
+    const balanceBefore = await getGlobalNetBalance()
+    insertPayload.balance_before = balanceBefore
+    
+    // Determine the net effect on global balance
+    let netEffect = 0
+    if (data.transaction_type === 'add_cash' || data.transaction_type === 'add_bank') {
+        netEffect = data.amount
+    } else if (data.transaction_type === 'cash_to_bank' || data.transaction_type === 'bank_to_cash') {
+        netEffect = 0 // Net zero for global balance
+    } else if (data.transaction_type === 'transfer_to_supplier' || data.transaction_type === 'supplier_to_bank') {
+        // These will be tracked via company_account_transactions too.
+        // For the global physical balance, they might be outflows.
+        // However, if we track (Cash + Bank + SupplierBalance), then:
+        // Cash to Supplier: Cash decreases, Supplier Account increases (Wait, if credit=debt, it increases).
+        // Actually, if we use (Total physical - Total Debt), then paying 1k decreases Physical by 1k and decreases Debt by 1k. Net zero!
+        // So for the "Unified Balance", transfers to suppliers are net zero movements.
+        netEffect = 0
+    }
+
+    insertPayload.balance_after = balanceBefore + netEffect
+    // -----------------------------
 
     const { error: txErr } = await supabase
         .from("balance_transactions")
@@ -487,60 +648,45 @@ export async function closeDayForBalance(cashClosing: number, bankClosing: numbe
 
     console.log('Actual closing values:', { actualCashClosing, actualBankClosing })
 
-    // 2. Only auto-open the next day if it has already arrived (nextDate <= today)
-    //    Never pre-create a future date.
+    // 2. ALWAYS auto-open the next day when triggered by this manual close action
     const nextDate = getNextDate(targetDate)
-    const shouldOpenNext = nextDate <= todayPKT
+    console.log('Auto-opening next day:', nextDate)
 
-    if (shouldOpenNext) {
-        console.log('Opening next day status for:', nextDate)
+    // A. Upsert next day in daily_accounts_status
+    const { error: nextBalErr } = await supabase
+        .from("daily_accounts_status")
+        .upsert({
+            status_date: nextDate,
+            opening_cash: actualCashClosing,
+            closing_cash: actualCashClosing,
+            opening_bank: actualBankClosing,
+            closing_bank: actualBankClosing,
+            is_closed: false,
+            opening_balances_set: true, // Crucial: automatically set for carry-forward
+            updated_at: new Date().toISOString()
+        }, { onConflict: 'status_date' })
 
-        // A. Upsert next day in daily_accounts_status
-        const { error: nextBalErr } = await supabase
-            .from("daily_accounts_status")
-            .upsert({
-                status_date: nextDate,
-                opening_cash: actualCashClosing,
-                closing_cash: actualCashClosing,
-                opening_bank: actualBankClosing,
-                closing_bank: actualBankClosing,
-                is_closed: false,
-                opening_balances_set: true, // Crucial: carry-forward counts as "set"
-                updated_at: new Date().toISOString()
-            }, { onConflict: 'status_date' })
+    if (nextBalErr) throw new Error(`Failed to create next day status: ${nextBalErr.message}`)
 
-        if (nextBalErr) {
-            console.error('Next day status error:', nextBalErr)
-            throw new Error(`Failed to create next day status: ${nextBalErr.message}`)
-        }
+    // B. Upsert next day in daily_operations
+    const { error: nextOpsErr } = await supabase
+        .from("daily_operations")
+        .upsert({
+            operation_date: nextDate,
+            status: 'open',
+            opening_cash: actualCashClosing,
+            opening_cash_actual: actualCashClosing,
+            opening_cash_variance: 0,
+            opening_bank: actualBankClosing,
+            opened_by: user?.id,
+            opened_at: new Date().toISOString()
+        }, { onConflict: 'operation_date' })
 
-        // B. Upsert next day in daily_operations
-        const { error: nextOpsErr } = await supabase
-            .from("daily_operations")
-            .upsert({
-                operation_date: nextDate,
-                status: 'open',
-                opening_cash: actualCashClosing,
-                opening_cash_actual: actualCashClosing,
-                opening_cash_variance: 0,
-                opening_bank: actualBankClosing,
-                opened_by: user?.id,
-                opened_at: new Date().toISOString()
-            }, { onConflict: 'operation_date' })
-
-        if (nextOpsErr) {
-            console.error('Next day operations error:', nextOpsErr)
-            throw new Error(`Failed to create next day operations: ${nextOpsErr.message}`)
-        }
-
-        console.log('Day closed and next day opened:', nextDate)
-    } else {
-        console.log('Next date', nextDate, 'is in the future — not auto-opening.')
-    }
+    if (nextOpsErr) throw new Error(`Failed to create next day operations: ${nextOpsErr.message}`)
 
     revalidatePath("/dashboard/balance")
     revalidatePath("/dashboard")
-    return { success: true, nextDate, nextDateOpened: shouldOpenNext }
+    return { success: true, nextDate }
 }
 
 /**

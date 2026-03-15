@@ -30,6 +30,7 @@ import { DeleteConfirmDialog } from "@/components/ui/delete-confirm-dialog"
 import { getSuppliers } from "@/app/actions/suppliers"
 import { getProducts } from "@/app/actions/products"
 import { createPurchaseOrder, getNextPONumber } from "@/app/actions/purchase-orders"
+import { getSystemActiveDate } from "@/app/actions/balance"
 import { AlertCircle, Plus, Trash2, ShoppingCart, RefreshCcw } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { getTodayPKT } from "@/lib/utils"
@@ -82,10 +83,17 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
     useEffect(() => {
         const fetchData = async () => {
             try {
-                const [supps, prods, nextPoNum] = await Promise.all([getSuppliers(), getProducts(), getNextPONumber()])
+                const [supps, prods, nextPoNum, activeDate] = await Promise.all([
+                    getSuppliers(),
+                    getProducts(),
+                    getNextPONumber(),
+                    getSystemActiveDate()
+                ])
                 setSuppliers(supps.filter((s: any) => s.status === 'active'))
                 setInventoryProducts(prods)
                 form.setValue("po_number", nextPoNum)
+                form.setValue("order_date", activeDate)
+                form.setValue("expected_delivery_date", activeDate)
             } finally {
                 setIsInitialLoading(false)
             }

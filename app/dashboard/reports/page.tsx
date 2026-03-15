@@ -48,6 +48,7 @@ import { Calendar } from "@/components/ui/calendar"
 import { Separator } from "@/components/ui/separator"
 import { cn, getTodayPKT } from "@/lib/utils"
 import { getSuppliers } from "@/app/actions/suppliers"
+import { getSystemActiveDate } from "@/app/actions/balance"
 
 // Report Components
 import { SupplierPerformanceReport } from "@/components/reports/supplier-tracking"
@@ -96,8 +97,26 @@ export default function ReportsPage() {
     const [products, setProducts] = useState<any[]>([])
     const [selectedItem, setSelectedItem] = useState<any>(null)
     const [isDetailOpen, setIsDetailOpen] = useState(false)
+    const [baseDate, setBaseDate] = useState<Date>(new Date())
 
-    // Fetch suppliers & products for filter
+    // Fetch active date, suppliers & products
+    useEffect(() => {
+        const loadInitialData = async () => {
+            try {
+                const activeDateStr = await getSystemActiveDate()
+                const activeDate = new Date(activeDateStr + "T12:00:00")
+                setBaseDate(activeDate)
+                setFilters(prev => ({
+                    ...prev,
+                    dateRange: { from: activeDate, to: activeDate }
+                }))
+            } catch (err) {
+                console.error("Error setting active date: ", err)
+            }
+        }
+        loadInitialData()
+    }, [])
+
     useEffect(() => {
         const loadMetadata = async () => {
             try {
@@ -137,14 +156,14 @@ export default function ReportsPage() {
 
     // Handle Preset Date Ranges
     const handlePeriodChange = (value: string) => {
-        const today = new Date()
+        const today = baseDate
         let from = today
         let to = today
 
         switch (value) {
             case "daily":
-                from = startOfToday()
-                to = startOfToday()
+                from = today
+                to = today
                 break
             case "weekly":
                 from = startOfWeek(today)

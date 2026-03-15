@@ -15,6 +15,7 @@ import {
   ArrowDownRight,
   Clock,
   ExternalLink,
+  Database,
 } from "lucide-react"
 import Link from "next/link"
 import { BrandLoader } from "@/components/ui/brand-loader"
@@ -60,6 +61,7 @@ interface StockMovement {
 export default function InventoryPage() {
   const [products, setProducts] = useState<Product[]>([])
   const [movements, setMovements] = useState<StockMovement[]>([])
+  const [tanks, setTanks] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
   const supabase = createClient()
@@ -104,6 +106,15 @@ export default function InventoryPage() {
           }
         }))
         setMovements(mappedMovements)
+
+        // Fetch tanks
+        const { data: tankData, error: tankError } = await supabase
+          .from("tanks")
+          .select("*, products(name)")
+          .order("name")
+
+        if (tankError) throw tankError
+        setTanks(tankData || [])
       } catch (error) {
         console.error("Error fetching inventory data:", error)
       } finally {
@@ -117,16 +128,46 @@ export default function InventoryPage() {
   const fuelProducts = products.filter(p => p.product_type === "fuel")
   const oilProducts = products.filter(p => p.product_type === "oil_lubricant")
 
-  const totalStockValue = products.reduce((sum, p) => sum + (p.stock_value || 0), 0)
-  const lowStockAlerts = products.filter(p =>
-    p.product_type === "oil_lubricant"
-      ? p.current_stock <= p.minimum_stock_level
-      : p.tank_capacity && (p.current_stock / p.tank_capacity) < 0.2
-  )
+  const getTotalFuelStock = (product: Product) => {
+    const linkedTanks = tanks.filter(t => t.product_id === product.id)
+    if (linkedTanks.length > 0) {
+      return linkedTanks.reduce((sum, t) => sum + (t.current_level || 0), 0)
+    }
+    return product.current_stock || 0
+  }
+
+  const getTotalFuelCapacity = (product: Product) => {
+    const linkedTanks = tanks.filter(t => t.product_id === product.id)
+    if (linkedTanks.length > 0) {
+      return linkedTanks.reduce((sum, t) => sum + (t.capacity || 0), 0)
+    }
+    return product.tank_capacity || 0
+  }
+
+  const totalStockValue = products.reduce((sum, p) => {
+    if (p.product_type === "fuel") {
+      return sum + (getTotalFuelStock(p) * (p.weighted_avg_cost || 0))
+    }
+    return sum + (p.stock_value || 0)
+  }, 0)
+
+  const lowStockAlerts = products.filter(p => {
+    if (p.product_type === "oil_lubricant") {
+      return p.current_stock <= p.minimum_stock_level
+    } else {
+      const totalCapacity = getTotalFuelCapacity(p)
+      const totalStock = getTotalFuelStock(p)
+      return totalCapacity > 0 && (totalStock / totalCapacity) < 0.2
+    }
+  })
 
   const getStockStatus = (product: Product) => {
-    if (product.product_type === "fuel" && product.tank_capacity) {
-      const percentage = (product.current_stock / product.tank_capacity) * 100
+    if (product.product_type === "fuel") {
+      const totalCapacity = getTotalFuelCapacity(product)
+      const totalStock = getTotalFuelStock(product)
+      if (totalCapacity === 0) return { status: "good", label: "Good", color: "bg-primary" }
+
+      const percentage = (totalStock / totalCapacity) * 100
       if (percentage <= 10) return { status: "critical", label: "Critical", color: "bg-destructive" }
       if (percentage <= 20) return { status: "low", label: "Low", color: "bg-warning" }
       if (percentage <= 50) return { status: "medium", label: "Medium", color: "bg-accent" }
@@ -189,7 +230,7 @@ export default function InventoryPage() {
           <CardContent>
             <div className="text-2xl font-bold">{fuelProducts.length}</div>
             <p className="text-xs text-muted-foreground">
-              {fuelProducts.reduce((sum, p) => sum + p.current_stock, 0).toLocaleString()} liters total
+              {fuelProducts.reduce((sum, p) => sum + getTotalFuelStock(p), 0).toLocaleString()} liters total
             </p>
           </CardContent>
         </Card>
@@ -235,9 +276,21 @@ export default function InventoryPage() {
             <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
               {lowStockAlerts.map((product) => {
                 const stockStatus = getStockStatus(product)
-                const percentage = product.tank_capacity
-                  ? (product.current_stock / product.tank_capacity) * 100
-                  : (product.current_stock / product.minimum_stock_level) * 100
+                let percentage = 100
+                let currentText = ""
+                let capText = ""
+
+                if (product.product_type === "fuel") {
+                  const tCap = getTotalFuelCapacity(product)
+                  const tStock = getTotalFuelStock(product)
+                  percentage = tCap > 0 ? (tStock / tCap) * 100 : 0
+                  currentText = `Current: ${tStock.toLocaleString()}`
+                  capText = tCap > 0 ? `Capacity: ${tCap.toLocaleString()}` : ""
+                } else {
+                  percentage = product.minimum_stock_level > 0 ? (product.current_stock / product.minimum_stock_level) * 100 : 100
+                  currentText = `Current: ${product.current_stock.toLocaleString()}`
+                  capText = `Min: ${product.minimum_stock_level}`
+                }
 
                 return (
                   <div key={product.id} className="rounded-lg border bg-card p-4">
@@ -248,13 +301,8 @@ export default function InventoryPage() {
                     <div className="space-y-2">
                       <Progress value={Math.min(percentage, 100)} className="h-2" />
                       <div className="flex justify-between text-sm text-muted-foreground">
-                        <span>Current: {product.current_stock.toLocaleString()}</span>
-                        <span>
-                          {product.tank_capacity
-                            ? `Capacity: ${product.tank_capacity.toLocaleString()}`
-                            : `Min: ${product.minimum_stock_level}`
-                          }
-                        </span>
+                        <span>{currentText}</span>
+                        <span>{capText}</span>
                       </div>
                     </div>
                   </div>
@@ -270,7 +318,11 @@ export default function InventoryPage() {
         <TabsList>
           <TabsTrigger value="fuel" className="gap-2">
             <Fuel className="h-4 w-4" />
-            Fuel Stock
+            Fuel Stock (Total)
+          </TabsTrigger>
+          <TabsTrigger value="tanks" className="gap-2">
+            <Database className="h-4 w-4" />
+            Tank Overview
           </TabsTrigger>
           <TabsTrigger value="oils" className="gap-2">
             <Package className="h-4 w-4" />
@@ -282,21 +334,34 @@ export default function InventoryPage() {
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="fuel" className="space-y-4">
+        <TabsContent value="tanks" className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {fuelProducts.map((product) => {
-              const stockStatus = getStockStatus(product)
-              const percentage = product.tank_capacity
-                ? (product.current_stock / product.tank_capacity) * 100
-                : 100
+            {tanks.map((tank) => {
+              const capacity = tank.capacity || 0
+              const currentLevel = tank.current_level || 0
+              const dryLevel = tank.dry_level || 0
+              const productName = tank.products?.name || "Unassigned"
+              const percentage = capacity > 0 ? (currentLevel / capacity) * 100 : 0
+
+              let statusColor = "bg-primary"
+              let statusLabel = "Good"
+
+              if (percentage <= 10) {
+                statusColor = "bg-destructive"
+                statusLabel = "Critical"
+              } else if (percentage <= 25) {
+                statusColor = "bg-warning"
+                statusLabel = "Low"
+              }
 
               return (
-                <Card key={product.id}>
+                <Card key={tank.id}>
                   <CardHeader className="pb-2">
                     <div className="flex items-center justify-between">
-                      <CardTitle className="text-lg">{product.product_name}</CardTitle>
-                      <Badge className={stockStatus.color}>{stockStatus.label}</Badge>
+                      <CardTitle className="text-lg">{tank.name}</CardTitle>
+                      <Badge className={statusColor}>{statusLabel}</Badge>
                     </div>
+                    <CardDescription>Product: {productName}</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <div>
@@ -306,22 +371,101 @@ export default function InventoryPage() {
                       </div>
                       <Progress value={percentage} className="h-3" />
                     </div>
-                    <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div className="grid grid-cols-2 gap-4 text-sm mt-4">
                       <div>
-                        <p className="text-muted-foreground">Current Stock</p>
-                        <p className="font-semibold">{product.current_stock.toLocaleString()} L</p>
+                        <p className="text-muted-foreground">Current Volume</p>
+                        <p className="font-semibold">{currentLevel.toLocaleString()} L</p>
                       </div>
                       <div>
                         <p className="text-muted-foreground">Tank Capacity</p>
-                        <p className="font-semibold">{product.tank_capacity?.toLocaleString() || "-"} L</p>
+                        <p className="font-semibold">{capacity.toLocaleString()} L</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Dry Level (Min)</p>
+                        <p className="font-semibold text-destructive">{dryLevel.toLocaleString()} L</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )
+            })}
+            {tanks.length === 0 && (
+              <Card className="col-span-full">
+                <CardContent className="flex flex-col items-center justify-center py-12">
+                  <Database className="h-12 w-12 text-muted-foreground/50" />
+                  <p className="mt-2 text-sm text-muted-foreground">No tanks configured yet</p>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="fuel" className="space-y-4">
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {fuelProducts.map((product) => {
+              const linkedTanks = tanks.filter(t => t.product_id === product.id)
+
+              // Aggregate total capacity and level from connected tanks
+              const hasLinkedTanks = linkedTanks.length > 0
+              const totalCapacity = hasLinkedTanks
+                ? linkedTanks.reduce((sum, t) => sum + (t.capacity || 0), 0)
+                : product.tank_capacity || 0
+
+              const totalStock = hasLinkedTanks
+                ? linkedTanks.reduce((sum, t) => sum + (t.current_level || 0), 0)
+                : product.current_stock || 0
+
+              const percentage = totalCapacity > 0 ? (totalStock / totalCapacity) * 100 : 0
+
+              let statusLabel = "Good"
+              let statusColor = "bg-primary"
+              if (percentage <= 10) {
+                statusLabel = "Critical"
+                statusColor = "bg-destructive"
+              } else if (percentage <= 25) {
+                statusLabel = "Low"
+                statusColor = "bg-warning"
+              }
+
+              return (
+                <Card key={product.id}>
+                  <CardHeader className="pb-2">
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="text-lg">{product.product_name}</CardTitle>
+                      <Badge className={statusColor}>{statusLabel}</Badge>
+                    </div>
+                    {hasLinkedTanks && (
+                      <CardDescription>From {linkedTanks.length} connected tank{linkedTanks.length > 1 ? 's' : ''}</CardDescription>
+                    )}
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span className="text-muted-foreground">Total Tank Level</span>
+                        <span className="font-medium">{percentage.toFixed(1)}%</span>
+                      </div>
+                      <Progress value={percentage} className="h-3" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4 text-sm mt-4">
+                      <div>
+                        <p className="text-muted-foreground">Total Stock</p>
+                        <p className="font-semibold">{totalStock.toLocaleString()} L</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Total Capacity</p>
+                        <p className="font-semibold">{totalCapacity.toLocaleString() || "-"} L</p>
                       </div>
                       <div>
                         <p className="text-muted-foreground">Purchase Price</p>
                         <p className="font-semibold">Rs. {Number(product.weighted_avg_cost || 0).toFixed(2)}/L</p>
                       </div>
                       <div>
+                        <p className="text-muted-foreground">Sale Price</p>
+                        <p className="font-semibold">Rs. {Number((product as any).selling_price || 0).toFixed(2)}/L</p>
+                      </div>
+                      <div>
                         <p className="text-muted-foreground">Stock Value</p>
-                        <p className="font-semibold">Rs. {(product.stock_value || 0).toLocaleString()}</p>
+                        <p className="font-semibold">Rs. {(totalStock * (product.weighted_avg_cost || 0)).toLocaleString()}</p>
                       </div>
                     </div>
                   </CardContent>

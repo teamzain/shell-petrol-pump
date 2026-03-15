@@ -14,6 +14,7 @@ import {
 import { Bell, User, Settings, LogOut, ChevronDown } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { NotificationsPopover } from "./notifications-popover"
+import { getSystemActiveDate } from "@/app/actions/balance"
 
 type UserData = {
   full_name: string
@@ -46,16 +47,33 @@ export function DashboardHeader() {
 
     fetchUser()
 
-    // Set current date
-    const now = new Date()
-    setCurrentDate(
-      now.toLocaleDateString("en-US", {
-        weekday: "long",
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-      })
-    )
+    // Set current active date
+    const initializeDate = async () => {
+      try {
+        const activeDateStr = await getSystemActiveDate()
+        // Use noon to avoid timezone shift issues when formatting
+        const activeDate = new Date(activeDateStr + "T12:00:00")
+        setCurrentDate(
+          activeDate.toLocaleDateString("en-US", {
+            weekday: "long",
+            year: "numeric",
+            month: "long",
+            day: "numeric",
+          })
+        )
+      } catch {
+        const now = new Date()
+        setCurrentDate(
+          now.toLocaleDateString("en-US", {
+            weekday: "long",
+            year: "numeric",
+            month: "long",
+            day: "numeric",
+          })
+        )
+      }
+    }
+    initializeDate()
   }, [supabase])
 
   const handleLogout = async () => {
