@@ -54,6 +54,7 @@ import { getSystemActiveDate } from "@/app/actions/balance"
 import { SupplierPerformanceReport } from "@/components/reports/supplier-tracking"
 import { PurchaseHistoryReport } from "@/components/reports/purchase-history"
 import { ExpenseBreakdownReport } from "@/components/reports/expense-breakdown"
+import { ProfitLossReport } from "@/components/reports/profit-loss-report"
 
 import {
     Dialog,
@@ -89,7 +90,7 @@ export default function ReportsPage() {
 
     const supabase = createClient()
 
-    const [activeTab, setActiveTab] = useState("supplier-tracking")
+    const [activeTab, setActiveTab] = useState("profit-loss")
     const [reportData, setReportData] = useState<any>(null)
     const [isRefreshing, setIsRefreshing] = useState(false)
     const [isFiltersChanging, setIsFiltersChanging] = useState(false)
@@ -122,13 +123,13 @@ export default function ReportsPage() {
             try {
                 const [sData, pData] = await Promise.all([
                     getSuppliers(),
-                    supabase.from("products").select("id, name, product_type").order("name")
+                    supabase.from("products").select("id, name, type, status").eq("status", "active").order("name")
                 ])
                 setSuppliers(sData || [])
                 setProducts(pData.data?.map((p: any) => ({
                     id: p.id,
                     product_name: p.name,
-                    product_type: p.product_type
+                    product_type: p.type   // map 'type' -> 'product_type' for filter compatibility
                 })) || [])
             } catch (err) {
                 console.error("Error loading report metadata:", err)
@@ -396,6 +397,9 @@ export default function ReportsPage() {
                     <div className="relative">
                         <div className="flex items-center justify-between mb-4 overflow-x-auto pb-2 scrollbar-hide">
                             <TabsList className="bg-muted/50 p-1 h-12">
+                                <TabsTrigger value="profit-loss" className="px-6 data-[state=active]:bg-background data-[state=active]:shadow-sm">
+                                    <TrendingUp className="mr-2 h-4 w-4" /> Profit & Loss
+                                </TabsTrigger>
                                 <TabsTrigger value="supplier-tracking" className="px-6 data-[state=active]:bg-background data-[state=active]:shadow-sm">
                                     <Users className="mr-2 h-4 w-4" /> Suppliers
                                 </TabsTrigger>
@@ -419,6 +423,10 @@ export default function ReportsPage() {
                             </div>
                         )}
 
+
+                        <TabsContent value="profit-loss" className="animate-in fade-in-50 duration-500">
+                            <ProfitLossReport filters={filters} onDataLoaded={setReportData} />
+                        </TabsContent>
 
                         <TabsContent value="supplier-tracking" className="animate-in fade-in-50 duration-500">
                             <SupplierPerformanceReport filters={filters} onDetailClick={openDetail} onDataLoaded={setReportData} />

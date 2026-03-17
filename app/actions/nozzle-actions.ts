@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
 import { getTodayPKT } from "@/lib/utils"
 import { validateTransactionDate } from "./balance"
+import { calculateFifoCost } from "./fifo-cost"
 
 export type CardPayment = {
     card_type: 'shell_card' | 'bank_card' | 'other'
@@ -95,9 +96,47 @@ export async function recordNozzleReadings(readings: NozzleReadingUpdate[], date
                     .eq('sale_date', targetDate)
                     .single()
 
+                const existingQty = existingSale?.quantity || 0
+                const qtyToSubtract = quantitySold - existingQty
+
+                if (qtyToSubtract > product.current_stock) {
+                    throw new Error(`Cannot sell additional ${qtyToSubtract} L of ${product.name} (Nozzle ${nozzle.nozzle_number}). Only ${Number(product.current_stock)} L available in total stock.`);
+                }
+
+                // 2b. Fetch specific connected tank and check its stock
+                const { data: nozzleDispenser } = await supabase
+                    .from('nozzles')
+                    .select('dispenser_id')
+                    .eq('id', reading.nozzle_id)
+                    .single()
+
+                if (nozzleDispenser && nozzleDispenser.dispenser_id) {
+                    const { data: dispenser } = await supabase
+                        .from('dispensers')
+                        .select('tank_ids')
+                        .eq('id', nozzleDispenser.dispenser_id)
+                        .single()
+
+                    if (dispenser && dispenser.tank_ids && dispenser.tank_ids.length > 0) {
+                        const { data: matchingTanks } = await supabase
+                            .from('tanks')
+                            .select('id, name, current_level')
+                            .in('id', dispenser.tank_ids)
+                            .eq('product_id', product.id)
+                            .limit(1)
+
+                        if (matchingTanks && matchingTanks.length > 0) {
+                            const tank = matchingTanks[0]
+                            if (qtyToSubtract > tank.current_level) {
+                                throw new Error(`Insufficient stock in ${tank.name}. sale requires ${qtyToSubtract} L more, but tank only has ${tank.current_level} L remaining.`);
+                            }
+                        }
+                    }
+                }
+
                 const totalQty = quantitySold
                 const totalRevenue = totalQty * product.selling_price
-                const totalCogs = totalQty * product.purchase_price
+                const totalCogs = await calculateFifoCost(product.id, totalQty)
 
                 // 3. Upsert Daily Sale (Consolidated)
                 const { data: saleData, error: saleError } = await supabase.from('daily_sales').upsert([{
@@ -122,8 +161,7 @@ export async function recordNozzleReadings(readings: NozzleReadingUpdate[], date
 
 
                 // 4. Update Stock (Bidirectional Adjustment)
-                const qtyToSubtract = existingSale ? (totalQty - existingSale.quantity) : totalQty
-
+                // Use the qtyToSubtract calculated above for validation as it's the same logic
                 if (qtyToSubtract !== 0) {
                     const rpcName = qtyToSubtract > 0 ? 'decrement_product_stock' : 'increment_product_stock'
                     const { error: stockError } = await supabase.rpc(rpcName, {

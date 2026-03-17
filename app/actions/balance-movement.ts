@@ -29,9 +29,9 @@ export async function getBalanceMovement(filters?: {
                     id,
                     name
                 )
-            )
+            ),
+            bank_accounts ( account_name )
         `)
-
     if (filters?.date_from) companyQuery = companyQuery.gte("transaction_date", filters.date_from)
     if (filters?.date_to) companyQuery = companyQuery.lte("transaction_date", filters.date_to)
     if (filters?.transaction_type && filters.transaction_type !== 'all') companyQuery = companyQuery.eq("transaction_type", filters.transaction_type)
@@ -47,9 +47,10 @@ export async function getBalanceMovement(filters?: {
         let balanceQuery = supabase
             .from("balance_transactions")
             .select(`
-                *,
-                bank_accounts ( account_name )
-            `)
+            *,
+            bank_accounts:bank_account_id ( account_name ),
+            to_bank_accounts:to_bank_account_id ( account_name )
+        `)
             .not("transaction_type", "in", "(transfer_to_supplier,supplier_to_bank)")
 
         if (filters?.date_from) balanceQuery = balanceQuery.gte("transaction_date", filters.date_from)
@@ -75,18 +76,35 @@ export async function getBalanceMovement(filters?: {
 
     // 3. Unify and Transform
     const unified = [
-        ...(companyTx || []).map(tx => ({
-            ...tx,
-            source_table: 'company_account_transactions',
-            entity_name: tx.company_accounts?.suppliers?.name || 'Supplier',
-            display_type: tx.transaction_type // 'credit' or 'debit'
-        })),
-        ...balanceTx.map(tx => ({
-            ...tx,
-            source_table: 'balance_transactions',
-            entity_name: tx.bank_accounts?.account_name || 'System / Cash',
-            display_type: tx.transaction_type // 'cash_to_bank', 'add_cash' etc.
-        }))
+        ...(companyTx || []).map(tx => {
+            const supplierName = tx.company_accounts?.suppliers?.name || 'Supplier';
+            const bankName = tx.bank_accounts?.account_name;
+            const entityName = bankName ? `${bankName} ➜ ${supplierName}` : supplierName;
+
+            return {
+                ...tx,
+                source_table: 'company_account_transactions',
+                entity_name: entityName,
+                display_type: tx.transaction_type // 'credit' or 'debit'
+            };
+        }),
+        ...balanceTx.map(tx => {
+            let entityName = tx.bank_accounts?.account_name || 'System / Cash';
+            if (tx.transaction_type === 'bank_to_bank' && tx.to_bank_accounts?.account_name) {
+                entityName = `${tx.bank_accounts?.account_name || 'N/A'} ➜ ${tx.to_bank_accounts.account_name}`;
+            } else if (tx.transaction_type === 'cash_to_bank' && tx.to_bank_accounts?.account_name) {
+                entityName = `Cash ➜ ${tx.to_bank_accounts.account_name}`;
+            } else if (tx.transaction_type === 'bank_to_cash' && tx.bank_accounts?.account_name) {
+                entityName = `${tx.bank_accounts.account_name} ➜ Cash`;
+            }
+
+            return {
+                ...tx,
+                source_table: 'balance_transactions',
+                entity_name: entityName,
+                display_type: tx.transaction_type // 'cash_to_bank', 'add_cash' etc.
+            };
+        })
     ]
 
     // 4. Sort and Paginate in JS (since we're merging)

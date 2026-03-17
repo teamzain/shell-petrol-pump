@@ -256,7 +256,7 @@ export default function BalanceMovementPage() {
                                                     )}
                                                 </TableCell>
                                                 <TableCell className="font-bold text-xs">
-                                                    {tx.company_accounts?.suppliers?.name || "General"}
+                                                    {tx.entity_name || "General"}
                                                 </TableCell>
                                                 <TableCell className="text-xs max-w-xs truncate font-semibold">
                                                     {displayDescription}

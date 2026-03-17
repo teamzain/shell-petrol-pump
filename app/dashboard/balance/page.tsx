@@ -174,12 +174,13 @@ export default function BalanceManagementPage() {
 
   // Transaction State
   const [transactionDialogOpen, setTransactionDialogOpen] = useState(false)
-  const [transactionType, setTransactionType] = useState<"cash_to_bank" | "bank_to_cash" | "add_cash" | "add_bank" | "transfer_to_supplier" | "supplier_to_bank">("cash_to_bank")
+  const [transactionType, setTransactionType] = useState<"cash_to_bank" | "bank_to_cash" | "add_cash" | "add_bank" | "transfer_to_supplier" | "supplier_to_bank" | "bank_to_bank">("cash_to_bank")
   const [transactionData, setTransactionData] = useState({
     amount: "",
     description: "",
     bankId: "",
     selectedBankTarget: "",
+    toBankAccountId: "", // Added for bank_to_bank
     supplierId: "",
     selectedSupplierTarget: "",
     taxDeduction: "",
@@ -385,6 +386,7 @@ export default function BalanceManagementPage() {
         transaction_type: transactionType as any,
         amount: Number(transactionData.amount),
         bank_account_id: bankAccountId,
+        to_bank_account_id: transactionData.toBankAccountId, // Explicitly pass destination for bank_to_bank
         bank_card_id: bankCardId,
         supplier_id: supplierId,
         supplier_card_id: supplierCardId,
@@ -403,6 +405,7 @@ export default function BalanceManagementPage() {
         description: "",
         bankId: "",
         selectedBankTarget: "",
+        toBankAccountId: "",
         supplierId: "",
         selectedSupplierTarget: "",
         taxDeduction: "",
@@ -1446,6 +1449,7 @@ export default function BalanceManagementPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="cash_to_bank">🏦 Cash to Bank Deposit</SelectItem>
+                  <SelectItem value="bank_to_bank">🔄 Bank to Bank Transfer</SelectItem>
                   <SelectItem value="bank_to_cash">🏧 Bank to Cash Withdrawal</SelectItem>
                   <SelectItem value="add_cash">💵 Add Manual Cash</SelectItem>
                   <SelectItem value="add_bank">🏦 Add Manual Bank Bal</SelectItem>
@@ -1455,9 +1459,9 @@ export default function BalanceManagementPage() {
               </Select>
             </div>
 
-            {(transactionType === "cash_to_bank" || transactionType === "bank_to_cash" || transactionType === "add_bank" || transactionType === "transfer_to_supplier" || transactionType === "supplier_to_bank") && (
+            {(transactionType === "cash_to_bank" || transactionType === "bank_to_cash" || transactionType === "add_bank" || transactionType === "transfer_to_supplier" || transactionType === "supplier_to_bank" || transactionType === "bank_to_bank") && (
               <div className="space-y-2 animate-in slide-in-from-top-2">
-                <Label>Select Bank / Card {transactionType === "transfer_to_supplier" && "(Optional)"}</Label>
+                <Label>{transactionType === "bank_to_bank" ? "From Bank / Card" : `Select Bank / Card ${transactionType === "transfer_to_supplier" ? "(Optional)" : ""}`}</Label>
                 <Select
                   value={transactionData.selectedBankTarget}
                   onValueChange={(v: string) => setTransactionData(prev => ({ ...prev, selectedBankTarget: v, bankId: '' }))}
@@ -1483,6 +1487,32 @@ export default function BalanceManagementPage() {
                           <SelectItem key={card.id} value={`card_${card.id}`}>
                             {card.card_name} — {formatCurrency(card.current_balance)}
                             {card.tax_percentage > 0 && ` (Tax: ${card.tax_percentage}%)`}
+                          </SelectItem>
+                        ))}
+                      </>
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {transactionType === "bank_to_bank" && (
+              <div className="space-y-2 animate-in slide-in-from-top-2">
+                <Label>To Bank Account</Label>
+                <Select
+                  value={transactionData.toBankAccountId}
+                  onValueChange={(v: string) => setTransactionData(prev => ({ ...prev, toBankAccountId: v }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Choose destination bank..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {bankAccounts.length > 0 && (
+                      <>
+                        <div className="px-2 py-1 text-xs font-semibold text-muted-foreground">🏦 Bank Accounts</div>
+                        {bankAccounts.filter(b => `acc_${b.id}` !== transactionData.selectedBankTarget).map(bank => (
+                          <SelectItem key={bank.id} value={bank.id}>
+                            {bank.account_name} — {formatCurrency(bank.current_balance)}
                           </SelectItem>
                         ))}
                       </>

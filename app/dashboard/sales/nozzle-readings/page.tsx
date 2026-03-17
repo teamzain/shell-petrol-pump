@@ -190,7 +190,8 @@ export default function NozzleReadingsPage() {
                 .from("nozzles")
                 .select(`
                     *,
-                    products(name, selling_price)
+                    products(name, selling_price, current_stock),
+                    dispensers(id, name, tank_ids)
                 `)
                 .eq("status", "active")
                 .order("nozzle_number")
@@ -201,6 +202,11 @@ export default function NozzleReadingsPage() {
                     .from('daily_sales')
                     .select('*')
                     .eq('sale_date', workingDate)
+
+                // 2b. Fetch all tanks to match with dispensers
+                const { data: allTanks } = await supabase
+                    .from('tanks')
+                    .select('id, name, current_level, product_id')
 
                 const processedNozzles = await Promise.all(nozzleData.map(async (n) => {
                     const existingSale = existingSales?.find(s => s.nozzle_id === n.id)
@@ -225,10 +231,28 @@ export default function NozzleReadingsPage() {
                         openingReading = lastReadingRecord ? lastReadingRecord.closing_reading : n.last_reading
                     }
 
+                    // Find the specific tank for this nozzle
+                    const dispenser = n.dispensers
+                    let tankData = null
+                    if (dispenser && dispenser.tank_ids && dispenser.tank_ids.length > 0) {
+                        const matchingTank = allTanks?.find(t => 
+                            dispenser.tank_ids.includes(t.id) && t.product_id === n.product_id
+                        )
+                        if (matchingTank) {
+                            tankData = {
+                                id: matchingTank.id,
+                                name: matchingTank.name,
+                                current_level: matchingTank.current_level
+                            }
+                        }
+                    }
+
                     return {
                         ...n,
                         opening_reading: openingReading,
-                        existing_closing: existingSale ? existingSale.closing_reading : null
+                        existing_closing: existingSale ? existingSale.closing_reading : null,
+                        existing_qty: existingSale ? existingSale.quantity : 0,
+                        tank: tankData
                     }
                 }))
 
@@ -288,6 +312,24 @@ export default function NozzleReadingsPage() {
             const nozzle = nozzles.find(n => n.id === r.nozzle_id)
             if (isNaN(r.meter_reading) || r.meter_reading < (nozzle?.opening_reading || 0)) {
                 toast.error(`Invalid reading for ${nozzle?.nozzle_number}. Must be >= ${nozzle?.opening_reading}`)
+                return
+            }
+            
+            const qtySold = r.meter_reading - (nozzle?.opening_reading || 0)
+            const existingQty = nozzle?.existing_qty || 0
+            const incrementalQty = qtySold - existingQty
+            const currentStock = nozzle?.products?.current_stock || 0
+            
+            // Product stock check
+            if (incrementalQty > currentStock) {
+                toast.error(`Cannot sell additional ${incrementalQty.toLocaleString()} L for ${nozzle?.nozzle_number} (Total required: ${qtySold.toLocaleString()} L). Only ${currentStock.toLocaleString()} L left in total stock.`)
+                return
+            }
+
+            // Tank specific stock check
+            const tankStock = nozzle?.tank?.current_level || 0
+            if (incrementalQty > tankStock) {
+                toast.error(`Insufficient stock in ${nozzle?.tank?.name || 'tank'}. Sale requires ${incrementalQty.toLocaleString()} L more, but tank only has ${tankStock.toLocaleString()} L remaining.`)
                 return
             }
         }

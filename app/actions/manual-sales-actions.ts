@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
 import { getTodayPKT } from "@/lib/utils"
 import { validateTransactionDate } from "./balance"
+import { calculateFifoCost } from "./fifo-cost"
 
 export type ManualSaleData = {
     product_id: string
@@ -39,7 +40,7 @@ export async function recordManualSale(data: ManualSaleData) {
     }
 
     const totalAmount = data.quantity * data.unit_price
-    const totalCost = data.quantity * product.purchase_price
+    const totalCost = await calculateFifoCost(data.product_id, data.quantity)
     const profit = totalAmount - totalCost
 
     // 2. Create Sale Record

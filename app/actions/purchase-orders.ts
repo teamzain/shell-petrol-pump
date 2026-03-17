@@ -196,8 +196,8 @@ export async function getPurchaseOrders(filters?: {
     }
     if (filters?.supplier_id && filters.supplier_id !== 'all') query = query.eq("supplier_id", filters.supplier_id)
     if (filters?.product_type && filters.product_type !== 'all') query = query.eq("product_type", filters.product_type)
-    if (filters?.date_from) query = query.gte("expected_delivery_date", filters.date_from)
-    if (filters?.date_to) query = query.lte("expected_delivery_date", filters.date_to)
+    if (filters?.date_from) query = query.gte("created_at", filters.date_from)
+    if (filters?.date_to) query = query.lte("created_at", filters.date_to)
 
     const { data: pos, error } = await query
     if (error) throw error
@@ -429,8 +429,8 @@ export async function getPurchaseSummary(filters?: { date_from?: string; date_to
         .select("items, status, ordered_quantity, delivered_quantity, rate_per_liter", { count: 'exact' })
         .in("status", ["pending", "partially_delivered"])
 
-    if (filters?.date_from) poQuery = poQuery.gte("expected_delivery_date", filters.date_from)
-    if (filters?.date_to) poQuery = poQuery.lte("expected_delivery_date", filters.date_to)
+    if (filters?.date_from) poQuery = poQuery.gte("created_at", filters.date_from)
+    if (filters?.date_to) poQuery = poQuery.lte("created_at", filters.date_to)
 
     const { data: committedData, count: pendingCount } = await poQuery
 

@@ -50,6 +50,16 @@ const navItems: NavItem[] = [
       { title: "Oils & Lubricants", href: "/dashboard/products/oils" },
     ],
   },
+  {
+    title: "Config",
+    href: "/dashboard/settings/tanks",
+    icon: Settings,
+    children: [
+      { title: "Tank Config", href: "/dashboard/settings/tanks" },
+      { title: "Dispenser Config", href: "/dashboard/settings/dispensers" },
+      { title: "Nozzle Config", href: "/dashboard/settings/nozzles" },
+    ],
+  },
   { title: "Suppliers", href: "/dashboard/suppliers", icon: Truck },
   { title: "Purchases", href: "/dashboard/purchases", icon: ShoppingCart },
   {
@@ -90,9 +100,6 @@ const navItems: NavItem[] = [
     icon: Settings,
     children: [
       { title: "Profile", href: "/dashboard/settings" },
-      { title: "Nozzle Config", href: "/dashboard/settings/nozzles" },
-      { title: "Dispenser Config", href: "/dashboard/settings/dispensers" },
-      { title: "Tank Config", href: "/dashboard/settings/tanks" },
       { title: "Lubricant Config", href: "/dashboard/settings/lubricants" },
       { title: "Payment Methods", href: "/dashboard/settings/payment-methods" },
     ],

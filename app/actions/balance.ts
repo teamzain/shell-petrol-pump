@@ -400,9 +400,10 @@ export async function validateTransactionDate(transactionDate: string) {
 }
 
 export async function recordBalanceTransaction(data: {
-    transaction_type: 'cash_to_bank' | 'bank_to_cash' | 'add_cash' | 'add_bank' | 'transfer_to_supplier' | 'supplier_to_bank';
+    transaction_type: 'cash_to_bank' | 'bank_to_cash' | 'add_cash' | 'add_bank' | 'transfer_to_supplier' | 'supplier_to_bank' | 'bank_to_bank';
     amount: number;
     bank_account_id?: string;
+    to_bank_account_id?: string;
     bank_card_id?: string;
     supplier_id?: string;
     supplier_card_id?: string;
@@ -415,6 +416,13 @@ export async function recordBalanceTransaction(data: {
     if (!user) throw new Error("Unauthorized")
 
     const targetDate = data.date || getTodayPKT()
+    
+    // Sanitize UUIDs to avoid Postgres syntax errors for empty strings
+    const bankAccountId = data.bank_account_id || undefined
+    const toBankAccountId = data.to_bank_account_id || undefined
+    const bankCardId = data.bank_card_id || undefined
+    const supplierId = data.supplier_id || undefined
+    const supplierCardId = data.supplier_card_id || undefined
 
     // --- DATE VALIDATION ---
     await validateTransactionDate(targetDate)
@@ -440,10 +448,11 @@ export async function recordBalanceTransaction(data: {
         description: data.description,
         transaction_date: targetDate,
         created_by: user.id,
-        bank_account_id: data.bank_account_id,
-        bank_card_id: data.bank_card_id,
-        supplier_id: data.supplier_id,
-        supplier_card_id: data.supplier_card_id,
+        bank_account_id: data.bank_account_id || undefined,
+        to_bank_account_id: data.to_bank_account_id || undefined,
+        bank_card_id: data.bank_card_id || undefined,
+        supplier_id: data.supplier_id || undefined,
+        supplier_card_id: data.supplier_card_id || undefined,
         is_opening: data.isOpeningBalance || false
     }
 
@@ -456,7 +465,7 @@ export async function recordBalanceTransaction(data: {
     let netEffect = 0
     if (data.transaction_type === 'add_cash' || data.transaction_type === 'add_bank') {
         netEffect = data.amount
-    } else if (data.transaction_type === 'cash_to_bank' || data.transaction_type === 'bank_to_cash') {
+    } else if (data.transaction_type === 'cash_to_bank' || data.transaction_type === 'bank_to_cash' || data.transaction_type === 'bank_to_bank') {
         netEffect = 0 // Net zero for global balance
     } else if (data.transaction_type === 'transfer_to_supplier' || data.transaction_type === 'supplier_to_bank') {
         // These will be tracked via company_account_transactions too.
@@ -478,23 +487,23 @@ export async function recordBalanceTransaction(data: {
     if (txErr) throw txErr
 
     // 2. Resolve target bank account if card is used
-    let effectiveBankId = data.bank_account_id
-    if (data.bank_card_id && !effectiveBankId) {
+    let effectiveBankId = bankAccountId
+    if (bankCardId && !effectiveBankId) {
         const { data: card } = await supabase
             .from("bank_cards")
             .select("bank_account_id")
-            .eq("id", data.bank_card_id)
+            .eq("id", bankCardId)
             .single()
         if (card) effectiveBankId = card.bank_account_id
     }
 
     // 2b. Resolve target supplier if supplier card is used
-    let effectiveSupplierId = data.supplier_id
-    if (data.supplier_card_id && !effectiveSupplierId) {
+    let effectiveSupplierId = supplierId
+    if (supplierCardId && !effectiveSupplierId) {
         const { data: card } = await supabase
             .from("supplier_cards")
             .select("supplier_id")
-            .eq("id", data.supplier_card_id)
+            .eq("id", supplierCardId)
             .single()
         if (card) effectiveSupplierId = card.supplier_id
     }
@@ -522,13 +531,19 @@ export async function recordBalanceTransaction(data: {
         }
     } else if (data.transaction_type === 'supplier_to_bank') {
         bankAdj = data.amount
+    } else if (data.transaction_type === 'bank_to_bank') {
+        // Internal bank transfer
+        // Note: we update two different bank accounts below
+        bankAdj = 0 // The net change to "Total Bank" as tracked in daily_accounts_status is zero
     }
 
     // 4. Update individual bank account balance if applicable
-    if (effectiveBankId && bankAdj !== 0) {
+    if (effectiveBankId && (bankAdj !== 0 || data.transaction_type === 'bank_to_bank')) {
+        const sourceAdj = data.transaction_type === 'bank_to_bank' ? -data.amount : bankAdj
+        
         const { error: bankUpErr } = await supabase.rpc("adjust_bank_balance", {
             p_bank_id: effectiveBankId,
-            p_amount: bankAdj
+            p_amount: sourceAdj
         })
         if (bankUpErr) {
             const { data: bank } = await supabase
@@ -538,9 +553,30 @@ export async function recordBalanceTransaction(data: {
                 .single()
             if (bank) {
                 await supabase.from("bank_accounts").update({
-                    current_balance: Number(bank.current_balance || 0) + bankAdj,
+                    current_balance: Number(bank.current_balance || 0) + sourceAdj,
                     updated_at: new Date().toISOString()
                 }).eq("id", effectiveBankId)
+            }
+        }
+    }
+
+    // 4b. Update destination bank account for bank_to_bank
+    if (data.transaction_type === 'bank_to_bank' && toBankAccountId) {
+        const { error: bankToErr } = await supabase.rpc("adjust_bank_balance", {
+            p_bank_id: toBankAccountId,
+            p_amount: data.amount
+        })
+        if (bankToErr) {
+            const { data: bank } = await supabase
+                .from("bank_accounts")
+                .select("current_balance")
+                .eq("id", toBankAccountId)
+                .single()
+            if (bank) {
+                await supabase.from("bank_accounts").update({
+                    current_balance: Number(bank.current_balance || 0) + data.amount,
+                    updated_at: new Date().toISOString()
+                }).eq("id", toBankAccountId)
             }
         }
     }
@@ -607,6 +643,7 @@ export async function recordBalanceTransaction(data: {
                 transaction_type: txType,
                 amount: data.amount,
                 transaction_date: targetDate,
+                bank_account_id: effectiveBankId, // Track which bank was used
                 note: data.description || `Transfer ${data.transaction_type === 'transfer_to_supplier' ? 'to' : 'from'} supplier`
             })
         }

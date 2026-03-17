@@ -12,10 +12,13 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   Plus,
+  CreditCard,
+  Users,
 } from "lucide-react"
 import Link from "next/link"
 import { HoldAlerts } from "@/components/dashboard/hold-alerts"
 import { BrandLoader } from "@/components/ui/brand-loader"
+import { getDashboardStats } from "@/app/actions/dashboard-actions"
 
 type DashboardStats = {
   totalProducts: number
@@ -24,6 +27,9 @@ type DashboardStats = {
   todayExpenses: number
   cashBalance: number
   bankBalance: number
+  lowStockDetails: { name: string; stock: number }[]
+  pendingPayments: number
+  totalSupplierBalance: number
 }
 
 type RecentActivity = {
@@ -42,11 +48,26 @@ export default function DashboardPage() {
     todayExpenses: 0,
     cashBalance: 0,
     bankBalance: 0,
+    lowStockDetails: [],
+    pendingPayments: 0,
+    totalSupplierBalance: 0,
   })
   const [isLoading, setIsLoading] = useState(false)
 
   useEffect(() => {
-    // Backend logic removed for system recreation
+    const fetchStats = async () => {
+      setIsLoading(true)
+      try {
+        const data = await getDashboardStats()
+        setStats(data)
+      } catch (error) {
+        console.error("Failed to fetch dashboard stats:", error)
+      } finally {
+        setIsLoading(false)
+      }
+    }
+
+    fetchStats()
   }, [])
 
   const statCards = [
@@ -84,6 +105,23 @@ export default function DashboardPage() {
       color: "text-chart-4",
       bgColor: "bg-chart-4/10",
     },
+    {
+      title: "Pending Payments",
+      value: `Rs. ${stats.pendingPayments.toLocaleString("en-PK")}`,
+      icon: CreditCard,
+      description: "Total card payments on hold",
+      alert: stats.pendingPayments > 0,
+      color: "text-orange-500",
+      bgColor: "bg-orange-500/10",
+    },
+    {
+      title: "Supplier Balance",
+      value: `Rs. ${stats.totalSupplierBalance.toLocaleString("en-PK")}`,
+      icon: Users,
+      description: "Total payable to suppliers",
+      color: "text-rose-500",
+      bgColor: "bg-rose-500/10",
+    },
   ]
 
   if (isLoading) {
@@ -117,9 +155,9 @@ export default function DashboardPage() {
         <HoldAlerts onlyToday={true} />
       </div>
 
-      {/* Stats Grid */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        {statCards.map((stat) => (
+      {/* Stats Grid - Row 1 */}
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        {statCards.slice(0,3).map((stat) => (
           <Card key={stat.title}>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -142,37 +180,33 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      {/* Quick Actions & Alerts */}
-      <div className="grid gap-6 md:grid-cols-2">
-        {/* Quick Actions */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Quick Actions</CardTitle>
-            <CardDescription>Frequently used operations</CardDescription>
-          </CardHeader>
-          <CardContent className="grid grid-cols-2 gap-3">
-            <Link href="/dashboard/purchases/new">
-              <Button variant="outline" className="w-full justify-start bg-transparent">
-                <Plus className="w-4 h-4 mr-2" />
-                Add Purchase
-              </Button>
-            </Link>
-            <Link href="/dashboard/expenses/new">
-              <Button variant="outline" className="w-full justify-start bg-transparent">
-                <ArrowDownRight className="w-4 h-4 mr-2" />
-                Add Expense
-              </Button>
-            </Link>
-            <Link href="/dashboard/products/fuel">
-              <Button variant="outline" className="w-full justify-start bg-transparent">
-                <Fuel className="w-4 h-4 mr-2" />
-                Manage Products
-              </Button>
-            </Link>
-          </CardContent>
-        </Card>
+      {/* Stats Grid - Row 2 */}
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        {statCards.slice(3).map((stat) => (
+          <Card key={stat.title}>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                {stat.title}
+              </CardTitle>
+              <div className={`p-2 rounded-lg ${stat.bgColor}`}>
+                <stat.icon className={`w-4 h-4 ${stat.color}`} />
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stat.value}</div>
+              <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
+                {stat.alert && (
+                  <AlertTriangle className="w-3 h-3 text-destructive" />
+                )}
+                {stat.description}
+              </p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
 
-        {/* Low Stock Alert */}
+      {/* Low Stock Alert */}
+      <div className="grid gap-6 md:grid-cols-1">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -188,10 +222,20 @@ export default function DashboardPage() {
                 <p>All products are well stocked</p>
               </div>
             ) : (
-              <div className="space-y-3">
-                <p className="text-sm text-muted-foreground">
-                  {stats.lowStockProducts} product(s) have low stock levels
-                </p>
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  {stats.lowStockDetails.map((product, index) => (
+                    <div key={index} className="flex items-center justify-between p-2 rounded-md bg-destructive/5 border border-destructive/10">
+                      <div className="flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 text-destructive" />
+                        <span className="text-sm font-medium">{product.name}</span>
+                      </div>
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-destructive/10 text-destructive">
+                        Stock: {product.stock}
+                      </span>
+                    </div>
+                  ))}
+                </div>
                 <Link href="/dashboard/inventory">
                   <Button variant="outline" className="w-full bg-transparent">
                     View Inventory
@@ -204,66 +248,7 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      {/* Getting Started Guide - Shows if no products */}
-      {stats.totalProducts === 0 && (
-        <Card className="border-primary/20 bg-primary/5">
-          <CardHeader>
-            <CardTitle>Getting Started</CardTitle>
-            <CardDescription>
-              Complete these steps to start using your petrol pump management system
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              <div className="flex items-start gap-3">
-                <div className="w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-sm font-medium">
-                  1
-                </div>
-                <div>
-                  <p className="font-medium">Add Suppliers</p>
-                  <p className="text-sm text-muted-foreground">
-                    Add your fuel and product suppliers
-                  </p>
-                  <Link href="/dashboard/suppliers">
-                    <Button variant="link" className="px-0 h-auto">
-                      Add Suppliers
-                      <ArrowUpRight className="w-3 h-3 ml-1" />
-                    </Button>
-                  </Link>
-                </div>
-              </div>
-              <div className="flex items-start gap-3">
-                <div className="w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-sm font-medium">
-                  2
-                </div>
-                <div>
-                  <p className="font-medium">Add Fuel Products</p>
-                  <p className="text-sm text-muted-foreground">
-                    Configure your fuel products with tank capacity and pricing
-                  </p>
-                  <Link href="/dashboard/products/fuel">
-                    <Button variant="link" className="px-0 h-auto">
-                      Add Fuel Products
-                      <ArrowUpRight className="w-3 h-3 ml-1" />
-                    </Button>
-                  </Link>
-                </div>
-              </div>
-              <div className="flex items-start gap-3">
-                <div className="w-6 h-6 rounded-full bg-muted text-muted-foreground flex items-center justify-center text-sm font-medium">
-                  3
-                </div>
-                <div>
-                  <p className="font-medium">Record First Purchase</p>
-                  <p className="text-sm text-muted-foreground">
-                    Add your initial fuel purchase to start inventory tracking
-                  </p>
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+
     </div>
   )
 }

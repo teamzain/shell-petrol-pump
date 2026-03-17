@@ -124,6 +124,7 @@ export async function addLedgerTransaction(payload: {
     transaction_type: 'credit' | 'debit',
     amount: number,
     transaction_date: string,
+    bank_account_id?: string, // Added to track source for payments
     reference_number?: string,
     note?: string
 }) {
@@ -170,6 +171,7 @@ export async function addLedgerTransaction(payload: {
         : 'manual_transfer'
 
     // Start Transaction
+    const bankAccountId = payload.bank_account_id || undefined
 
     const { error: txError } = await supabase
         .from("company_account_transactions")
@@ -178,6 +180,7 @@ export async function addLedgerTransaction(payload: {
             transaction_type: payload.transaction_type,
             transaction_source: txSource,
             amount: payload.amount,
+            bank_account_id: bankAccountId,
             balance_before: Number(account.current_balance),
             balance_after: newBalance,
             transaction_date: payload.transaction_date,
@@ -214,6 +217,7 @@ export async function getSupplierLedger(companyAccountId: string, filters?: { da
         .select(`
             *,
             transaction_source,
+            bank_accounts ( account_name ),
             deliveries (
                 delivery_number,
                 company_invoice_number,
@@ -374,6 +378,7 @@ export async function getTransactionDetail(transactionId: string) {
         .from("company_account_transactions")
         .select(`
             *,
+            bank_accounts ( account_name ),
             company_accounts!inner(
                 id,
                 current_balance,
