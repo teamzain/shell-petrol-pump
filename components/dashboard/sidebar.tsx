@@ -93,15 +93,12 @@ const navItems: NavItem[] = [
   },
   { title: "Expenses", href: "/dashboard/expenses", icon: Calculator },
   { title: "Reports", href: "/dashboard/reports", icon: BarChart3 },
-  { title: "Users", href: "/dashboard/users", icon: Users },
   {
     title: "Settings",
     href: "/dashboard/settings",
     icon: Settings,
     children: [
       { title: "Profile", href: "/dashboard/settings" },
-      { title: "Lubricant Config", href: "/dashboard/settings/lubricants" },
-      { title: "Payment Methods", href: "/dashboard/settings/payment-methods" },
     ],
   },
 ]

@@ -128,6 +128,7 @@ export function PurchaseDialog({ open, onOpenChange, onSuccess }: PurchaseDialog
   })
 
   const [successData, setSuccessData] = useState<any>(null)
+  const [systemActiveDate, setSystemActiveDate] = useState("")
   const supabase = createClient()
 
   useEffect(() => {
@@ -141,6 +142,7 @@ export function PurchaseDialog({ open, onOpenChange, onSuccess }: PurchaseDialog
 
   const resetForm = async () => {
     const activeDate = await getSystemActiveDate()
+    setSystemActiveDate(activeDate)
     setStep("form")
     setError("")
     setCart([])
@@ -328,7 +330,7 @@ export function PurchaseDialog({ open, onOpenChange, onSuccess }: PurchaseDialog
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 <div className="space-y-1">
                   <Label className="text-[10px] uppercase font-bold text-muted-foreground ml-1">Expected Delivery Date</Label>
-                  <Input type="date" className="h-9 rounded-lg" value={formData.purchase_date} onChange={(e) => setFormData({ ...formData, purchase_date: e.target.value })} />
+                  <Input type="date" className="h-9 rounded-lg" value={formData.purchase_date} onChange={(e) => setFormData({ ...formData, purchase_date: e.target.value })} min={systemActiveDate} />
                 </div>
                 <div className="space-y-1">
                   <Label className="text-[10px] uppercase font-bold text-muted-foreground ml-1">PO #</Label>

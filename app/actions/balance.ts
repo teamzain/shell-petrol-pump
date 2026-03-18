@@ -241,19 +241,42 @@ export async function addBankAccount(data: {
     bank_name?: string;
     opening_balance: number;
     account_type: 'bank' | 'supplier';
-}) {
+}, date?: string) {
     const supabase = await createClient()
 
+    // 1. Create the account with 0 balance first
     const { data: account, error } = await supabase
         .from("bank_accounts")
         .insert({
             ...data,
-            current_balance: data.opening_balance
+            current_balance: 0
         })
         .select()
         .single()
 
     if (error) throw error
+
+    // 2. If there's an opening balance, record it as a transaction
+    // This ensures it appears in the ledger and correctly updates the balance via the existing RPC
+    if (data.opening_balance > 0) {
+        try {
+            await recordBalanceTransaction({
+                transaction_type: 'add_bank',
+                amount: data.opening_balance,
+                bank_account_id: account.id,
+                description: `Initial Deposit for ${data.account_name}`,
+                isOpeningBalance: false, // Record as a mid-day movement
+                date: date
+            })
+        } catch (txErr) {
+            console.error("Failed to record initialization transaction:", txErr)
+            // We still have the account, but the ledger entry is missing
+            // We could attempt to manually update the balance here as a fallback
+            await supabase.from("bank_accounts").update({
+                current_balance: data.opening_balance
+            }).eq("id", account.id)
+        }
+    }
 
     revalidatePath("/dashboard/balance")
     return { success: true, data: account }
@@ -799,7 +822,7 @@ export async function updateBankAccount(id: string, data: {
     bank_name?: string;
     opening_balance?: number;
     account_type?: 'bank' | 'supplier';
-}) {
+}, date?: string) {
     const supabase = await createClient()
 
     const updatePayload: any = { ...data }

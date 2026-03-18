@@ -27,6 +27,7 @@ export function POListTab({ onCreateDelivery, dateFilters }: POListTabProps) {
     const [selectedPO, setSelectedPO] = useState<string | null>(null)
     const [rescheduleData, setRescheduleData] = useState<{ poId: string, itemIdx: number, poNum: string, date: string } | null>(null)
     const [isRescheduling, setIsRescheduling] = useState(false)
+    const [systemActiveDate, setSystemActiveDate] = useState("")
 
     const fetchPOs = async () => {
         setLoading(true)
@@ -43,6 +44,15 @@ export function POListTab({ onCreateDelivery, dateFilters }: POListTabProps) {
             setLoading(false)
         }
     }
+
+    useEffect(() => {
+        const fetchActiveDate = async () => {
+            const { getSystemActiveDate } = await import("@/app/actions/balance")
+            const date = await getSystemActiveDate()
+            setSystemActiveDate(date)
+        }
+        fetchActiveDate()
+    }, [])
 
     useEffect(() => {
         fetchPOs()
@@ -376,6 +386,7 @@ export function POListTab({ onCreateDelivery, dateFilters }: POListTabProps) {
                                 value={rescheduleData.date || ''}
                                 onChange={(e) => setRescheduleData({ ...rescheduleData, date: e.target.value })}
                                 className="w-full h-10 rounded-xl bg-slate-50 border-slate-200 mt-1 font-bold"
+                                min={systemActiveDate}
                             />
                         </div>
                     )}

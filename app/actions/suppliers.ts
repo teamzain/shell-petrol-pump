@@ -373,7 +373,7 @@ export async function getSupplierLedger(companyAccountId: string, filters?: { da
 export async function getTransactionDetail(transactionId: string) {
     const supabase = await createClient()
 
-    // 1. Fetch transaction with NO source filter, joining company_accounts -> suppliers
+    // 1. Try to fetch from company_account_transactions first
     const { data: transaction, error: txError } = await supabase
         .from("company_account_transactions")
         .select(`
@@ -394,172 +394,126 @@ export async function getTransactionDetail(transactionId: string) {
         .eq("id", transactionId)
         .single()
 
-    if (txError) {
-        console.error("Failed to fetch transaction detail:", txError)
-        throw txError
-    }
+    if (!txError && transaction) {
+        console.log("Transaction found in company_account_transactions:", transactionId)
+        let resultTx = { ...transaction, source_table: 'company_account_transactions' }
 
-    let resultTx = { ...transaction }
+        // Resolve Purchase Order ID
+        const poId = transaction.purchase_order_id || transaction.deliveries?.purchase_order_id || transaction.po_hold_records?.purchase_order_id
 
-    // 1. Resolve Purchase Order ID
-    const poId = transaction.purchase_order_id || transaction.deliveries?.purchase_order_id || transaction.po_hold_records?.purchase_order_id
+        // Fetch all related context (Deliveries, POs, Holds)
+        if (poId) {
+            const { data: allDeliveries } = await supabase
+                .from('deliveries')
+                .select(`
+                    *,
+                    purchase_orders(
+                        po_number,
+                        items,
+                        products(name)
+                    )
+                `)
+                .eq('purchase_order_id', poId)
+                .order('delivery_date', { ascending: false })
 
-    // 2. Fetch all related deliveries if a PO exists
-    if (poId) {
-        const { data: allDeliveries } = await supabase
-            .from('deliveries')
-            .select(`
-                *,
-                purchase_orders(
-                    po_number,
-                    items,
-                    products(name)
-                )
-            `)
-            .eq('purchase_order_id', poId)
-            .order('delivery_date', { ascending: false })
+            resultTx.all_related_deliveries = allDeliveries || []
 
-        resultTx.all_related_deliveries = allDeliveries || []
+            const { data: po } = await supabase
+                .from('purchase_orders')
+                .select(`
+                    *,
+                    products(
+                        name,
+                        category,
+                        unit
+                    )
+                `)
+                .eq('id', poId)
+                .single()
 
-        // Fetch the main PO object if we don't have it
-        const { data: po } = await supabase
-            .from('purchase_orders')
-            .select(`
-                *,
-                products(
-                    name,
-                    category,
-                    unit
-                )
-            `)
-            .eq('id', poId)
-            .single()
+            if (po) resultTx.purchase_orders = po
 
-        if (po) resultTx.purchase_orders = po
+            const { data: allHolds } = await supabase
+                .from('po_hold_records')
+                .select('*')
+                .eq('purchase_order_id', poId)
+                .order('created_at', { ascending: false })
 
-        // Fetch all hold records for this PO
-        const { data: allHolds } = await supabase
-            .from('po_hold_records')
-            .select('*')
-            .eq('purchase_order_id', poId)
-            .order('created_at', { ascending: false })
-
-        resultTx.all_related_holds = allHolds || []
-    }
-
-    // 3. Helper to map product names for any PO object's items
-    const mapPOItems = async (poObj: any) => {
-        if (!poObj || !poObj.items || !Array.isArray(poObj.items)) return poObj;
-        const productIds = Array.from(new Set(poObj.items.filter((i: any) => i.product_id).map((i: any) => i.product_id)));
-        if (productIds.length > 0) {
-            const { data: products } = await supabase
-                .from("products")
-                .select("id, name, category")
-                .in("id", productIds);
-            if (products) {
-                const productMap = new Map(products.map((p: any) => [p.id, p]));
-                poObj.items = poObj.items.map((item: any) => {
-                    const product = productMap.get(item.product_id);
-                    return {
-                        ...item,
-                        product_name: product ? product.name : "Unknown Product",
-                        product_category: product ? product.category : item.product_type
-                    };
-                });
-            }
+            resultTx.all_related_holds = allHolds || []
         }
-        return poObj;
-    };
 
-    // Map main PO items
-    if (resultTx.purchase_orders) {
-        resultTx.purchase_orders = await mapPOItems(resultTx.purchase_orders);
-
-        // Populate product names for holds now that PO items are mapped
-        if (resultTx.all_related_holds?.length > 0 && resultTx.purchase_orders.items) {
-            resultTx.all_related_holds = resultTx.all_related_holds.map((h: any) => {
-                if (!h.product_name && h.po_item_index !== undefined) {
-                    const item = resultTx.purchase_orders.items[h.po_item_index];
-                    if (item) return { ...h, product_name: item.product_name };
-                }
-                return h;
-            });
-        }
-    }
-
-    // Map items in all related deliveries
-    if (resultTx.all_related_deliveries) {
-        for (let del of resultTx.all_related_deliveries) {
-            if (del.purchase_orders) {
-                del.purchase_orders = await mapPOItems(del.purchase_orders);
-                // Also populate product_name from items if missing
-                if (!del.product_name && del.purchase_orders.items && del.po_item_index !== undefined) {
-                    const item = del.purchase_orders.items[del.po_item_index];
-                    if (item) del.product_name = item.product_name;
+        // Helper to map product names
+        const mapPOItems = async (poObj: any) => {
+            if (!poObj || !poObj.items || !Array.isArray(poObj.items)) return poObj;
+            const productIds = Array.from(new Set(poObj.items.filter((i: any) => i.product_id).map((i: any) => i.product_id)));
+            if (productIds.length > 0) {
+                const { data: products } = await supabase
+                    .from("products")
+                    .select("id, name, category")
+                    .in("id", productIds);
+                if (products) {
+                    const productMap = new Map(products.map((p: any) => [p.id, p]));
+                    poObj.items = poObj.items.map((item: any) => {
+                        const product = productMap.get(item.product_id);
+                        return {
+                            ...item,
+                            product_name: product ? product.name : "Unknown Product",
+                            product_category: product ? product.category : item.product_type
+                        };
+                    });
                 }
             }
-        }
-    }
+            return poObj;
+        };
 
-    // 4. Fetch specific delivery details if this transaction is linked to ONE delivery
-    if (transaction.delivery_id) {
-        const { data: delivery } = await supabase
-            .from('deliveries')
-            .select(`
-                *,
-                purchase_orders!inner(
-                    id,
-                    po_number,
-                    items
-                )
-            `)
-            .eq('id', transaction.delivery_id)
-            .single()
-
-        if (delivery) {
-            delivery.purchase_orders = await mapPOItems(delivery.purchase_orders);
-            // Also populate product_name here
-            if (!delivery.product_name && delivery.purchase_orders.items && delivery.po_item_index !== undefined) {
-                const item = delivery.purchase_orders.items[delivery.po_item_index];
-                if (item) delivery.product_name = item.product_name;
+        if (resultTx.purchase_orders) resultTx.purchase_orders = await mapPOItems(resultTx.purchase_orders);
+        if (resultTx.all_related_deliveries) {
+            for (let del of resultTx.all_related_deliveries) {
+                if (del.purchase_orders) del.purchase_orders = await mapPOItems(del.purchase_orders);
             }
-            resultTx.deliveries = delivery;
+        }
+
+        // Fetch running balance from ledger
+        const ledger = await getSupplierLedger(resultTx.company_account_id)
+        const matchingRow = ledger.transactions.find(t => t.id === resultTx.id)
+        resultTx.balance_before = matchingRow ? matchingRow.balance_before : 0
+        resultTx.balance_after = matchingRow ? matchingRow.balance_after : 0
+
+        return resultTx
+    }
+
+    // 2. If not found, try balance_transactions (Internal/Manual Movements)
+    console.log("Not found in first table, trying balance_transactions for:", transactionId)
+    const { data: balanceTx, error: bErr } = await supabase
+        .from("balance_transactions")
+        .select(`
+            *,
+            bank_accounts:bank_account_id ( account_name ),
+            to_bank_accounts:to_bank_account_id ( account_name ),
+            suppliers ( name, contact_person, phone )
+        `)
+        .eq("id", transactionId)
+        .single()
+
+    if (!bErr && balanceTx) {
+        console.log("Transaction ID matched in balance_transactions:", transactionId)
+        // Map fields to match the UI expectations
+        return {
+            ...balanceTx,
+            source_table: 'balance_transactions',
+            note: balanceTx.description || (balanceTx.is_opening ? "Opening Balance Initialization" : "Manual Balance Movement"),
+            // Synthesize transaction_source for the UI labels
+            transaction_source: balanceTx.is_opening ? 'opening_balance' : balanceTx.transaction_type,
+            // company_accounts dummy for supplier profile UI if supplier_id is present
+            company_accounts: balanceTx.suppliers ? { 
+                suppliers: balanceTx.suppliers,
+                current_balance: 0 // We don't necessarily know the total here easily
+            } : null
         }
     }
 
-    // 5. If source = hold_release, fetch hold details
-    if (transaction.transaction_source === 'hold_release') {
-        const { data: hold } = await supabase
-            .from('po_hold_records')
-            .select(`
-                *,
-                purchase_orders!inner(
-                    po_number,
-                    items,
-                    products(name)
-                )
-            `)
-            .eq('id', transaction.hold_record_id)
-            .single()
-
-        if (hold) {
-            hold.purchase_orders = await mapPOItems(hold.purchase_orders);
-            resultTx.po_hold_records = hold;
-        }
-    }
-
-    // 2. Fetch all transactions via getSupplierLedger to ensure DRY exact match with the Virtual Reconciliations
-    const ledger = await getSupplierLedger(resultTx.company_account_id)
-    const matchingRow = ledger.transactions.find(t => t.id === resultTx.id)
-
-    let balanceBefore = matchingRow ? matchingRow.balance_before : 0
-    let balanceAfter = matchingRow ? matchingRow.balance_after : 0
-
-    return {
-        ...resultTx,
-        balance_before: balanceBefore,
-        balance_after: balanceAfter
-    }
+    console.error("Transaction not found in either table:", transactionId)
+    return null
 }
 
 export async function deleteSupplier(supplierId: string) {

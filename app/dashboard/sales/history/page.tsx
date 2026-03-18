@@ -252,13 +252,6 @@ export default function SalesHistoryPage() {
         const totalManualRevenue = manualSales.reduce((sum, s) => sum + (Number(s.total_amount) || 0), 0)
         const totalSale = totalFuelRevenue + totalManualRevenue
 
-        const totalFuelNetCash = fuelSales.reduce((sum, s) => sum + (Number(s.cash_payment_amount) || 0), 0)
-        const totalManualNetCash = manualSales.reduce((sum, s) => {
-            if (s.payment_method === 'cash') return sum + (Number(s.total_amount) || 0)
-            return sum
-        }, 0)
-        const totalNetCash = totalFuelNetCash + totalManualNetCash
-
         const totalCardHolding = allCardRecords
             .filter(r => r.status === 'pending')
             .reduce((sum, r) => sum + (Number(r.hold_amount) || 0), 0)
@@ -266,6 +259,8 @@ export default function SalesHistoryPage() {
         const totalReleased = allCardRecords
             .filter(r => r.status === 'released')
             .reduce((sum, r) => sum + (Number(r.net_amount) || 0), 0)
+
+        const totalNetCash = totalSale - totalCardHolding - totalReleased
 
         // Product Breakdown
         const productMap: Record<string, number> = {}

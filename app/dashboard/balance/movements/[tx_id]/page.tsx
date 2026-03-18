@@ -18,9 +18,20 @@ export default function BalanceTransactionDetailPage() {
 
     useEffect(() => {
         const fetchTransaction = async () => {
+            if (!tx_id || typeof tx_id !== 'string') {
+                console.error("Invalid tx_id:", tx_id)
+                setLoading(false)
+                return
+            }
+            
             setLoading(true)
+            console.log("Fetching transaction detail for ID:", tx_id)
             try {
-                const data = await getTransactionDetail(tx_id as string)
+                const data = await getTransactionDetail(tx_id)
+                console.log("Transaction data received:", data)
+                if (!data) {
+                    console.warn("No transaction found for ID:", tx_id)
+                }
                 setTransaction(data)
             } catch (error) {
                 console.error("Error fetching transaction details:", error)
@@ -30,7 +41,7 @@ export default function BalanceTransactionDetailPage() {
             }
         }
 
-        if (tx_id) fetchTransaction()
+        fetchTransaction()
     }, [tx_id])
 
     if (loading) {
@@ -47,22 +58,45 @@ export default function BalanceTransactionDetailPage() {
             <div className="flex flex-col items-center justify-center min-h-[60vh]">
                 <div className="text-center space-y-4">
                     <p className="text-xl font-bold text-slate-700">Transaction Not Found</p>
-                    <Button onClick={() => router.back()}>Go Back</Button>
+                    <p className="text-sm text-muted-foreground italic">The requested transaction with ID {String(tx_id)} could not be located.</p>
+                    <Button onClick={() => router.push('/dashboard/balance/movements')}>Back to Ledger</Button>
                 </div>
             </div>
         )
     }
 
-    const isCredit = transaction.transaction_type === 'credit'
-    let sourceLabel = "Manual Transaction"
-    if (transaction.transaction_source === 'opening_balance') sourceLabel = "Opening Balance"
-    if (transaction.transaction_source === 'manual_transfer') sourceLabel = "Fund Transfer"
-    if (transaction.transaction_source === 'delivery' || transaction.transaction_source === 'purchase' || transaction.transaction_source === 'purchase_order') sourceLabel = "Purchase"
-    if (transaction.transaction_source === 'hold_release') sourceLabel = "Hold Released"
-    if (transaction.transaction_source === 'reversal') sourceLabel = "Reversal"
+    const isCredit = transaction.source_table === 'balance_transactions'
+        ? ["add_cash", "add_bank", "cash_to_bank"].includes(transaction.transaction_type)
+        : transaction.transaction_type === 'credit'
 
-    const txDate = new Date(transaction.transaction_date).toLocaleDateString('en-GB').replace(/\//g, '-')
-    const isPurchase = transaction.transaction_source === 'purchase' || transaction.transaction_source === 'delivery' || transaction.transaction_source === 'purchase_order' || transaction.transaction_source === 'hold_release'
+    let sourceLabel = "Manual Transaction"
+    if (transaction.source_table === 'balance_transactions') {
+        if (transaction.transaction_type === 'cash_to_bank') sourceLabel = "Cash to Bank Transfer"
+        else if (transaction.transaction_type === 'bank_to_cash') sourceLabel = "Bank to Cash Withdrawal"
+        else if (transaction.transaction_type === 'add_cash') sourceLabel = transaction.is_opening ? "Opening Cash Balance" : "Manual Cash Addition"
+        else if (transaction.transaction_type === 'add_bank') sourceLabel = transaction.is_opening ? "Opening Bank Balance" : "Manual Bank Deposit"
+        else if (transaction.transaction_type === 'bank_to_bank') sourceLabel = "Bank to Bank Transfer"
+        else if (transaction.transaction_type === 'transfer_to_supplier') sourceLabel = "Transfer to Supplier"
+    } else {
+        if (transaction.transaction_source === 'opening_balance') sourceLabel = "Opening Balance"
+        if (transaction.transaction_source === 'manual_transfer') sourceLabel = "Fund Transfer"
+        if (transaction.transaction_source === 'delivery' || transaction.transaction_source === 'purchase' || transaction.transaction_source === 'purchase_order') sourceLabel = "Purchase"
+        if (transaction.transaction_source === 'hold_release') sourceLabel = "Hold Released"
+        if (transaction.transaction_source === 'reversal') sourceLabel = "Reversal"
+    }
+
+    const transactionDate = transaction.transaction_date || transaction.created_at
+    const txDate = transactionDate ? new Date(transactionDate).toLocaleDateString('en-GB', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric'
+    }) : "N/A"
+
+    const isInternalTransfer = transaction.source_table === 'balance_transactions' && 
+        ['cash_to_bank', 'bank_to_cash', 'bank_to_bank'].includes(transaction.transaction_type)
+
+    const fromAccount = transaction.bank_accounts?.account_name || (transaction.transaction_type === 'cash_to_bank' ? 'Cash' : null)
+    const toAccount = transaction.to_bank_accounts?.account_name || (transaction.transaction_type === 'bank_to_cash' ? 'Cash' : null)
 
     const d = transaction.deliveries
     const po = (transaction.deliveries?.purchase_orders || transaction.purchase_orders || transaction.po_hold_records?.purchase_orders)
@@ -79,11 +113,13 @@ export default function BalanceTransactionDetailPage() {
                     </Button>
                     <div>
                         <h1 className="text-2xl font-bold tracking-tight">Transaction Detail</h1>
-                        <p className="text-sm text-muted-foreground font-black uppercase tracking-widest text-primary">#{transaction.id.substring(0, 8).toUpperCase()}</p>
+                        <p className="text-sm text-muted-foreground font-black uppercase tracking-widest text-primary">
+                            #{transaction.id ? String(transaction.id).substring(0, 8).toUpperCase() : "UNKNOWN"}
+                        </p>
                     </div>
                 </div>
                 <Badge className={isCredit ? 'bg-green-100 text-green-700 border-green-200 text-sm py-1' : 'bg-red-100 text-red-600 border-red-200 text-sm py-1'}>
-                    {isCredit ? <span className="flex items-center gap-1">Credit <ArrowUpCircle className="h-4 w-4" /></span> : <span className="flex items-center gap-1">Debit <ArrowDownCircle className="h-4 w-4" /></span>}
+                    {isCredit ? <span className="flex items-center gap-1">Inflow <ArrowUpCircle className="h-4 w-4" /></span> : <span className="flex items-center gap-1">Outflow <ArrowDownCircle className="h-4 w-4" /></span>}
                 </Badge>
             </div>
 
@@ -107,12 +143,22 @@ export default function BalanceTransactionDetailPage() {
                             </div>
                             <div className="p-4 space-y-1">
                                 <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Type</p>
-                                <p className="font-medium text-sm capitalize">{transaction.transaction_type} {isCredit ? '↑' : '↓'}</p>
+                                <p className="font-medium text-sm capitalize">{transaction.transaction_type?.replace("_", " ")}</p>
                             </div>
                             <div className="p-4 space-y-1">
-                                <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Source</p>
+                                <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Method</p>
                                 <p className="font-bold text-sm text-slate-700">{sourceLabel}</p>
                             </div>
+                            {isInternalTransfer && (
+                                <div className="p-4 col-span-2 space-y-1 bg-blue-50/50">
+                                    <p className="text-[10px] font-bold uppercase tracking-widest text-blue-600">Fund Movement Pathway</p>
+                                    <div className="flex items-center gap-2 font-bold text-slate-700">
+                                        <div className="bg-white px-2 py-1 rounded border shadow-sm text-xs">{fromAccount || 'Origin'}</div>
+                                        <ArrowLeft className="h-3 w-3 rotate-180 text-blue-400" />
+                                        <div className="bg-white px-2 py-1 rounded border shadow-sm text-xs">{toAccount || 'Destination'}</div>
+                                    </div>
+                                </div>
+                            )}
                             <div className="p-4 space-y-1">
                                 <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Amount</p>
                                 <p className={`font-black text-lg ${isCredit ? 'text-green-600' : 'text-red-600'}`}>
@@ -121,11 +167,11 @@ export default function BalanceTransactionDetailPage() {
                             </div>
                             <div className="p-4 space-y-1">
                                 <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Reference No.</p>
-                                <p className="font-medium text-sm">{transaction.reference_number || (d?.company_invoice_number) || "-"}</p>
+                                <p className="font-medium text-sm">{transaction.reference_number || "-"}</p>
                             </div>
                             <div className="p-4 col-span-2 space-y-1">
                                 <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Note / Description</p>
-                                <p className="text-sm italic text-slate-600">{transaction.note || "-"}</p>
+                                <p className="text-sm italic text-slate-600">{transaction.note || transaction.description || "-"}</p>
                             </div>
                         </div>
 
@@ -159,37 +205,39 @@ export default function BalanceTransactionDetailPage() {
                 {/* Sidebar Cards */}
                 <div className="space-y-6">
                     {/* Section: Supplier Profile Card */}
-                    <Card>
-                        <CardHeader className="pb-2 flex flex-row items-center justify-between">
-                            <CardTitle className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Supplier Profile</CardTitle>
-                            <Building2 className="h-4 w-4 text-slate-400 opacity-50" />
-                        </CardHeader>
-                        <CardContent className="space-y-4 text-sm mt-2">
-                            <div className="space-y-1">
-                                <div className="flex items-center gap-2 mb-1">
-                                    <Building2 className="h-3 w-3 text-slate-400" />
-                                    <p className="text-[10px] font-bold uppercase text-muted-foreground">Supplier Name</p>
-                                </div>
-                                <p className="font-bold text-lg">{supp?.name || "N/A"}</p>
-                            </div>
-                            <div className="grid grid-cols-2 gap-4 border-t pt-3">
+                    {supp && (
+                        <Card>
+                            <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                                <CardTitle className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Supplier Profile</CardTitle>
+                                <Building2 className="h-4 w-4 text-slate-400 opacity-50" />
+                            </CardHeader>
+                            <CardContent className="space-y-4 text-sm mt-2">
                                 <div className="space-y-1">
                                     <div className="flex items-center gap-2 mb-1">
-                                        <User className="h-3 w-3 text-slate-400" />
-                                        <p className="text-[10px] font-bold uppercase text-muted-foreground">Contact Person</p>
+                                        <Building2 className="h-3 w-3 text-slate-400" />
+                                        <p className="text-[10px] font-bold uppercase text-muted-foreground">Supplier Name</p>
                                     </div>
-                                    <p className="font-medium">{supp?.contact_person || "-"}</p>
+                                    <p className="font-bold text-lg">{supp.name || "N/A"}</p>
                                 </div>
-                                <div className="space-y-1">
-                                    <div className="flex items-center gap-2 mb-1">
-                                        <Phone className="h-3 w-3 text-slate-400" />
-                                        <p className="text-[10px] font-bold uppercase text-muted-foreground">Phone</p>
+                                <div className="grid grid-cols-2 gap-4 border-t pt-3">
+                                    <div className="space-y-1">
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <User className="h-3 w-3 text-slate-400" />
+                                            <p className="text-[10px] font-bold uppercase text-muted-foreground">Contact Person</p>
+                                        </div>
+                                        <p className="font-medium">{supp.contact_person || "-"}</p>
                                     </div>
-                                    <p className="font-medium">{supp?.phone || "-"}</p>
+                                    <div className="space-y-1">
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <Phone className="h-3 w-3 text-slate-400" />
+                                            <p className="text-[10px] font-bold uppercase text-muted-foreground">Phone</p>
+                                        </div>
+                                        <p className="font-medium">{supp.phone || "-"}</p>
+                                    </div>
                                 </div>
-                            </div>
-                        </CardContent>
-                    </Card>
+                            </CardContent>
+                        </Card>
+                    )}
 
                     {/* Purchase Related Sections */}
                     {po && (

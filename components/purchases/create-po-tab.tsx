@@ -59,6 +59,7 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
     const [suppliers, setSuppliers] = useState<any[]>([])
     const [inventoryProducts, setInventoryProducts] = useState<any[]>([])
     const [selectedSupplier, setSelectedSupplier] = useState<any>(null)
+    const [systemActiveDate, setSystemActiveDateState] = useState(getTodayPKT())
 
     const form = useForm<POFormValues>({
         resolver: zodResolver(poSchema),
@@ -91,6 +92,7 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
                 ])
                 setSuppliers(supps.filter((s: any) => s.status === 'active'))
                 setInventoryProducts(prods)
+                setSystemActiveDateState(activeDate)
                 form.setValue("po_number", nextPoNum)
                 form.setValue("order_date", activeDate)
                 form.setValue("expected_delivery_date", activeDate)
@@ -240,7 +242,7 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
                                                 <FormItem>
                                                     <FormLabel className="font-bold">Expected Delivery Date</FormLabel>
                                                     <FormControl>
-                                                        <Input type="date" className="h-12" {...field} min={getTodayPKT()} />
+                                                        <Input type="date" className="h-12" {...field} min={systemActiveDate} />
                                                     </FormControl>
                                                     <FormMessage />
                                                 </FormItem>

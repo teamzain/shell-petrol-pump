@@ -115,6 +115,7 @@ export function OilPurchaseDialog({ open, onOpenChange, onSuccess }: OilPurchase
   })
 
   const [successData, setSuccessData] = useState<any>(null)
+  const [systemActiveDate, setSystemActiveDate] = useState("")
   const supabase = createClient()
 
   useEffect(() => {
@@ -128,6 +129,7 @@ export function OilPurchaseDialog({ open, onOpenChange, onSuccess }: OilPurchase
 
   const resetForm = async () => {
     const activeDate = await getSystemActiveDate()
+    setSystemActiveDate(activeDate)
     setStep("form")
     setError("")
     setCart([])
@@ -323,7 +325,7 @@ export function OilPurchaseDialog({ open, onOpenChange, onSuccess }: OilPurchase
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 <div className="space-y-1">
                   <Label className="text-[10px] uppercase font-bold text-muted-foreground ml-1">Date</Label>
-                  <Input type="date" className="h-9 rounded-lg" value={formData.purchase_date} onChange={(e) => setFormData({ ...formData, purchase_date: e.target.value })} />
+                  <Input type="date" className="h-9 rounded-lg" value={formData.purchase_date} onChange={(e) => setFormData({ ...formData, purchase_date: e.target.value })} min={systemActiveDate} />
                 </div>
                 <div className="space-y-1">
                   <Label className="text-[10px] uppercase font-bold text-muted-foreground ml-1">Invoice #</Label>

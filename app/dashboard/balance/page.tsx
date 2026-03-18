@@ -507,7 +507,7 @@ export default function BalanceManagementPage() {
           bank_name: bankAccountData.bank_name,
           opening_balance: Number(bankAccountData.opening_balance),
           account_type: bankAccountData.account_type as 'bank' | 'supplier'
-        })
+        }, workingDate)
         toast.success("Bank account updated")
       } else {
         await addBankAccount({
@@ -516,7 +516,7 @@ export default function BalanceManagementPage() {
           bank_name: bankAccountData.bank_name,
           opening_balance: Number(bankAccountData.opening_balance),
           account_type: bankAccountData.account_type as 'bank' | 'supplier'
-        })
+        }, workingDate)
         toast.success("Bank account added")
       }
       setBankAccountDialogOpen(false)
@@ -1858,21 +1858,7 @@ export default function BalanceManagementPage() {
                 placeholder="0.00"
               />
             </div>
-            <div className="space-y-2">
-              <Label>Account Type</Label>
-              <Select
-                value={bankAccountData.account_type}
-                onValueChange={(v) => setBankAccountData(prev => ({ ...prev, account_type: v }))}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select Account Type" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="bank">🏦 Bank Account</SelectItem>
-                  <SelectItem value="supplier">🤝 Supplier Settlement Account</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            {/* Account Type selection removed to prevent incorrect categorization. Defaults to 'bank'. */}
           </div>
           <DialogFooter className="gap-2 sm:gap-0">
             <Button variant="outline" onClick={() => setBankAccountDialogOpen(false)} className="w-full sm:w-auto">Cancel</Button>

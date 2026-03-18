@@ -73,6 +73,7 @@ export function RecordDeliveryTab({ initialPO, onSuccess }: RecordDeliveryTabPro
     const [showWarning, setShowWarning] = useState(false)
     const [pendingSubmitValues, setPendingSubmitValues] = useState<z.infer<typeof deliverySchema> | null>(null)
     const [holdData, setHoldData] = useState<{ holdRecordId: string; poId: string; holdAmount: number; holdQuantity: number; productName: string } | null>(null)
+    const [systemActiveDate, setSystemActiveDate] = useState("")
 
     const form = useForm<z.infer<typeof deliverySchema>>({
         resolver: zodResolver(deliverySchema),
@@ -100,6 +101,7 @@ export function RecordDeliveryTab({ initialPO, onSuccess }: RecordDeliveryTabPro
             const availablePOs = poData.filter((po: any) => po.status === 'pending' || po.status === 'partially_delivered')
             setPOs(availablePOs)
             setTanks(tankData || [])
+            setSystemActiveDate(activeDate)
             form.setValue("delivery_date", activeDate)
         }
         fetchData()
@@ -399,7 +401,7 @@ export function RecordDeliveryTab({ initialPO, onSuccess }: RecordDeliveryTabPro
 
                                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
                                         <FormField control={form.control} name="delivery_date" render={({ field }) => (
-                                            <FormItem><FormLabel>Date</FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>
+                                            <FormItem><FormLabel>Date</FormLabel><FormControl><Input type="date" {...field} min={systemActiveDate} /></FormControl><FormMessage /></FormItem>
                                         )} />
                                         <FormField control={form.control} name="company_invoice_number" render={({ field }) => (
                                             <FormItem><FormLabel>Invoice # (Opt)</FormLabel><FormControl><Input placeholder="Supplier Invoice #" {...field} /></FormControl><FormMessage /></FormItem>
