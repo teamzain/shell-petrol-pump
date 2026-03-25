@@ -15,7 +15,8 @@ import {
     X,
     ChevronDown,
     RefreshCcw,
-    Printer
+    Printer,
+    CreditCard
 } from "lucide-react"
 import { BrandLoader } from "@/components/ui/brand-loader"
 import { createClient } from "@/lib/supabase/client"
@@ -55,6 +56,8 @@ import { SupplierPerformanceReport } from "@/components/reports/supplier-trackin
 import { PurchaseHistoryReport } from "@/components/reports/purchase-history"
 import { ExpenseBreakdownReport } from "@/components/reports/expense-breakdown"
 import { ProfitLossReport } from "@/components/reports/profit-loss-report"
+import { SalesReport } from "@/components/reports/sales-report"
+import { BankCardReport } from "@/components/reports/bank-card-report"
 
 import {
     Dialog,
@@ -409,6 +412,9 @@ export default function ReportsPage() {
                                 <TabsTrigger value="expense-breakdown" className="px-6 data-[state=active]:bg-background data-[state=active]:shadow-sm">
                                     <Receipt className="mr-2 h-4 w-4" /> Expenses
                                 </TabsTrigger>
+                                <TabsTrigger value="sales-report" className="px-6 data-[state=active]:bg-background data-[state=active]:shadow-sm">
+                                    <TrendingUp className="mr-2 h-4 w-4" /> Sale
+                                </TabsTrigger>
                             </TabsList>
                         </div>
                     </div>
@@ -438,6 +444,21 @@ export default function ReportsPage() {
 
                         <TabsContent value="expense-breakdown" className="animate-in fade-in-50 duration-500">
                             <ExpenseBreakdownReport filters={filters} onDetailClick={openDetail} onDataLoaded={setReportData} />
+                        </TabsContent>
+
+                        <TabsContent value="sales-report" className="animate-in fade-in-50 duration-500">
+                            <Tabs defaultValue="products" className="w-full">
+                                <TabsList className="bg-muted/30 p-0.5 h-9 mb-6">
+                                    <TabsTrigger value="products" className="px-4 text-[10px] font-bold uppercase tracking-wider h-8">Products & Fuel</TabsTrigger>
+                                    <TabsTrigger value="bank-cards" className="px-4 text-[10px] font-bold uppercase tracking-wider h-8">Bank Card Report</TabsTrigger>
+                                </TabsList>
+                                <TabsContent value="products" className="mt-0">
+                                    <SalesReport filters={filters} onDetailClick={openDetail} onDataLoaded={setReportData} />
+                                </TabsContent>
+                                <TabsContent value="bank-cards" className="mt-0">
+                                    <BankCardReport filters={filters} onDetailClick={openDetail} onDataLoaded={setReportData} />
+                                </TabsContent>
+                            </Tabs>
                         </TabsContent>
                     </div>
                 </Tabs>

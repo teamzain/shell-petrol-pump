@@ -47,7 +47,8 @@ export default function ManualSalesPage() {
         unit_price: "",
         payment_method: "cash",
         customer_name: "",
-        notes: ""
+        notes: "",
+        paid_amount: ""
     })
 
     const supabase = createClient()
@@ -94,7 +95,8 @@ export default function ManualSalesPage() {
                 unit_price: parseFloat(formData.unit_price),
                 payment_method: "cash",
                 customer_name: formData.customer_name || "Walk-in",
-                notes: formData.notes
+                notes: formData.notes,
+                paid_amount: parseFloat(formData.paid_amount || total.toString())
             })
 
             toast.success("Manual sale recorded successfully!")
@@ -104,7 +106,8 @@ export default function ManualSalesPage() {
                 unit_price: "",
                 payment_method: "cash",
                 customer_name: "",
-                notes: ""
+                notes: "",
+                paid_amount: ""
             })
             fetchData()
         } catch (error: any) {
@@ -188,14 +191,28 @@ export default function ManualSalesPage() {
                                     </div>
                                 </div>
 
-                                <div className="space-y-2">
-                                    <Label htmlFor="customer">Customer Name (Optional)</Label>
-                                    <Input
-                                        id="customer"
-                                        placeholder="e.g. Walk-in or Company Name"
-                                        value={formData.customer_name}
-                                        onChange={(e) => setFormData({ ...formData, customer_name: e.target.value })}
-                                    />
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <div className="space-y-2">
+                                        <Label htmlFor="paid_amount">Paid Amount (Rs.)</Label>
+                                        <Input
+                                            id="paid_amount"
+                                            type="number"
+                                            step="0.01"
+                                            placeholder={total.toString()}
+                                            value={formData.paid_amount}
+                                            onChange={(e) => setFormData({ ...formData, paid_amount: e.target.value })}
+                                        />
+                                        <p className="text-[10px] text-muted-foreground">Leave empty if full amount is paid.</p>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label htmlFor="customer">Customer Name (Optional)</Label>
+                                        <Input
+                                            id="customer"
+                                            placeholder="e.g. Walk-in or Company Name"
+                                            value={formData.customer_name}
+                                            onChange={(e) => setFormData({ ...formData, customer_name: e.target.value })}
+                                        />
+                                    </div>
                                 </div>
 
                                 <div className="space-y-2">

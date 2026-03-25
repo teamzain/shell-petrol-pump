@@ -6,20 +6,31 @@ import { format } from "date-fns"
 import {
     Receipt,
     Printer,
+    Edit2,
+    Save,
+    X,
+    Loader2
 } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
+import { toast } from "sonner"
+import { updateManualSalePayment } from "@/app/actions/manual-sales-actions"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import {
     Dialog,
     DialogContent,
 } from "@/components/ui/dialog"
+import { cn } from "@/lib/utils"
 
 export function DetailViewDialog({ isOpen, onOpenChange, item }: any) {
     const supabase = createClient()
     const [loading, setLoading] = useState(false)
     const [subItems, setSubItems] = useState<any[]>([])
+    const [isEditing, setIsEditing] = useState(false)
+    const [editValue, setEditValue] = useState("")
+    const [isSaving, setIsSaving] = useState(false)
 
     useEffect(() => {
         if (isOpen && item) {
@@ -33,7 +44,23 @@ export function DetailViewDialog({ isOpen, onOpenChange, item }: any) {
         if (!item) return
         setLoading(true)
         try {
-            // 1. Purchase Details (from purchase_orders or stock movement)
+            // Priority 1: If item already has 'items' (JSONB from PO), use it
+            if (item.items && Array.isArray(item.items) && item.items.length > 0) {
+                // Map PO items to the format expected by si.products.product_name
+                const mapped = item.items.map((i: any, idx: number) => ({
+                    ...i,
+                    id: i.id || `${item.id}-item-${idx}`,
+                    quantity: i.delivered_quantity || i.ordered_quantity || i.quantity,
+                    purchase_price_per_unit: i.rate_per_liter || i.purchase_price_per_unit || i.price,
+                    total_amount: i.total_amount || (Number(i.quantity || i.ordered_quantity) * Number(i.rate_per_liter || i.purchase_price_per_unit)),
+                    products: { product_name: i.product_name }
+                }));
+                setSubItems(mapped);
+                setLoading(false);
+                return;
+            }
+
+            // 1. Purchase Details (from purchase_orders or stock movement or purchases table)
             if (
                 (item.total_amount !== undefined && item.invoice_number && !item.product_id) ||
                 (item.movement_type === 'purchase' && item.reference_type === 'purchase')
@@ -43,7 +70,9 @@ export function DetailViewDialog({ isOpen, onOpenChange, item }: any) {
                     .from("purchases")
                     .select("*, products(product_name)")
                     .eq("order_id", orderId)
-                if (data) setSubItems(data)
+                if (data && data.length > 0) {
+                    setSubItems(data)
+                } 
             }
             // 2. Fuel Sale specifics (from nozzle_readings or stock movement)
             else if (
@@ -59,16 +88,32 @@ export function DetailViewDialog({ isOpen, onOpenChange, item }: any) {
                     .single()
                 if (data) setSubItems([data])
             }
-            // 3. Product Sale specifics (from sales or stock movement)
+            // 3. Product Sale specifics (from manual_sales or stock movement)
             else if (
-                (item.sale_amount !== undefined && item.product_id) ||
+                (item.unit_price !== undefined && item.product_id) ||
                 (item.movement_type === 'sale' && item.reference_type === 'sale')
             ) {
                 const saleId = item.reference_id || item.id
                 const { data } = await supabase
-                    .from("sales")
-                    .select("*, products(product_name)")
+                    .from("manual_sales")
+                    .select("*, products(name)")
                     .eq("id", saleId)
+                    .single()
+                if (data) {
+                    // Map products.name to product_name for consistency
+                    setSubItems([{
+                        ...data,
+                        products: { product_name: data.products?.name }
+                    }])
+                }
+            }
+            // 4. Card Hold Details
+            else if (item.hold_amount !== undefined || item.card_type) {
+                const holdId = item.id
+                const { data } = await supabase
+                    .from("card_hold_records")
+                    .select("*, bank_cards(card_name), supplier_cards(card_name)")
+                    .eq("id", holdId)
                     .single()
                 if (data) setSubItems([data])
             }
@@ -79,13 +124,37 @@ export function DetailViewDialog({ isOpen, onOpenChange, item }: any) {
         }
     }
 
+    const handleEditClick = () => {
+        setEditValue((item.paid_amount || item.cash_payment_amount || item.total_amount || 0).toString())
+        setIsEditing(true)
+    }
+
+    const handleSave = async () => {
+        setIsSaving(true)
+        try {
+            const newVal = parseFloat(editValue)
+            if (isNaN(newVal)) throw new Error("Invalid amount")
+            
+            await updateManualSalePayment(item.id, newVal)
+            
+            toast.success("Payment amount updated!")
+            setIsEditing(false)
+            onOpenChange(false)
+        } catch (error: any) {
+            toast.error(error.message || "Failed to update")
+        } finally {
+            setIsSaving(false)
+        }
+    }
+
     if (!item) return null
 
     // Precise Type Determination
-    const isFuelSale = item.opening_reading !== undefined || (item.sale_amount !== undefined && item.nozzle_id)
-    const isProductSale = item.sale_amount !== undefined && item.product_id && !isFuelSale
-    const isPurchase = item.total_amount !== undefined
-    const isExpense = item.amount !== undefined && !isPurchase
+    const isFuelSale = item.opening_reading !== undefined || (item.revenue !== undefined && item.nozzle_id)
+    const isProductSale = (item.unit_price !== undefined || item.total_amount !== undefined) && item.product_id && !isFuelSale && !item.invoice_number
+    const isCardRecord = item.hold_amount !== undefined || item.card_type !== undefined
+    const isPurchase = item.total_amount !== undefined && !isProductSale
+    const isExpense = item.amount !== undefined && !isPurchase && !isCardRecord
 
     const type = isFuelSale ? "Fuel Sale" : isProductSale ? "Product Sale" : isPurchase ? "Purchase" : "Expense"
 
@@ -165,8 +234,8 @@ export function DetailViewDialog({ isOpen, onOpenChange, item }: any) {
     return (
         <Dialog open={isOpen} onOpenChange={onOpenChange}>
             <style>{printStyles}</style>
-            <DialogContent className="max-w-[1200px] w-[98vw] p-0 border-none bg-transparent">
-                <Card id={`receipt-${item.id}`} className="border-none shadow-2xl bg-white dark:bg-slate-950 flex flex-col max-h-[90vh] overflow-hidden printable-receipt-card">
+            <DialogContent showCloseButton={false} className="max-w-[1200px] w-[98vw] p-0 border-none bg-transparent">
+                <Card id={`receipt-${item.id}`} className="border-none shadow-2xl bg-white dark:bg-slate-950 flex flex-col max-h-[90vh] overflow-hidden printable-receipt-card relative">
                     <CardHeader className="bg-primary text-primary-foreground rounded-t-xl pb-4 flex-shrink-0 print:rounded-none">
                         <div className="flex justify-between items-start">
                             <div>
@@ -178,8 +247,18 @@ export function DetailViewDialog({ isOpen, onOpenChange, item }: any) {
                                     Recorded at {format(new Date(item.sale_date || item.purchase_date || item.expense_date || item.reading_date || item.movement_date || new Date()), "PPP p")}
                                 </CardDescription>
                             </div>
-                            <div className="h-10 w-10 rounded-xl bg-white/10 flex items-center justify-center backdrop-blur-md">
-                                <Receipt className="h-5 w-5" />
+                            <div className="flex items-center gap-2">
+                                <div className="h-10 w-10 rounded-xl bg-white/10 flex items-center justify-center backdrop-blur-md">
+                                    <Receipt className="h-5 w-5" />
+                                </div>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-10 w-10 rounded-full text-white hover:bg-white/20 transition-colors"
+                                    onClick={() => onOpenChange(false)}
+                                >
+                                    <X className="h-5 w-5" />
+                                </Button>
                             </div>
                         </div>
                     </CardHeader>
@@ -244,8 +323,8 @@ export function DetailViewDialog({ isOpen, onOpenChange, item }: any) {
                                                     <tbody>
                                                         <tr>
                                                             <td className="py-3 text-sm font-bold font-mono">{(item.quantity_sold || item.quantity || 0).toLocaleString()} <span className="text-[10px] font-sans text-muted-foreground">Ltr</span></td>
-                                                            <td className="py-3 text-sm font-bold font-mono text-primary">Rs.{Number(item.selling_price || 0).toLocaleString()}</td>
-                                                            <td className="py-3 text-lg font-black text-primary font-mono text-right">Rs.{Number(item.sale_amount || (item.quantity_sold * item.selling_price) || 0).toLocaleString()}</td>
+                                                            <td className="py-3 text-sm font-bold font-mono text-primary">Rs.{Number(item.selling_price || item.unit_price || item.rate_per_liter || 0).toLocaleString()}</td>
+                                                            <td className="py-3 text-lg font-black text-primary font-mono text-right">Rs.{Number(item.sale_amount || item.revenue || item.total_amount || (Number(item.quantity_sold || item.quantity) * Number(item.selling_price || item.unit_price || item.rate_per_liter)) || 0).toLocaleString()}</td>
                                                         </tr>
                                                     </tbody>
                                                 </table>
@@ -271,8 +350,8 @@ export function DetailViewDialog({ isOpen, onOpenChange, item }: any) {
                                                     <tbody>
                                                         <tr>
                                                             <td className="py-2 text-sm font-bold font-mono">{item.quantity} <span className="text-[10px] font-sans text-muted-foreground">Unit</span></td>
-                                                            <td className="py-2 text-sm font-bold font-mono">Rs.{Number(item.selling_price || 0).toLocaleString()}</td>
-                                                            <td className="py-2 text-base font-black text-primary font-mono text-right">Rs.{Number(item.sale_amount || 0).toLocaleString()}</td>
+                                                            <td className="py-2 text-sm font-bold font-mono">Rs.{Number(item.selling_price || item.unit_price || 0).toLocaleString()}</td>
+                                                            <td className="py-2 text-base font-black text-primary font-mono text-right">Rs.{Number(item.sale_amount || item.revenue || item.total_amount || 0).toLocaleString()}</td>
                                                         </tr>
                                                     </tbody>
                                                 </table>
@@ -289,11 +368,11 @@ export function DetailViewDialog({ isOpen, onOpenChange, item }: any) {
                                                 </div>
                                             ) : subItems.length > 0 ? (
                                                 <div className="space-y-4">
-                                                    {subItems.map((si) => (
-                                                        <div key={si.id} className="p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm space-y-3 hover:border-primary/20 transition-colors duration-300">
+                                                    {subItems.map((si, idx) => (
+                                                        <div key={si.id || `item-${idx}`} className="p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm space-y-3 hover:border-primary/20 transition-colors duration-300">
                                                             <div className="flex justify-between items-center gap-4">
                                                                 <span className="font-black text-xs text-primary truncate">{si.products?.product_name}</span>
-                                                                <Badge variant="outline" className="text-[8px] h-4 uppercase bg-slate-50 dark:bg-slate-950 font-bold flex-shrink-0">ID-{si.id.slice(-4)}</Badge>
+                                                                <Badge variant="outline" className="text-[8px] h-4 uppercase bg-slate-50 dark:bg-slate-950 font-bold flex-shrink-0">ID-{(String(si.id || '') || 'N/A').slice(-4)}</Badge>
                                                             </div>
                                                             <table className="w-full border-t border-slate-100 dark:border-slate-800 pt-2">
                                                                 <thead>
@@ -320,19 +399,55 @@ export function DetailViewDialog({ isOpen, onOpenChange, item }: any) {
                                                     <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 pt-3 mt-3 border-t text-center">
                                                         <div className="flex flex-col">
                                                             <div className="text-[10px] uppercase font-black text-muted-foreground mb-0.5">Quantity</div>
-                                                            <div className="text-sm font-bold font-mono">{item.quantity} <span className="text-[10px] font-sans text-muted-foreground">L</span></div>
+                                                            <div className="text-sm font-bold font-mono">{item.delivered_quantity || item.quantity || item.ordered_quantity} <span className="text-[10px] font-sans text-muted-foreground">L</span></div>
                                                         </div>
                                                         <div className="flex flex-col">
                                                             <div className="text-[10px] uppercase font-black text-muted-foreground mb-0.5">Rate</div>
-                                                            <div className="text-sm font-bold font-mono">Rs.{Number(item.purchase_price_per_unit || 0).toLocaleString()}</div>
+                                                            <div className="text-sm font-bold font-mono">Rs.{Number(item.purchase_price_per_unit || item.rate_per_liter || 0).toLocaleString()}</div>
                                                         </div>
                                                         <div className="flex flex-col items-end flex-grow">
                                                             <div className="text-[10px] uppercase font-black text-muted-foreground mb-0.5">Total Amount</div>
-                                                            <div className="text-base font-black text-primary font-mono leading-none">Rs.{Number(item.total_amount || 0).toLocaleString()}</div>
+                                                            <div className="text-base font-black text-primary font-mono leading-none">Rs.{Number(item.delivered_amount || item.total_amount || 0).toLocaleString()}</div>
                                                         </div>
                                                     </div>
                                                 </div>
                                             )}
+                                        </div>
+                                    )}
+
+                                    {isCardRecord && (
+                                        <div className="space-y-4">
+                                            <div className="flex justify-between items-center border-b pb-2 border-dashed border-slate-200 dark:border-slate-800">
+                                                <span className="text-[10px] font-bold uppercase text-muted-foreground">Card Details</span>
+                                                <Badge variant="outline" className="text-[10px] bg-white dark:bg-slate-950 px-2 py-0 h-5">
+                                                    {item.bank_cards?.card_name || item.supplier_cards?.card_name || item.card_type}
+                                                </Badge>
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-3">
+                                                <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border text-center shadow-sm">
+                                                    <div className="text-[9px] text-muted-foreground uppercase font-black">Hold Amount</div>
+                                                    <div className="text-base font-mono font-bold">Rs. {Number(item.hold_amount || 0).toLocaleString()}</div>
+                                                </div>
+                                                <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border text-center shadow-sm border-emerald-100 bg-emerald-50/10">
+                                                    <div className="text-[9px] text-emerald-600 uppercase font-black">Net Amount</div>
+                                                    <div className="text-base font-mono font-bold text-emerald-600">Rs. {Number(item.net_amount || 0).toLocaleString()}</div>
+                                                </div>
+                                            </div>
+                                            <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border shadow-sm space-y-2">
+                                                <div className="flex justify-between text-xs">
+                                                    <span className="text-muted-foreground">Tax Deduction:</span>
+                                                    <span className="font-bold text-rose-600">-Rs. {Number(item.tax_amount || 0).toLocaleString()} ({item.tax_percentage}%)</span>
+                                                </div>
+                                                <div className="flex justify-between text-xs border-t pt-2">
+                                                    <span className="text-muted-foreground">Current Status:</span>
+                                                    <Badge className={cn(
+                                                        "text-[9px] uppercase font-bold px-2 h-5",
+                                                        item.status === 'released' ? "bg-emerald-500" : "bg-amber-500"
+                                                    )}>
+                                                        {item.status || 'PENDING'}
+                                                    </Badge>
+                                                </div>
+                                            </div>
                                         </div>
                                     )}
 
@@ -381,9 +496,41 @@ export function DetailViewDialog({ isOpen, onOpenChange, item }: any) {
                                         <div className="space-y-2.5 pt-1">
                                             <div className="flex justify-between items-center">
                                                 <span className="font-bold uppercase text-muted-foreground text-[9px]">Paid</span>
-                                                <span className="font-mono font-black text-emerald-600 text-sm">
-                                                    Rs.{Number(item.paid_amount || item.amount || item.sale_amount || 0).toLocaleString()}
-                                                </span>
+                                                <div className="flex items-center gap-2">
+                                                    {isEditing ? (
+                                                        <div className="flex items-center gap-1">
+                                                            <Input 
+                                                                className="h-7 w-24 text-right text-xs px-2 font-mono font-bold"
+                                                                type="number"
+                                                                value={editValue}
+                                                                onChange={(e) => setEditValue(e.target.value)}
+                                                                autoFocus
+                                                            />
+                                                            <Button size="icon" variant="ghost" className="h-7 w-7 text-emerald-600" onClick={handleSave} disabled={isSaving}>
+                                                                {isSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                                                            </Button>
+                                                            <Button size="icon" variant="ghost" className="h-7 w-7 text-rose-600" onClick={() => setIsEditing(false)} disabled={isSaving}>
+                                                                <X className="h-3 w-3" />
+                                                            </Button>
+                                                        </div>
+                                                    ) : (
+                                                        <>
+                                                            <span className="font-mono font-black text-emerald-600 text-sm">
+                                                                Rs.{Number(item.paid_amount || item.cash_payment_amount || item.delivered_amount || item.amount || item.sale_amount || 0).toLocaleString()}
+                                                            </span>
+                                                            {isProductSale && (
+                                                                <Button 
+                                                                    variant="ghost" 
+                                                                    size="icon" 
+                                                                    className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity print:hidden"
+                                                                    onClick={handleEditClick}
+                                                                >
+                                                                    <Edit2 className="h-3 w-3 text-muted-foreground hover:text-primary" />
+                                                                </Button>
+                                                            )}
+                                                        </>
+                                                    )}
+                                                </div>
                                             </div>
                                             {isPurchase && (
                                                 <div className="flex justify-between items-center border-t border-dashed pt-2.5">
@@ -412,7 +559,7 @@ export function DetailViewDialog({ isOpen, onOpenChange, item }: any) {
                                             <div className="text-[10px] uppercase font-black tracking-widest opacity-70">Total Amount</div>
                                             <div className="text-4xl font-black tracking-tighter">
                                                 <span className="text-lg mr-1 font-bold opacity-80">Rs.</span>
-                                                {(item.sale_amount || item.total_amount || item.amount || item.total_purchases || 0).toLocaleString()}
+                                                {(item.sale_amount || item.revenue || item.total_amount || item.amount || item.total_purchases || 0).toLocaleString()}
                                             </div>
                                             <div className="text-[9px] font-medium opacity-50 italic">Digital Receipt Token Generated</div>
                                         </div>
@@ -424,15 +571,8 @@ export function DetailViewDialog({ isOpen, onOpenChange, item }: any) {
 
                     <CardFooter className="bg-slate-50 dark:bg-slate-900/50 p-4 sm:p-6 border-t gap-4 print-hidden flex-shrink-0">
                         <Button
-                            variant="outline"
-                            className="flex-1 h-11 rounded-xl font-bold border-slate-200 dark:border-slate-800 shadow-sm hover:bg-white hover:text-primary dark:hover:bg-slate-800 dark:hover:text-primary transition-all active:scale-95 text-slate-700 dark:text-slate-300"
-                            onClick={() => window.print()}
-                        >
-                            <Printer className="mr-2 h-4 w-4" /> Print Voucher
-                        </Button>
-                        <Button
                             variant="default"
-                            className="flex-1 h-11 rounded-xl font-black shadow-lg shadow-primary/20 transition-all active:scale-95 hover:brightness-110 hover:text-white"
+                            className="w-full h-11 rounded-xl font-black shadow-lg shadow-primary/20 transition-all active:scale-95 hover:brightness-110 hover:text-white"
                             onClick={() => onOpenChange(false)}
                         >
                             Close Details

@@ -463,15 +463,10 @@ export async function getPurchaseSummary(filters?: { date_from?: string; date_to
     const { data: settledData } = await delQuery
     const totalSettled = settledData?.reduce((acc, d) => acc + Number(d.delivered_amount || 0), 0) || 0
 
-    // 3. New Specific Hold Stats
-    let holdQuery = supabase
+    // 3. New Specific Hold Stats — show ALL holds regardless of date filter
+    const { data: holdData } = await supabase
         .from("po_hold_records")
         .select("hold_amount, status")
-
-    if (filters?.date_from) holdQuery = holdQuery.gte("created_at", filters.date_from)
-    if (filters?.date_to) holdQuery = holdQuery.lte("created_at", filters.date_to)
-
-    const { data: holdData } = await holdQuery
 
     const totalOnHold = holdData?.filter(h => h.status === 'on_hold').reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
     const totalReleased = holdData?.filter(h => h.status === 'released').reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
@@ -586,7 +581,8 @@ export async function setPOHoldExpectedDate(holdRecordId: string, poId: string, 
 export async function getAllHolds(filters?: { date_from?: string; date_to?: string }) {
     const supabase = await createClient()
 
-    let query = supabase
+    // Show ALL holds by default — no date filtering applied
+    const { data, error } = await supabase
         .from("po_hold_records")
         .select(`
             id,
@@ -607,11 +603,6 @@ export async function getAllHolds(filters?: { date_from?: string; date_to?: stri
             )
         `)
         .order("created_at", { ascending: false })
-
-    if (filters?.date_from) query = query.gte("created_at", filters.date_from)
-    if (filters?.date_to) query = query.lte("created_at", filters.date_to)
-
-    const { data, error } = await query
 
     if (error) throw error
     return data

@@ -209,12 +209,42 @@ function exportToCSV(activeTab: string, reportData: any, dateRangeStr: string, f
             })
             csvContent += `TOTAL PENDING: ${pendingTotal},,TOTAL RECEIVED: ${receivedTotal},,\n`
         }
-    } else if (activeTab === "balance-ledger" && reportData.transactions) {
-        csvContent += "BALANCE LEDGER REPORT\n\n"
-        const headers = ["Date", "Entity", "Description", "Balance Before", "Amount", "Balance After", "Type"]
+    } else if (activeTab === "sales-report" && Array.isArray(reportData)) {
+        csvContent += "SALES REPORT\n"
+        csvContent += `Period,${dateRangeStr}\n`
+        csvContent += `Category,${categoryLabel}\n`
+        csvContent += `Generated,${format(new Date(), "PPpp")}\n\n`
+        const headers = ["Date", "Description", "Category", "Quantity", "Rate", "Total", "Profit", "Payment"]
         csvContent += headers.join(",") + "\n"
-        reportData.transactions.forEach((t: any) => {
-            const row = [ t.display_date, `"${t.display_entity}"`, `"${t.display_desc}"`, t.balance_before, `${t.is_credit ? '+' : '-'}${t.amount}`, t.balance_after, t.is_credit ? "Inflow" : "Outflow" ]
+        reportData.forEach((s: any) => {
+            const row = [ 
+                s.date, 
+                `"${s.description}"`, 
+                s.type, // 'Fuel' or 'Lubricant'
+                s.quantity, 
+                s.rate, 
+                s.total, 
+                s.profit, 
+                s.payment 
+            ]
+            csvContent += row.join(",") + "\n"
+        })
+    } else if (activeTab === "bank-card-report" && Array.isArray(reportData)) {
+        csvContent += "BANK CARD REPORT\n"
+        csvContent += `Period,${dateRangeStr}\n`
+        csvContent += `Generated,${format(new Date(), "PPpp")}\n\n`
+        const headers = ["Date", "Card Name", "Bank", "Hold Amount", "Tax", "Net Amount", "Status"]
+        csvContent += headers.join(",") + "\n"
+        reportData.forEach((r: any) => {
+            const row = [ 
+                r.sale_date, 
+                `"${r.bank_cards?.card_name || 'Bank Card'}"`, 
+                `"${r.bank_cards?.bank_accounts?.bank_name || 'N/A'}"`, 
+                r.hold_amount, 
+                r.tax_amount, 
+                r.net_amount, 
+                r.status 
+            ]
             csvContent += row.join(",") + "\n"
         })
     } else {
@@ -555,6 +585,49 @@ function exportToPDF(activeTab: string, reportData: any, dateRangeStr: string, s
                 margin: { left: 14, right: 14 }
             })
         }
+    } else if (activeTab === "sales-report" && Array.isArray(reportData)) {
+        doc.setFontSize(11)
+        doc.setFont("helvetica", "bold")
+        doc.text("Sales Transactions Log", 14, nextY)
+        autoTable(doc, {
+            startY: nextY + 3,
+            head: [["Date", "Description", "Category", "Qty", "Total", "Profit"]],
+            body: reportData.map((s: any) => [
+                format(new Date(s.date), "dd MMM"),
+                s.description,
+                s.type,
+                s.quantity.toLocaleString(),
+                s.total.toLocaleString(),
+                s.profit.toLocaleString()
+            ]),
+            theme: "grid",
+            headStyles: { fillColor: [41, 128, 185], textColor: 255 },
+            styles: { fontSize: 8, cellPadding: 2 },
+            columnStyles: { 3: { halign: "right" }, 4: { halign: "right" }, 5: { halign: "right" } },
+            margin: { left: 14, right: 14 }
+        })
+    } else if (activeTab === "bank-card-report" && Array.isArray(reportData)) {
+        doc.setFontSize(11)
+        doc.setFont("helvetica", "bold")
+        doc.text("Bank Card Settlement Log", 14, nextY)
+        autoTable(doc, {
+            startY: nextY + 3,
+            head: [["Date", "Card", "Bank", "Hold", "Tax", "Net", "Status"]],
+            body: reportData.map((r: any) => [
+                format(new Date(r.sale_date), "dd MMM"),
+                r.bank_cards?.card_name || "Card",
+                r.bank_cards?.bank_accounts?.bank_name || "N/A",
+                r.hold_amount.toLocaleString(),
+                r.tax_amount.toLocaleString(),
+                r.net_amount.toLocaleString(),
+                r.status
+            ]),
+            theme: "grid",
+            headStyles: { fillColor: [41, 128, 185], textColor: 255 },
+            styles: { fontSize: 8, cellPadding: 2 },
+            columnStyles: { 3: { halign: "right" }, 4: { halign: "right" }, 5: { halign: "right" } },
+            margin: { left: 14, right: 14 }
+        })
     }
 
     doc.save(`report-${activeTab}-${getTodayPKT()}.pdf`)

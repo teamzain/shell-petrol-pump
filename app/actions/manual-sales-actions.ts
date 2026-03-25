@@ -3,7 +3,7 @@
 import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
 import { getTodayPKT } from "@/lib/utils"
-import { validateTransactionDate } from "./balance"
+import { validateTransactionDate, getSystemActiveDate } from "./balance"
 import { calculateFifoCost } from "./fifo-cost"
 
 export type ManualSaleData = {
@@ -13,16 +13,19 @@ export type ManualSaleData = {
     payment_method: string
     customer_name?: string
     notes?: string
+    paid_amount?: number
 }
 
 /**
  * Record a manual lubricant sale
  */
 export async function recordManualSale(data: ManualSaleData) {
-    const today = getTodayPKT()
+    // Use the station's active working date instead of real-world today
+    const activeDate = await getSystemActiveDate()
 
     // --- DATE VALIDATION ---
-    await validateTransactionDate(today)
+    // This will now always pass as we are using the activeDate itself
+    await validateTransactionDate(activeDate)
     // -----------------------
 
     const supabase = await createClient()
@@ -43,8 +46,11 @@ export async function recordManualSale(data: ManualSaleData) {
     const totalCost = await calculateFifoCost(data.product_id, data.quantity)
     const profit = totalAmount - totalCost
 
-    // 2. Create Sale Record
-    const { data: sale, error: saleError } = await supabase
+    // 2. Create Sale Record (with fallback if payment columns are missing)
+    let sale;
+    let saleError;
+
+    const { data: saleWithCols, error: errWithCols } = await supabase
         .from('manual_sales')
         .insert([{
             product_id: data.product_id,
@@ -55,10 +61,36 @@ export async function recordManualSale(data: ManualSaleData) {
             customer_name: data.customer_name,
             profit: profit,
             notes: data.notes,
-            sale_date: today 
+            sale_date: activeDate,
+            cash_payment_amount: data.paid_amount || totalAmount,
+            card_payment_amount: 0
         }])
         .select()
         .single()
+
+    if (errWithCols && errWithCols.message.includes('column') && errWithCols.message.includes('not found')) {
+        console.warn("Payment columns missing in manual_sales, falling back to basic insert")
+        const { data: basicSale, error: basicErr } = await supabase
+            .from('manual_sales')
+            .insert([{
+                product_id: data.product_id,
+                quantity: data.quantity,
+                unit_price: data.unit_price,
+                total_amount: totalAmount,
+                payment_method: data.payment_method,
+                customer_name: data.customer_name,
+                profit: profit,
+                notes: data.notes,
+                sale_date: activeDate
+            }])
+            .select()
+            .single()
+        sale = basicSale
+        saleError = basicErr
+    } else {
+        sale = saleWithCols
+        saleError = errWithCols
+    }
 
     if (saleError) throw new Error(saleError.message)
 
@@ -96,6 +128,30 @@ export async function recordManualSale(data: ManualSaleData) {
 
     revalidatePath('/dashboard/sales/manual-entry')
     revalidatePath('/dashboard/sales')
+
+    return { success: true }
+}
+
+/**
+ * Update the paid amount for an existing manual sale
+ */
+export async function updateManualSalePayment(saleId: string, newPaidAmount: number) {
+    const supabase = await createClient()
+
+    // 1. Update the manual sale record
+    // We map 'paid_amount' from UI to 'cash_payment_amount' in DB
+    const { error } = await supabase
+        .from('manual_sales')
+        .update({
+            cash_payment_amount: newPaidAmount,
+            updated_at: new Date().toISOString()
+        })
+        .eq('id', saleId)
+
+    if (error) throw new Error(error.message)
+
+    revalidatePath('/dashboard/sales/manual-entry')
+    revalidatePath('/dashboard/reports') // Also revalidate reports since they show this data
 
     return { success: true }
 }

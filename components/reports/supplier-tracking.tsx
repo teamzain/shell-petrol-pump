@@ -128,6 +128,7 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
     const [transactions, setTransactions] = useState<any[]>([])
     const [holds, setHolds] = useState<any[]>([])
     const [accountBalance, setAccountBalance] = useState<number | null>(null)
+    const [holdFilter, setHoldFilter] = useState<"all" | "pending" | "released">("all")
 
     const isCombined = !supplier
 
@@ -213,17 +214,60 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
             if (supplier) {
                 holdsQuery = holdsQuery.eq("supplier_cards.supplier_id", supplier.id)
             }
+            
+            // Add date filter to respect the selected period
+            holdsQuery = holdsQuery.gte("sale_date", fromDate).lte("sale_date", toDate)
 
             const { data: holdsData } = await holdsQuery
             
-            let filtered = holdsData || []
+            let cardHolds = (holdsData || []).map((h: any) => ({
+                ...h,
+                _source: "card" as const,
+                _normalized_status: h.status === "released" ? "released" : "pending"
+            }))
             if (supplier) {
-                // Filter client-side to ensure only this supplier's cards are included
-                filtered = filtered.filter((h: any) => h.supplier_cards?.supplier_id === supplier.id)
+                cardHolds = cardHolds.filter((h: any) => h.supplier_cards?.supplier_id === supplier.id)
             }
-            setHolds(filtered)
 
-            setHolds(filtered)
+            // 5. Fetch PO hold records (delivery discrepancy holds)
+            let poHoldsQuery = supabase
+                .from("po_hold_records")
+                .select(`
+                    *,
+                    purchase_orders!inner (
+                        po_number,
+                        supplier_id,
+                        suppliers!inner (name)
+                    )
+                `)
+                .order("created_at", { ascending: false })
+
+            if (supplier) {
+                poHoldsQuery = poHoldsQuery.eq("purchase_orders.supplier_id", supplier.id)
+            }
+
+            const { data: poHoldsData } = await poHoldsQuery
+
+            let poHolds = (poHoldsData || []).map((h: any) => ({
+                ...h,
+                _source: "po" as const,
+                _normalized_status: h.status === "released" ? "released" : "pending",
+                // Map PO hold fields to match card hold display fields
+                sale_date: h.created_at,
+                supplier_cards: {
+                    card_name: h.purchase_orders?.po_number || "PO Hold",
+                    supplier_id: h.purchase_orders?.supplier_id,
+                    suppliers: h.purchase_orders?.suppliers
+                },
+                net_amount: h.hold_amount,
+                tax_amount: 0
+            }))
+            if (supplier) {
+                poHolds = poHolds.filter((h: any) => h.purchase_orders?.supplier_id === supplier.id)
+            }
+
+            const allHolds = [...cardHolds, ...poHolds]
+            setHolds(allHolds)
         } catch (err) {
             console.error("Error fetching supplier ledger:", err)
         } finally {
@@ -249,9 +293,9 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
     const totalDeducted = transactions.filter(t => t.transaction_type === "debit").reduce((s, t) => s + Number(t.amount), 0)
     const netPeriodBalance = totalPaid - totalDeducted
 
-    // Card hold summaries
-    const pendingHolds = holds.filter(h => h.status === "pending")
-    const releasedHolds = holds.filter(h => h.status === "received")
+    // Card + PO hold summaries - use _normalized_status for unified filtering
+    const pendingHolds = holds.filter(h => h._normalized_status !== "released")
+    const releasedHolds = holds.filter(h => h._normalized_status === "released")
     const totalOnHold = pendingHolds.reduce((s, h) => s + Number(h.hold_amount || 0), 0)
     const totalReleased = releasedHolds.reduce((s, h) => s + Number(h.hold_amount || 0), 0)
 
@@ -508,15 +552,44 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
                 <TabsContent value="holds" className="mt-4">
             {/* ── Card Holds & Releases ── */}
             <div className="space-y-2">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                     <ShieldAlert className="h-4 w-4 text-amber-600" />
                     <span className="text-xs font-black uppercase tracking-widest text-slate-700">Card Payment Holds & Releases</span>
                     <Badge variant="secondary" className="text-[10px] h-4 px-2">{holds.length}</Badge>
-                    {totalOnHold > 0 && (
-                        <Badge className="bg-amber-100 text-amber-700 border border-amber-200 text-[10px] h-5 px-2 ml-auto">
-                            On Hold: Rs. {totalOnHold.toLocaleString()}
-                        </Badge>
-                    )}
+                    
+                    {/* Filter Buttons */}
+                    <div className="flex items-center gap-1 ml-auto border rounded-lg p-0.5 bg-slate-100">
+                        <button
+                            onClick={() => setHoldFilter("all")}
+                            className={`text-[10px] font-bold px-3 py-1 rounded-md transition-all ${
+                                holdFilter === "all"
+                                    ? "bg-white text-slate-800 shadow-sm"
+                                    : "text-slate-500 hover:text-slate-700"
+                            }`}
+                        >
+                            All ({holds.length})
+                        </button>
+                        <button
+                            onClick={() => setHoldFilter("pending")}
+                            className={`text-[10px] font-bold px-3 py-1 rounded-md transition-all ${
+                                holdFilter === "pending"
+                                    ? "bg-amber-500 text-white shadow-sm"
+                                    : "text-slate-500 hover:text-slate-700"
+                            }`}
+                        >
+                            On Hold ({pendingHolds.length})
+                        </button>
+                        <button
+                            onClick={() => setHoldFilter("released")}
+                            className={`text-[10px] font-bold px-3 py-1 rounded-md transition-all ${
+                                holdFilter === "released"
+                                    ? "bg-emerald-500 text-white shadow-sm"
+                                    : "text-slate-500 hover:text-slate-700"
+                            }`}
+                        >
+                            Released ({releasedHolds.length})
+                        </button>
+                    </div>
                 </div>
 
                 <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
@@ -542,16 +615,16 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {holds.map((hold) => {
-                                        const isReceived = hold.status === "received"
+                                    {(holdFilter === "all" ? holds : holdFilter === "released" ? releasedHolds : pendingHolds).map((hold) => {
+                                        const isReleased = hold._normalized_status === "released"
                                         const saleDate = hold.sale_date || hold.created_at
                                         const now = new Date()
                                         const holdStart = new Date(hold.created_at)
 
                                         // Days calculation
                                         let daysPending: number
-                                        if (isReceived && hold.released_at) {
-                                            daysPending = differenceInDays(new Date(hold.released_at), holdStart)
+                                        if (isReleased && (hold.released_at || hold.actual_return_date)) {
+                                            daysPending = differenceInDays(new Date(hold.released_at || hold.actual_return_date), holdStart)
                                         } else {
                                             daysPending = differenceInDays(now, holdStart)
                                         }
@@ -559,7 +632,7 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
                                         // Urgency color for pending holds
                                         let urgencyClass = "bg-blue-100 text-blue-700 border-blue-200"
                                         let urgencyText = `${daysPending}d pending`
-                                        if (!isReceived) {
+                                        if (!isReleased) {
                                             if (daysPending >= 14) {
                                                 urgencyClass = "bg-red-100 text-red-700 border-red-200"
                                                 urgencyText = `${daysPending}d — LONG HOLD`
@@ -572,11 +645,14 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
                                         const cardName = hold.supplier_cards?.card_name || "—"
 
                                         return (
-                                            <TableRow key={hold.id} className={`transition-colors ${isReceived ? "bg-emerald-50/30" : "hover:bg-amber-50/30"}`}>
+                                            <TableRow key={hold.id} className={`transition-colors ${isReleased ? "bg-emerald-50/30" : "hover:bg-amber-50/30"}`}>
                                                 <TableCell className="text-xs font-bold text-primary whitespace-nowrap">
                                                     <div className="flex items-center gap-1.5">
                                                         <CreditCard className="h-3.5 w-3.5 text-slate-400" />
                                                         {cardName}
+                                                        {hold._source === "po" && (
+                                                            <Badge variant="outline" className="text-[8px] px-1 py-0 h-3.5 bg-blue-50 text-blue-600 border-blue-200 ml-1">PO</Badge>
+                                                        )}
                                                     </div>
                                                 </TableCell>
                                                 {isCombined && (
@@ -597,7 +673,7 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
                                                     Rs. {Number(hold.net_amount || hold.hold_amount || 0).toLocaleString()}
                                                 </TableCell>
                                                 <TableCell className="text-center whitespace-nowrap">
-                                                    {!isReceived ? (
+                                                    {!isReleased ? (
                                                         <Badge variant="outline" className={`text-[10px] font-bold px-2 py-0 h-5 flex items-center gap-1 justify-center ${urgencyClass}`}>
                                                             <Clock className="h-3 w-3" />
                                                             {urgencyText}
@@ -610,9 +686,9 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
                                                     )}
                                                 </TableCell>
                                                 <TableCell className="text-center whitespace-nowrap">
-                                                    {isReceived ? (
+                                                    {isReleased ? (
                                                         <Badge className="bg-emerald-100 text-emerald-700 border border-emerald-200 text-[10px] font-bold h-5 px-2">
-                                                            <ShieldCheck className="h-3 w-3 mr-1" /> Received
+                                                            <ShieldCheck className="h-3 w-3 mr-1" /> Released
                                                         </Badge>
                                                     ) : (
                                                         <Badge className="bg-amber-100 text-amber-700 border border-amber-200 text-[10px] font-bold h-5 px-2">
@@ -621,9 +697,9 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
                                                     )}
                                                 </TableCell>
                                                 <TableCell className="text-xs whitespace-nowrap text-slate-600">
-                                                    {isReceived && hold.released_at ? (
+                                                    {isReleased && (hold.released_at || hold.actual_return_date) ? (
                                                         <span className="text-emerald-600 font-medium">
-                                                            {format(new Date(hold.released_at), "dd MMM yyyy")}
+                                                            {format(new Date(hold.released_at || hold.actual_return_date), "dd MMM yyyy")}
                                                         </span>
                                                     ) : (
                                                         <span className="text-muted-foreground italic">Pending</span>
@@ -645,7 +721,7 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
                                     </div>
                                 </div>
                                 <div className="px-4 py-2.5 text-center">
-                                    <div className="text-[9px] font-black uppercase text-emerald-600 tracking-wider">Total Received</div>
+                                    <div className="text-[9px] font-black uppercase text-emerald-600 tracking-wider">Total Released</div>
                                     <div className="font-mono font-black text-sm text-emerald-700">
                                         Rs. {totalReleased.toLocaleString()}
                                         <span className="text-[10px] font-medium text-muted-foreground ml-1">({releasedHolds.length} transaction{releasedHolds.length !== 1 ? "s" : ""})</span>
@@ -774,13 +850,28 @@ export function SupplierPerformanceReport({ filters, onDetailClick, onDataLoaded
                         .select("hold_amount, status, supplier_cards!inner(supplier_id)")
                         .in("supplier_cards.supplier_id", supplierIds)
                         .not("supplier_card_id", "is", null)
+                        .gte("sale_date", fromDate)
+                        .lte("sale_date", toDate)
+
+                    // Also fetch PO hold records
+                    const { data: poHoldsData } = await supabase
+                        .from("po_hold_records")
+                        .select("hold_amount, status, purchase_orders!inner(supplier_id)")
+                        .in("purchase_orders.supplier_id", supplierIds)
 
                     let holdTotal = 0
                     let releasedTotal = 0
+                    // Card holds
                     for (const h of (holdsData || [])) {
                         const amt = Number(h.hold_amount || 0)
-                        if (h.status === "pending") holdTotal += amt
-                        else if (h.status === "received") releasedTotal += amt
+                        if (h.status !== "released") holdTotal += amt
+                        if (h.status === "released") releasedTotal += amt
+                    }
+                    // PO holds
+                    for (const h of (poHoldsData || [])) {
+                        const amt = Number(h.hold_amount || 0)
+                        if (h.status === "on_hold") holdTotal += amt
+                        if (h.status === "released") releasedTotal += amt
                     }
                     setTotalOnHold(holdTotal)
                     setTotalReleased(releasedTotal)

@@ -31,7 +31,7 @@ export function ExpenseBreakdownReport({ filters, onDetailClick, onDataLoaded }:
                 const toDate = format(filters.dateRange.to, "yyyy-MM-dd")
 
                 let query = supabase
-                    .from("expenses")
+                    .from("daily_expenses")
                     .select("*, expense_categories(category_name)")
                     .gte("expense_date", fromDate)
                     .lte("expense_date", toDate)
