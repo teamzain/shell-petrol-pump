@@ -197,7 +197,7 @@ export default function NozzleSettingsPage() {
                     }
                 }}>
                     <DialogTrigger asChild>
-                        <Button className="gap-2" onClick={openAddDialog}>
+                        <Button className="gap-2 shadow-sm border-2 border-primary/10" onClick={openAddDialog}>
                             <Plus className="w-4 h-4" />
                             Add Nozzle
                         </Button>

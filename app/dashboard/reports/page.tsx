@@ -58,6 +58,7 @@ import { ExpenseBreakdownReport } from "@/components/reports/expense-breakdown"
 import { ProfitLossReport } from "@/components/reports/profit-loss-report"
 import { SalesReport } from "@/components/reports/sales-report"
 import { BankCardReport } from "@/components/reports/bank-card-report"
+import { DailyRecapReport } from "@/components/reports/daily-recap"
 
 import {
     Dialog,
@@ -93,7 +94,7 @@ export default function ReportsPage() {
 
     const supabase = createClient()
 
-    const [activeTab, setActiveTab] = useState("profit-loss")
+    const [activeTab, setActiveTab] = useState("daily-recap")
     const [reportData, setReportData] = useState<any>(null)
     const [isRefreshing, setIsRefreshing] = useState(false)
     const [isFiltersChanging, setIsFiltersChanging] = useState(false)
@@ -102,6 +103,7 @@ export default function ReportsPage() {
     const [selectedItem, setSelectedItem] = useState<any>(null)
     const [isDetailOpen, setIsDetailOpen] = useState(false)
     const [baseDate, setBaseDate] = useState<Date>(new Date())
+    const [isInitializing, setIsInitializing] = useState(true)
 
     // Fetch active date, suppliers & products
     useEffect(() => {
@@ -116,6 +118,8 @@ export default function ReportsPage() {
                 }))
             } catch (err) {
                 console.error("Error setting active date: ", err)
+            } finally {
+                setIsInitializing(false)
             }
         }
         loadInitialData()
@@ -400,6 +404,9 @@ export default function ReportsPage() {
                     <div className="relative">
                         <div className="flex items-center justify-between mb-4 overflow-x-auto pb-2 scrollbar-hide">
                             <TabsList className="bg-muted/50 p-1 h-12">
+                                <TabsTrigger value="daily-recap" className="px-6 data-[state=active]:bg-background data-[state=active]:shadow-sm">
+                                    <FileText className="mr-2 h-4 w-4" /> Daily Recap
+                                </TabsTrigger>
                                 <TabsTrigger value="profit-loss" className="px-6 data-[state=active]:bg-background data-[state=active]:shadow-sm">
                                     <TrendingUp className="mr-2 h-4 w-4" /> Profit & Loss
                                 </TabsTrigger>
@@ -429,6 +436,16 @@ export default function ReportsPage() {
                             </div>
                         )}
 
+                        <TabsContent value="daily-recap" className="animate-in fade-in-50 duration-500">
+                            {isInitializing ? (
+                                <div className="flex flex-col items-center justify-center min-h-[400px]">
+                                    <BrandLoader size="lg" className="mb-4" />
+                                    <p className="text-muted-foreground animate-pulse font-black uppercase tracking-widest text-[10px]">Synchronizing Active Date...</p>
+                                </div>
+                            ) : (
+                                <DailyRecapReport date={filters.dateRange.from} />
+                            )}
+                        </TabsContent>
 
                         <TabsContent value="profit-loss" className="animate-in fade-in-50 duration-500">
                             <ProfitLossReport filters={filters} onDataLoaded={setReportData} />

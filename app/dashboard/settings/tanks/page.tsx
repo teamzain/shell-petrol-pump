@@ -13,10 +13,22 @@ import { Label } from "@/components/ui/label"
 import { useToast } from "@/components/ui/use-toast"
 import { BrandLoader } from "@/components/ui/brand-loader"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Badge } from "@/components/ui/badge"
 import {
     Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger
 } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+    AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 
 export default function TanksPage() {
     const { toast } = useToast()
@@ -108,69 +120,106 @@ export default function TanksPage() {
         setIsDialogOpen(true)
     }
 
-    if (loading) return <div className="h-screen flex items-center justify-center"><BrandLoader /></div>
-
     return (
-        <div className="max-w-6xl mx-auto space-y-6">
-            <div className="flex items-center justify-between">
+        <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div>
-                    <h1 className="text-3xl font-black tracking-tighter uppercase italic">Fuel <span className="text-primary">Tanks</span></h1>
+                    <h1 className="text-2xl font-bold tracking-tight">Tank Configuration</h1>
                     <p className="text-muted-foreground">Manage storage tanks, capacities, and safety dry levels.</p>
                 </div>
-                <Button onClick={openAddDialog} className="shadow-lg border-2 border-primary/20">
-                    <Plus className="mr-2 h-4 w-4" /> Add New Tank
+                <Button onClick={openAddDialog} className="gap-2 shadow-sm border-2 border-primary/10">
+                    <Plus className="w-4 h-4" /> Add New Tank
                 </Button>
             </div>
 
-            <div className="grid md:grid-cols-3 gap-6">
-                {tanks.map(tank => (
-                    <Card key={tank.id} className="relative overflow-hidden group border-2 hover:border-primary/50 transition-all shadow-sm">
-                        <div className="absolute top-0 right-0 p-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <Button size="icon" variant="ghost" className="h-8 w-8 bg-white/80 shadow-sm" onClick={() => openEditDialog(tank)}>
-                                <Edit2 className="h-3.5 w-3.5" />
-                            </Button>
-                            <Button size="icon" variant="ghost" className="h-8 w-8 bg-white/80 shadow-sm text-red-500 hover:text-red-700" onClick={() => handleDelete(tank.id)}>
-                                <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
+            <Card>
+                <CardHeader>
+                    <CardTitle>Configured Storage Tanks</CardTitle>
+                    <CardDescription>
+                        A list of all fuel storage tanks in your station. Total Capacity: {tanks.reduce((acc, t) => acc + Number(t.capacity), 0).toLocaleString()} L
+                    </CardDescription>
+                </CardHeader>
+                <CardContent>
+                    {loading ? (
+                        <div className="flex justify-center p-8">
+                            <BrandLoader />
                         </div>
-                        <CardHeader className="pb-2">
-                            <div className="flex items-center gap-2 mb-1">
-                                <Database className="h-5 w-5 text-primary" />
-                                <CardTitle className="tracking-tight">{tank.name}</CardTitle>
-                            </div>
-                            <CardDescription>{tank.products?.name || "No Product Linked"}</CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="space-y-4">
-                                <div className="relative h-6 w-full bg-muted rounded-full overflow-hidden border">
-                                    <div
-                                        className={cn(
-                                            "h-full transition-all duration-1000",
-                                            (tank.current_level / tank.capacity) < 0.2 ? "bg-red-500" : "bg-blue-500"
-                                        )}
-                                        style={{ width: `${(tank.current_level / tank.capacity) * 100}%` }}
-                                    />
-                                </div>
-                                <div className="flex justify-between text-sm">
-                                    <div>
-                                        <span className="text-muted-foreground block text-[10px] uppercase font-bold">Current</span>
-                                        <span className="font-black text-lg">{tank.current_level.toLocaleString()} L</span>
-                                    </div>
-                                    <div className="text-right">
-                                        <span className="text-muted-foreground block text-[10px] uppercase font-bold">Capacity</span>
-                                        <span className="font-bold">{tank.capacity.toLocaleString()} L</span>
-                                    </div>
-                                </div>
-                                {tank.current_level < tank.dry_level && (
-                                    <div className="flex items-center gap-2 p-2 bg-red-50 rounded border border-red-100 text-red-700 text-xs font-bold animate-pulse">
-                                        <AlertTriangle className="h-4 w-4" /> DRY LEVEL WARNING
-                                    </div>
-                                )}
-                            </div>
-                        </CardContent>
-                    </Card>
-                ))}
-            </div>
+                    ) : tanks.length === 0 ? (
+                        <div className="text-center py-12 text-muted-foreground">
+                            <Database className="w-12 h-12 mx-auto mb-4 opacity-20" />
+                            <p>No tanks configured yet.</p>
+                        </div>
+                    ) : (
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead>Tank Name</TableHead>
+                                    <TableHead>Linked Product</TableHead>
+                                    <TableHead className="text-right">Capacity</TableHead>
+                                    <TableHead className="text-right">Current Stock</TableHead>
+                                    <TableHead className="text-right">Dry Level</TableHead>
+                                    <TableHead>Status</TableHead>
+                                    <TableHead className="text-right">Actions</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {tanks.map((tank) => (
+                                    <TableRow key={tank.id}>
+                                        <TableCell className="font-medium">{tank.name}</TableCell>
+                                        <TableCell>{tank.products?.name || "No Product Linked"}</TableCell>
+                                        <TableCell className="text-right font-mono">{tank.capacity.toLocaleString()} L</TableCell>
+                                        <TableCell className="text-right font-mono">
+                                            <span className={cn(
+                                                "font-black",
+                                                tank.current_level < tank.dry_level ? "text-red-500" : "text-primary"
+                                            )}>
+                                                {tank.current_level.toLocaleString()} L
+                                            </span>
+                                        </TableCell>
+                                        <TableCell className="text-right text-muted-foreground font-mono">{tank.dry_level.toLocaleString()} L</TableCell>
+                                        <TableCell>
+                                            <Badge variant={tank.current_level < tank.dry_level ? "destructive" : "default"}>
+                                                {tank.current_level < tank.dry_level ? "Low Level" : "Healthy"}
+                                            </Badge>
+                                        </TableCell>
+                                        <TableCell className="text-right flex items-center justify-end gap-2">
+                                            <Button variant="ghost" size="icon" onClick={() => openEditDialog(tank)}>
+                                                <Edit2 className="w-4 h-4" />
+                                            </Button>
+
+                                            <AlertDialog>
+                                                <AlertDialogTrigger asChild>
+                                                    <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive">
+                                                        <Trash2 className="w-4 h-4" />
+                                                    </Button>
+                                                </AlertDialogTrigger>
+                                                <AlertDialogContent>
+                                                    <AlertDialogHeader>
+                                                        <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                                                        <AlertDialogDescription>
+                                                            This will permanently delete tank <strong>{tank.name}</strong>.
+                                                            This action cannot be undone.
+                                                        </AlertDialogDescription>
+                                                    </AlertDialogHeader>
+                                                    <AlertDialogFooter>
+                                                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                                        <AlertDialogAction
+                                                            onClick={() => handleDelete(tank.id)}
+                                                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                                        >
+                                                            Delete
+                                                        </AlertDialogAction>
+                                                    </AlertDialogFooter>
+                                                </AlertDialogContent>
+                                            </AlertDialog>
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    )}
+                </CardContent>
+            </Card>
 
             {/* Add/Edit Dialog */}
             <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>

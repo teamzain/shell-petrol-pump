@@ -21,24 +21,31 @@ export async function recordDailyCardPayments(entries: DailyCardEntry[]) {
     for (const entry of entries) {
         if (entry.amount <= 0) continue
 
-        // 1. Fetch tax percentage for the card
+        // 1. Fetch tax percentage and name for the card
         let taxPct = 0
+        let cardName = 'Unknown Card'
         if (entry.card_type === 'bank_card') {
-            const { data: card } = await supabase.from('bank_cards').select('tax_percentage').eq('id', entry.card_id).single()
-            if (card) taxPct = card.tax_percentage
+            const { data: card } = await supabase.from('bank_cards').select('tax_percentage, card_name').eq('id', entry.card_id).single()
+            if (card) {
+                taxPct = card.tax_percentage
+                cardName = card.card_name
+            }
         } else {
-            const { data: card } = await supabase.from('supplier_cards').select('tax_percentage').eq('id', entry.card_id).single()
-            if (card) taxPct = card.tax_percentage
+            const { data: card } = await supabase.from('supplier_cards').select('tax_percentage, card_name').eq('id', entry.card_id).single()
+            if (card) {
+                taxPct = card.tax_percentage
+                cardName = card.card_name
+            }
         }
 
         const taxAmount = (entry.amount * taxPct) / 100
         const netAmount = entry.amount - taxAmount
 
-        // 2. Insert hold record using correct column names from the actual DB schema
-        const { error } = await supabase.from('card_hold_records').insert({
+        // 2. Insert hold record
+        const { data: hold, error } = await supabase.from('card_hold_records').insert({
             sale_date: entry.date,
             card_type: entry.card_type,
-            payment_type: entry.card_type, // Legacy NOT NULL column — mirror card_type
+            payment_type: entry.card_type,
             bank_card_id: entry.card_type === 'bank_card' ? entry.card_id : null,
             supplier_card_id: entry.card_type === 'shell_card' ? entry.card_id : null,
             hold_amount: entry.amount,
@@ -46,9 +53,24 @@ export async function recordDailyCardPayments(entries: DailyCardEntry[]) {
             tax_amount: taxAmount,
             net_amount: netAmount,
             status: 'pending'
-        })
+        }).select('id').single()
 
         if (error) throw new Error(`Failed to record ${entry.card_type} entry: ${error.message}`)
+
+        // 3. Record in balance_transactions (Ledger) as a "Hold"
+        if (hold) {
+            const { recordBalanceTransaction } = await import("./balance")
+            await recordBalanceTransaction({
+                transaction_type: entry.card_type === 'bank_card' ? 'add_bank' : 'transfer_to_supplier',
+                amount: entry.amount,
+                is_hold: true,
+                card_hold_id: hold.id,
+                description: `Card Hold: ${cardName}`,
+                date: entry.date,
+                bank_card_id: entry.card_type === 'bank_card' ? entry.card_id : undefined,
+                supplier_card_id: entry.card_type === 'shell_card' ? entry.card_id : undefined
+            })
+        }
     }
 
     revalidatePath('/dashboard/balance')

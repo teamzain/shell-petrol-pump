@@ -13,7 +13,7 @@ BEGIN
         SELECT tablename 
         FROM pg_tables 
         WHERE schemaname = 'public' 
-        AND tablename NOT IN ('profiles', 'users')
+        AND tablename NOT IN ('profiles', 'users', 'user')
     ) LOOP
         RAISE NOTICE 'Truncating table: %', r.tablename;
         EXECUTE 'TRUNCATE TABLE public.' || quote_ident(r.tablename) || ' RESTART IDENTITY CASCADE';

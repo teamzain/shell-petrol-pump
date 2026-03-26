@@ -4,6 +4,7 @@ import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { cn } from "@/lib/utils"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
     Dialog,
@@ -13,6 +14,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import {
     Select,
     SelectContent,
@@ -26,11 +28,15 @@ import {
     Pencil,
     Trash2,
     Droplet,
+    Droplets,
     Settings2,
     Fuel,
     ChevronRight,
     Search,
-    PlusCircle
+    PlusCircle,
+    Package,
+    Gauge,
+    Database
 } from "lucide-react"
 import { BrandLoader as Loader } from "@/components/ui/brand-loader"
 import { toast } from "sonner"
@@ -145,187 +151,245 @@ export default function DispensersPage() {
     }
 
     return (
-        <div className="container py-8 space-y-8 animate-in fade-in duration-500">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b pb-6">
-                <div>
-                    <h1 className="text-4xl font-black tracking-tight text-foreground flex items-center gap-3">
-                        <Settings2 className="w-10 h-10 text-primary" /> Dispensers & Nozzles
-                    </h1>
-                    <p className="text-muted-foreground mt-1 font-medium">Configure your fuel station's layout and equipment.</p>
+        <div className="space-y-8 animate-in fade-in duration-700">
+            {/* Page Header */}
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 bg-white p-8 rounded-3xl border shadow-sm relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-primary/5 rounded-full -mr-16 -mt-16 blur-3xl" />
+                <div className="relative z-10">
+                    <div className="flex items-center gap-3 mb-1">
+                        <div className="p-2 bg-primary/10 rounded-lg">
+                            <Settings2 className="w-5 h-5 text-primary" />
+                        </div>
+                        <h1 className="text-3xl font-black tracking-tighter uppercase italic">
+                            Dispenser <span className="text-primary">Configuration</span>
+                        </h1>
+                    </div>
+                    <p className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                        Station Equipment & Nozzle Management
+                    </p>
                 </div>
                 <Button onClick={() => {
                     setEditingDispenser(null)
                     setDispenserName("")
                     setTankIds([])
                     setIsDispenserDialogOpen(true)
-                }} className="h-12 px-6 rounded-xl font-bold shadow-lg shadow-primary/20 transition-all hover:scale-105 active:scale-95">
-                    <Plus className="w-5 h-5 mr-2" /> Add Dispenser
+                }} className="relative z-10 h-12 px-6 rounded-xl font-black uppercase tracking-widest text-xs gap-2 shadow-lg shadow-primary/20 hover:shadow-primary/40 transition-all hover:-translate-y-1">
+                    <Plus className="w-4 h-4" /> Add Dispenser
                 </Button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {dispensers.map((dispenser) => (
-                    <Card key={dispenser.id} className="relative overflow-hidden group border-2 hover:border-primary/50 transition-all duration-300 shadow-md hover:shadow-xl">
-                        <div className="absolute top-0 left-0 w-full h-1.5 bg-primary/20 group-hover:bg-primary transition-colors" />
-                        <CardHeader className="flex flex-row items-center justify-between pb-2 bg-muted/30">
-                            <div>
-                                <CardTitle className="text-xl font-black">{dispenser.name}</CardTitle>
-                                <CardDescription className="text-xs uppercase font-bold tracking-widest text-muted-foreground">
-                                    {dispenser.tank_ids && dispenser.tank_ids.length > 0
-                                        ? tanks
-                                            .filter((t: any) => dispenser.tank_ids.includes(t.id))
-                                            .map((t: any) => t.name)
-                                            .join(" • ") || `${dispenser.tank_ids.length} Tank(s) Linked`
-                                        : "No Tank Linked"} • {dispenser.nozzles?.length || 0} Nozzles
-                                </CardDescription>
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg" onClick={() => {
-                                    setEditingDispenser(dispenser)
-                                    setDispenserName(dispenser.name)
-                                    setTankIds(dispenser.tank_ids || (dispenser.tank_id ? [dispenser.tank_id] : []))
-                                    setIsDispenserDialogOpen(true)
-                                }}>
-                                    <Pencil className="w-4 h-4" />
-                                </Button>
-                                <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-destructive hover:bg-destructive/10" onClick={() => handleDeleteDispenser(dispenser.id)}>
-                                    <Trash2 className="w-4 h-4" />
-                                </Button>
-                            </div>
-                        </CardHeader>
-                        <CardContent className="pt-6 space-y-4">
-                            <div className="space-y-3">
-                                {dispenser.nozzles?.map((nozzle: any) => (
-                                    <div key={nozzle.id} className="flex items-center justify-between p-3 rounded-xl bg-background border border-border shadow-sm group/nozzle transition-all hover:translate-x-1">
-                                        <div className="flex items-center gap-3">
-                                            <div className="w-10 h-10 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center font-black text-primary">
-                                                {nozzle.nozzle_number}
-                                            </div>
-                                            <div>
-                                                <p className="font-bold text-sm leading-tight">{nozzle.products?.name || "No Product"}</p>
-                                                <p className="text-[10px] text-muted-foreground uppercase font-black items-center flex gap-1 tracking-tighter">
-                                                    <Droplet className="w-3 h-3 text-primary" />
-                                                    Rs. {nozzle.products?.selling_price || 0} / Liter
-                                                    {nozzle.nozzle_side && <span className="ml-2 px-1 rounded bg-muted">Side: {nozzle.nozzle_side}</span>}
-                                                </p>
-                                            </div>
-                                        </div>
-                                        <div className="flex gap-1 opacity-0 group-hover/nozzle:opacity-100 transition-opacity">
-                                            <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg" onClick={() => {
-                                                setEditingNozzle(nozzle)
-                                                setNozzleData({
-                                                    dispenser_id: dispenser.id,
-                                                    nozzle_number: nozzle.nozzle_number.toString(),
-                                                    product_id: nozzle.product_id,
-                                                    nozzle_side: nozzle.nozzle_side || "",
-                                                    status: nozzle.status
-                                                })
-                                                setIsNozzleDialogOpen(true)
-                                            }}>
-                                                <Pencil className="w-3.5 h-3.5" />
-                                            </Button>
-                                            <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-destructive hover:bg-destructive/10" onClick={() => handleDeleteNozzle(nozzle.id)}>
-                                                <Trash2 className="w-3.5 h-3.5" />
-                                            </Button>
-                                        </div>
-                                    </div>
-                                ))}
-
-                                <Button
-                                    variant="outline"
-                                    className="w-full h-12 border-dashed border-2 rounded-xl text-muted-foreground font-bold hover:text-primary hover:border-primary/50 transition-all hover:bg-primary/5"
-                                    onClick={() => {
-                                        setEditingNozzle(null)
-                                        setNozzleData({
-                                            dispenser_id: dispenser.id,
-                                            nozzle_number: (dispenser.nozzles?.length + 1 || 1).toString(),
-                                            product_id: "",
-                                            nozzle_side: "",
-                                            status: "active"
-                                        })
-                                        setIsNozzleDialogOpen(true)
-                                    }}
-                                >
-                                    <PlusCircle className="w-4 h-4 mr-2" /> Add Nozzle
-                                </Button>
-                            </div>
-                        </CardContent>
-                    </Card>
-                ))}
-
-                {dispensers.length === 0 && (
-                    <div className="col-span-full py-24 text-center border-2 border-dashed rounded-3xl bg-muted/20">
-                        <Fuel className="w-16 h-16 mx-auto text-muted-foreground/30 mb-4" />
-                        <h3 className="text-xl font-bold">No Dispensers Found</h3>
-                        <p className="text-muted-foreground max-w-xs mx-auto mt-2">Start by adding your fuel dispensaries below to configure nozzles.</p>
-                        <Button onClick={() => setIsDispenserDialogOpen(true)} className="mt-6 h-12 px-8 rounded-xl font-bold">
-                            Add First Dispenser
-                        </Button>
+            {/* Main Configuration Card */}
+            <Card className="border-0 shadow-2xl bg-white overflow-hidden">
+                <div className="h-2 bg-slate-900" />
+                <CardHeader className="border-b border-slate-50 pb-6 pt-8 bg-slate-50/50">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <CardTitle className="text-xl font-black uppercase tracking-tight text-slate-800 italic">Configured Fuel Dispensers</CardTitle>
+                            <CardDescription className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-1">
+                                A total of {dispensers.length} terminal units and {dispensers.reduce((acc, d) => acc + (d.nozzles?.length || 0), 0)} active nozzles detected.
+                            </CardDescription>
+                        </div>
                     </div>
-                )}
-            </div>
+                </CardHeader>
+                <CardContent className="p-0">
+                    {loading ? (
+                        <div className="flex justify-center p-24">
+                            <Loader size="lg" />
+                        </div>
+                    ) : dispensers.length === 0 ? (
+                        <div className="py-32 text-center">
+                            <div className="w-24 h-24 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-6 text-slate-300">
+                                <Fuel className="w-12 h-12" />
+                            </div>
+                            <h3 className="text-2xl font-black uppercase tracking-tight italic text-slate-800">Operational Void</h3>
+                            <p className="text-slate-400 font-medium max-w-xs mx-auto mt-2">No functional dispensers have been registered at this station yet.</p>
+                            <Button onClick={() => setIsDispenserDialogOpen(true)} className="mt-8 h-12 px-10 rounded-xl font-black uppercase text-xs tracking-widest shadow-xl">
+                                Initialize First Unit
+                            </Button>
+                        </div>
+                    ) : (
+                        <Table>
+                            <TableHeader className="bg-slate-50">
+                                <TableRow className="hover:bg-transparent border-slate-100">
+                                    <TableHead className="font-black text-[10px] uppercase tracking-widest text-slate-400 py-4 h-auto pl-8">Unit Name</TableHead>
+                                    <TableHead className="font-black text-[10px] uppercase tracking-widest text-slate-400 py-4 h-auto">Linked Reservoirs</TableHead>
+                                    <TableHead className="font-black text-[10px] uppercase tracking-widest text-slate-400 py-4 h-auto">Nozzle Layout</TableHead>
+                                    <TableHead className="font-black text-[10px] uppercase tracking-widest text-slate-400 py-4 h-auto text-right pr-8">Actions</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {dispensers.map((dispenser) => (
+                                    <TableRow key={dispenser.id} className="group border-slate-50 hover:bg-slate-50 transition-colors">
+                                        <TableCell className="pl-8 py-6">
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-10 h-10 rounded-xl bg-slate-900 flex items-center justify-center text-white italic">
+                                                    <Fuel className="w-5 h-5" />
+                                                </div>
+                                                <div>
+                                                    <p className="font-black text-slate-800 uppercase italic leading-none">{dispenser.name.replace(/dispensor/gi, 'Dispenser')}</p>
+                                                    <Badge variant="outline" className="mt-1 text-[9px] font-black uppercase bg-primary text-white border-primary px-1.5 py-0 h-4">ACTIVE UNIT</Badge>
+                                                </div>
+                                            </div>
+                                        </TableCell>
+                                        <TableCell>
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {dispenser.tank_ids && dispenser.tank_ids.length > 0 ? (
+                                                    tanks
+                                                        .filter((t: any) => dispenser.tank_ids.includes(t.id))
+                                                        .map((t: any) => (
+                                                            <div key={t.id} className="flex items-center gap-1.5 bg-white border border-slate-100 px-2.5 py-1 rounded-lg shadow-sm">
+                                                                <Database className="w-3 h-3 text-primary" />
+                                                                <span className="text-[10px] font-black uppercase tracking-tight text-slate-600 italic">{t.name}</span>
+                                                            </div>
+                                                        ))
+                                                ) : (
+                                                    <span className="text-[10px] font-bold text-slate-300 uppercase tracking-widest italic">Unlinked Reservoir</span>
+                                                )}
+                                            </div>
+                                        </TableCell>
+                                        <TableCell>
+                                            <div className="flex flex-col gap-2">
+                                                <div className="flex items-center gap-1 text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">
+                                                    <Gauge className="w-3 h-3" />
+                                                    {dispenser.nozzles?.length || 0} Nozzles Configured
+                                                </div>
+                                                <div className="flex flex-wrap gap-2">
+                                                    {dispenser.nozzles?.map((nozzle: any) => (
+                                                        <div key={nozzle.id} className="group/noz relative">
+                                                            <div className="flex items-center gap-2 bg-slate-900 text-white px-2 py-1 rounded-lg hover:bg-primary transition-colors cursor-default">
+                                                                <span className="text-xs font-black italic">{nozzle.nozzle_number}</span>
+                                                                <div className="w-[1px] h-3 bg-white/20" />
+                                                                <span className="text-[9px] font-black uppercase tracking-tighter opacity-80">{nozzle.products?.name || "Fuel"}</span>
+                                                            </div>
+                                                            <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[9px] font-black px-2 py-1 rounded shadow-xl opacity-0 group-hover/noz:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
+                                                                Rs. {nozzle.products?.selling_price} | {nozzle.nozzle_side || 'No Side'}
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-6 w-6 rounded-lg border-2 border-dashed border-slate-200 text-slate-400 hover:text-primary hover:border-primary/50"
+                                                        onClick={() => {
+                                                            setEditingNozzle(null)
+                                                            setNozzleData({
+                                                                dispenser_id: dispenser.id,
+                                                                nozzle_number: (dispenser.nozzles?.length + 1 || 1).toString(),
+                                                                product_id: "",
+                                                                nozzle_side: "",
+                                                                status: "active"
+                                                            })
+                                                            setIsNozzleDialogOpen(true)
+                                                        }}
+                                                    >
+                                                        <Plus className="w-3 h-3" />
+                                                    </Button>
+                                                </div>
+                                            </div>
+                                        </TableCell>
+                                        <TableCell className="text-right pr-8">
+                                            <div className="flex items-center justify-end gap-2">
+                                                <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl border border-slate-50 shadow-sm hover:bg-slate-100" onClick={() => {
+                                                    setEditingDispenser(dispenser)
+                                                    setDispenserName(dispenser.name)
+                                                    setTankIds(dispenser.tank_ids || (dispenser.tank_id ? [dispenser.tank_id] : []))
+                                                    setIsDispenserDialogOpen(true)
+                                                }}>
+                                                    <Pencil className="w-4 h-4 text-slate-600" />
+                                                </Button>
+                                                <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl border border-slate-50 shadow-sm text-destructive hover:bg-destructive hover:text-white" onClick={() => handleDeleteDispenser(dispenser.id)}>
+                                                    <Trash2 className="w-4 h-4" />
+                                                </Button>
+                                            </div>
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    )}
+                </CardContent>
+            </Card>
+
 
             {/* Dispenser Dialog */}
             <Dialog open={isDispenserDialogOpen} onOpenChange={setIsDispenserDialogOpen}>
-                <DialogContent className="rounded-2xl border-2">
-                    <DialogHeader>
-                        <DialogTitle className="text-2xl font-black">{editingDispenser ? 'Edit Dispenser' : 'New Dispenser'}</DialogTitle>
-                        <DialogDescription className="font-medium"> Give your dispenser a name (e.g. Dispenser 1, Bay A).</DialogDescription>
-                    </DialogHeader>
-                    <form onSubmit={handleSaveDispenser}>
-                        <div className="py-6 space-y-4">
+                <DialogContent className="rounded-3xl border-0 shadow-2xl p-0 overflow-hidden max-w-md">
+                    <div className="bg-slate-900 p-8 text-white relative">
+                        <div className="absolute top-0 right-0 w-32 h-32 bg-primary/20 rounded-full -mr-16 -mt-16 blur-3xl" />
+                        <DialogHeader>
+                            <DialogTitle className="text-2xl font-black uppercase italic tracking-tight">
+                                {editingDispenser ? 'Refine' : 'Initialize'} <span className="text-primary">Unit</span>
+                            </DialogTitle>
+                            <DialogDescription className="text-slate-400 font-medium italic">Define the physical dispensing unit parameters.</DialogDescription>
+                        </DialogHeader>
+                    </div>
+                    <form onSubmit={handleSaveDispenser} className="p-8 space-y-8 bg-white">
+                        <div className="space-y-6">
                             <div className="space-y-2">
-                                <Label htmlFor="name" className="text-xs font-black uppercase tracking-widest ml-1 text-muted-foreground">Dispenser Name</Label>
+                                <Label htmlFor="name" className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 ml-1">Asset Designation</Label>
                                 <Input
                                     id="name"
-                                    placeholder="Enter dispenser name..."
+                                    placeholder="e.g. Dispenser 01"
                                     value={dispenserName}
                                     onChange={(e) => setDispenserName(e.target.value)}
                                     required
-                                    className="h-12 rounded-xl border-2 focus-visible:ring-primary/20 font-bold"
+                                    className="h-14 rounded-2xl border-slate-100 bg-slate-50 focus:border-primary/50 font-bold text-lg"
                                 />
                             </div>
-                            <div className="space-y-2">
-                                <Label className="text-xs font-black uppercase tracking-widest ml-1 text-muted-foreground">Linked Tanks</Label>
-                                <div className="border-2 rounded-xl p-3 space-y-2 max-h-48 overflow-y-auto">
+                            <div className="space-y-3">
+                                <Label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 ml-1">Fluid Reservoir Uplink</Label>
+                                <div className="grid gap-2 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
                                     {tanks.length === 0 && (
-                                        <p className="text-sm text-muted-foreground text-center py-2">No tanks available</p>
+                                        <div className="p-4 rounded-2xl border-2 border-dashed text-center text-xs font-bold text-slate-400 italic">No supply reservoirs found</div>
                                     )}
                                     {tanks.map(t => {
                                         const checked = tankIds.includes(t.id)
                                         return (
                                             <label
                                                 key={t.id}
-                                                className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-colors ${checked
-                                                    ? "bg-primary/10 border border-primary/30"
-                                                    : "hover:bg-muted"
-                                                    }`}
+                                                className={cn(
+                                                    "flex items-center justify-between p-4 rounded-2xl cursor-pointer transition-all border-2",
+                                                    checked
+                                                        ? "bg-primary/5 border-primary/30 shadow-sm"
+                                                        : "bg-white border-slate-50 hover:border-slate-100"
+                                                )}
                                             >
+                                                <div className="flex items-center gap-3">
+                                                    <div className={cn(
+                                                        "w-10 h-10 rounded-xl flex items-center justify-center transition-colors",
+                                                        checked ? "bg-primary text-white" : "bg-slate-100 text-slate-400"
+                                                    )}>
+                                                        <Database className="w-5 h-5" />
+                                                    </div>
+                                                    <div>
+                                                        <p className={cn("font-black text-sm uppercase italic", checked ? "text-primary" : "text-slate-600")}>{t.name}</p>
+                                                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{t.products?.name || "Fuel"}</p>
+                                                    </div>
+                                                </div>
+                                                <div className={cn(
+                                                    "w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all",
+                                                    checked ? "bg-primary border-primary" : "bg-white border-slate-200"
+                                                )}>
+                                                    {checked && <div className="w-2 h-2 rounded-full bg-white animate-in zoom-in" />}
+                                                </div>
                                                 <input
                                                     type="checkbox"
-                                                    className="accent-primary w-4 h-4"
+                                                    className="hidden"
                                                     checked={checked}
                                                     onChange={(e) => {
-                                                        if (e.target.checked) {
-                                                            setTankIds(prev => [...prev, t.id])
-                                                        } else {
-                                                            setTankIds(prev => prev.filter(id => id !== t.id))
-                                                        }
+                                                        if (e.target.checked) setTankIds(prev => [...prev, t.id])
+                                                        else setTankIds(prev => prev.filter(id => id !== t.id))
                                                     }}
                                                 />
-                                                <span className="font-bold text-sm text-foreground">{t.name}</span>
                                             </label>
                                         )
                                     })}
                                 </div>
-                                {tankIds.length > 0 && (
-                                    <p className="text-xs text-primary font-semibold ml-1">{tankIds.length} tank(s) selected</p>
-                                )}
                             </div>
                         </div>
                         <DialogFooter>
-                            <Button type="submit" className="w-full h-12 rounded-xl font-black text-lg shadow-lg shadow-primary/20">
-                                {editingDispenser ? 'Update Dispenser' : 'Create Dispenser'}
+                            <Button type="submit" className="w-full h-14 rounded-2xl font-black uppercase tracking-widest text-sm italic shadow-2xl shadow-primary/20">
+                                {editingDispenser ? 'Save Configuration' : 'Confirm Deployment'}
                             </Button>
                         </DialogFooter>
                     </form>

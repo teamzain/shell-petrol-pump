@@ -106,7 +106,7 @@ const navItems: NavItem[] = [
 export function DashboardSidebar() {
   const [isOpen, setIsOpen] = useState(false)
   const [expandedItems, setExpandedItems] = useState<string[]>([])
-  const [pumpName, setPumpName] = useState("Petrol Pump")
+  const [pumpName, setPumpName] = useState("Shell Pump")
   const pathname = usePathname()
   const router = useRouter()
   const supabase = createClient()
@@ -195,8 +195,12 @@ export function DashboardSidebar() {
           {/* Logo */}
           <div className="p-4 border-b border-sidebar-border">
             <Link href="/dashboard" className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-sidebar-primary flex items-center justify-center">
-                <Fuel className="w-5 h-5 text-sidebar-primary-foreground" />
+              <div className="w-10 h-10 rounded-lg bg-white flex items-center justify-center p-1 shadow-sm border border-sidebar-border/50">
+                <img
+                  src="https://upload.wikimedia.org/wikipedia/en/e/e8/Shell_logo.svg"
+                  alt="Shell Logo"
+                  className="w-full h-full object-contain"
+                />
               </div>
               <div>
                 <h1 className="font-semibold text-sidebar-foreground truncate max-w-[160px]">
