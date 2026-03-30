@@ -157,9 +157,9 @@ export default function ReportsPage() {
         setIsDetailOpen(true)
     }
 
-    const handleExport = (type: ExportType) => {
+    const handleExport = (type: ExportType, scope: string = "full") => {
         if (!reportData) return
-        exportReport({ activeTab, reportData, filters }, type)
+        exportReport({ activeTab, reportData, filters, scope }, type)
     }
 
     // Handle Preset Date Ranges
@@ -228,13 +228,35 @@ export default function ReportsPage() {
                                     <ChevronDown className="h-3 w-3 opacity-50" />
                                 </Button>
                             </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
+                            <DropdownMenuContent align="end" className="w-56">
+                                <DropdownMenuLabel>Export Data</DropdownMenuLabel>
+                                <DropdownMenuSeparator />
                                 <DropdownMenuItem onClick={() => handleExport("csv")}>
-                                    <FileText className="mr-2 h-4 w-4" /> Export CSV
+                                    <FileText className="mr-2 h-4 w-4" /> Export CSV (Active Tab)
                                 </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => handleExport("pdf")}>
-                                    <Download className="mr-2 h-4 w-4" /> Export PDF
-                                </DropdownMenuItem>
+                                
+                                <DropdownMenuSeparator />
+                                <DropdownMenuLabel>PDF Export Options</DropdownMenuLabel>
+                                {activeTab === "supplier-tracking" ? (
+                                    <>
+                                        <DropdownMenuItem onClick={() => handleExport("pdf", "full")}>
+                                            <Download className="mr-2 h-4 w-4" /> Full Supplier Report
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem onClick={() => handleExport("pdf", "purchases")}>
+                                            <ShoppingCart className="mr-2 h-4 w-4 text-primary" /> Purchase Orders Only
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem onClick={() => handleExport("pdf", "ledger")}>
+                                            <Receipt className="mr-2 h-4 w-4 text-emerald-600" /> Ledger Accounts Only
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem onClick={() => handleExport("pdf", "holds")}>
+                                            <CreditCard className="mr-2 h-4 w-4 text-amber-600" /> Card Holds Only
+                                        </DropdownMenuItem>
+                                    </>
+                                ) : (
+                                    <DropdownMenuItem onClick={() => handleExport("pdf")}>
+                                        <Download className="mr-2 h-4 w-4" /> Export PDF
+                                    </DropdownMenuItem>
+                                )}
                             </DropdownMenuContent>
                         </DropdownMenu>
                         <Button variant="outline" size="sm" onClick={refreshData} disabled={isRefreshing}>
@@ -443,7 +465,7 @@ export default function ReportsPage() {
                                     <p className="text-muted-foreground animate-pulse font-black uppercase tracking-widest text-[10px]">Synchronizing Active Date...</p>
                                 </div>
                             ) : (
-                                <DailyRecapReport date={filters.dateRange.from} />
+                                <DailyRecapReport date={filters.dateRange.from} onDataLoaded={setReportData} />
                             )}
                         </TabsContent>
 

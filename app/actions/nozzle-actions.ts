@@ -25,6 +25,7 @@ export async function addNozzle(formData: {
     nozzle_number: string
     product_id: string
     dispenser_id?: string
+    tank_id?: string
     nozzle_side?: string
     initial_reading: number
 }) {
@@ -36,6 +37,7 @@ export async function addNozzle(formData: {
             nozzle_number: formData.nozzle_number,
             product_id: formData.product_id,
             dispenser_id: formData.dispenser_id || null,
+            tank_id: formData.tank_id || null,
             nozzle_side: formData.nozzle_side,
             initial_reading: formData.initial_reading,
             last_reading: formData.initial_reading,
@@ -66,7 +68,7 @@ export async function recordNozzleReadings(readings: NozzleReadingUpdate[], date
         // 1. Get nozzle's product info
         const { data: nozzle, error: nozzleError } = await supabase
             .from('nozzles')
-            .select('product_id, nozzle_number')
+            .select('product_id, nozzle_number, tank_id, dispenser_id')
             .eq('id', reading.nozzle_id)
             .single()
 
@@ -104,33 +106,39 @@ export async function recordNozzleReadings(readings: NozzleReadingUpdate[], date
                 }
 
                 // 2b. Fetch specific connected tank and check its stock
-                const { data: nozzleDispenser } = await supabase
-                    .from('nozzles')
-                    .select('dispenser_id')
-                    .eq('id', reading.nozzle_id)
-                    .single()
+                let targetTankId = nozzle.tank_id;
 
-                if (nozzleDispenser && nozzleDispenser.dispenser_id) {
+                // Fallback to dispenser-based lookup if no explicit tank_id is set
+                if (!targetTankId && nozzle.dispenser_id) {
                     const { data: dispenser } = await supabase
                         .from('dispensers')
                         .select('tank_ids')
-                        .eq('id', nozzleDispenser.dispenser_id)
+                        .eq('id', nozzle.dispenser_id)
                         .single()
 
                     if (dispenser && dispenser.tank_ids && dispenser.tank_ids.length > 0) {
                         const { data: matchingTanks } = await supabase
                             .from('tanks')
-                            .select('id, name, current_level')
+                            .select('id')
                             .in('id', dispenser.tank_ids)
                             .eq('product_id', product.id)
                             .limit(1)
 
                         if (matchingTanks && matchingTanks.length > 0) {
-                            const tank = matchingTanks[0]
-                            if (qtyToSubtract > tank.current_level) {
-                                throw new Error(`Insufficient stock in ${tank.name}. sale requires ${qtyToSubtract} L more, but tank only has ${tank.current_level} L remaining.`);
-                            }
+                            targetTankId = matchingTanks[0].id
                         }
+                    }
+                }
+
+                if (targetTankId) {
+                    const { data: tank } = await supabase
+                        .from('tanks')
+                        .select('id, name, current_level')
+                        .eq('id', targetTankId)
+                        .single()
+
+                    if (tank && qtyToSubtract > tank.current_level) {
+                        throw new Error(`Insufficient stock in ${tank.name}. sale requires ${qtyToSubtract} L more, but tank only has ${tank.current_level} L remaining.`);
                     }
                 }
 
@@ -171,42 +179,16 @@ export async function recordNozzleReadings(readings: NozzleReadingUpdate[], date
                     if (stockError) throw new Error(`Stock update failed: ${stockError.message}`)
 
                     // 4b. Update specific connected tank
-                    const { data: nozzleDispenser } = await supabase
-                        .from('nozzles')
-                        .select('dispenser_id')
-                        .eq('id', reading.nozzle_id)
-                        .single()
+                    if (targetTankId) {
+                        const tankRpcName = qtyToSubtract > 0 ? 'decrement_tank_stock' : 'increment_tank_stock'
 
-                    if (nozzleDispenser && nozzleDispenser.dispenser_id) {
-                        const { data: dispenser } = await supabase
-                            .from('dispensers')
-                            .select('tank_ids')
-                            .eq('id', nozzleDispenser.dispenser_id)
-                            .single()
+                        const { error: tankStockError } = await supabase.rpc(tankRpcName, {
+                            p_tank_id: targetTankId,
+                            p_quantity: Math.abs(qtyToSubtract)
+                        })
 
-                        if (dispenser && dispenser.tank_ids && dispenser.tank_ids.length > 0) {
-                            // Find the tank that has the matching product_id
-                            const { data: matchingTanks } = await supabase
-                                .from('tanks')
-                                .select('id, product_id')
-                                .in('id', dispenser.tank_ids)
-                                .eq('product_id', product.id)
-                                .limit(1)
-
-                            if (matchingTanks && matchingTanks.length > 0) {
-                                const targetTankId = matchingTanks[0].id
-                                const tankRpcName = qtyToSubtract > 0 ? 'decrement_tank_stock' : 'increment_tank_stock'
-
-                                const { error: tankStockError } = await supabase.rpc(tankRpcName, {
-                                    p_tank_id: targetTankId,
-                                    p_quantity: Math.abs(qtyToSubtract)
-                                })
-
-                                if (tankStockError) {
-                                    console.error(`Tank stock update failed: ${tankStockError.message}`)
-                                    // Non-fatal error for now, as we at least updated the main product stock
-                                }
-                            }
+                        if (tankStockError) {
+                            console.error(`Tank stock update failed: ${tankStockError.message}`)
                         }
                     }
 
@@ -220,6 +202,10 @@ export async function recordNozzleReadings(readings: NozzleReadingUpdate[], date
                     const prevStock = currentProduct?.current_stock ? currentProduct.current_stock + qtyToSubtract : product.current_stock
                     const balanceAfter = currentProduct?.current_stock || (product.current_stock - qtyToSubtract)
 
+                    // Join targetDate with current time for chronologically meaningful records in local TZ
+                    const currentTime = new Date().toLocaleTimeString('en-GB', { hour12: false }); // HH:MM:SS
+                    const movementDate = `${targetDate}T${currentTime}`;
+
                     const { error: moveError } = await supabase.from('stock_movements').insert([{
                         product_id: product.id,
                         movement_type: 'sale',
@@ -227,7 +213,8 @@ export async function recordNozzleReadings(readings: NozzleReadingUpdate[], date
                         previous_stock: prevStock,
                         balance_after: balanceAfter,
                         reference_number: `Nozzle ${nozzle.nozzle_number}`,
-                        notes: `Daily Reading Update - ${targetDate}${existingSale ? ' (Correction)' : ''}`
+                        notes: `Daily Reading Update - ${targetDate}${existingSale ? ' (Correction)' : ''}`,
+                        movement_date: movementDate
                     }])
                     if (moveError) throw new Error(`Movement record failed: ${moveError.message}`)
                 }
@@ -266,6 +253,7 @@ export async function updateNozzle(id: string, formData: {
     nozzle_number: string
     product_id: string
     dispenser_id?: string
+    tank_id?: string
     nozzle_side?: string
     status?: string
 }) {
@@ -277,6 +265,7 @@ export async function updateNozzle(id: string, formData: {
             nozzle_number: formData.nozzle_number,
             product_id: formData.product_id,
             dispenser_id: formData.dispenser_id || null,
+            tank_id: formData.tank_id || null,
             nozzle_side: formData.nozzle_side,
             status: formData.status || 'active',
             updated_at: new Date().toISOString()

@@ -1,6 +1,7 @@
-ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS tank_distribution JSONB;
+-- 1. Correct the record_delivery_atomic_item function
+-- This version ensures that stock_movements are recorded with the selected p_delivery_date
+-- but preserves the current time for chronological accuracy.
 
--- Add new delivery routing function with multi-tank support
 CREATE OR REPLACE FUNCTION record_delivery_atomic_item(
     p_po_id UUID,
     p_item_index INT,
@@ -12,7 +13,7 @@ CREATE OR REPLACE FUNCTION record_delivery_atomic_item(
     p_driver_name TEXT,
     p_notes TEXT,
     p_user_id UUID,
-    p_tank_distribution JSONB DEFAULT NULL -- New parameter: array of { tank_id, quantity }
+    p_tank_distribution JSONB DEFAULT NULL
 ) RETURNS UUID AS $$
 DECLARE
     v_po RECORD;
@@ -39,7 +40,7 @@ DECLARE
     v_tank_id UUID;
     v_tank_qty NUMERIC;
 BEGIN
-    -- Handle empty strings explicitly to avoid unique constraint violations
+    -- Handle empty strings explicitly
     IF p_invoice_number = '' THEN p_invoice_number := NULL; END IF;
     IF p_vehicle_number = '' THEN p_vehicle_number := NULL; END IF;
     IF p_driver_name = '' THEN p_driver_name := NULL; END IF;
@@ -78,22 +79,21 @@ BEGIN
             total_distributed NUMERIC := 0;
         BEGIN
             FOR v_tank_element IN SELECT * FROM jsonb_array_elements(p_tank_distribution) LOOP
-                -- Convert to absolute value just to be completely safe against negative injections
                 total_distributed := total_distributed + ABS((v_tank_element->>'quantity')::NUMERIC);
             END LOOP;
 
-            IF ABS(total_distributed - p_received_qty) > 0.01 THEN -- Account for tiny float variances
-                RAISE EXCEPTION 'The quantity distributed across tanks (%) does not match the total received quantity (%).', total_distributed, p_received_qty;
+            IF ABS(total_distributed - p_received_qty) > 0.01 THEN
+                RAISE EXCEPTION 'Distributed quantity does not match total received.';
             END IF;
         END;
     END IF;
 
-    -- Calculate amounts with capping
+    -- Calculate amounts
     v_delivered_amount := LEAST(p_received_qty, v_ordered_qty) * v_rate_per_liter;
     v_remaining_qty := v_ordered_qty - p_received_qty;
     v_hold_amount := GREATEST(0, v_remaining_qty * v_rate_per_liter);
 
-    -- 2. Insert Delivery Record (Including unit_type and tank_distribution)
+    -- 2. Insert Delivery Record
     INSERT INTO deliveries (
         delivery_number, purchase_order_id, supplier_id, delivery_date, 
         quantity_ordered, delivered_quantity, quantity_remaining,
@@ -119,24 +119,20 @@ BEGIN
         )
     );
 
-    -- Check if all items are delivered
-    WHILE i < jsonb_array_length(v_items_array) LOOP
-        IF (v_items_array->i->>'status') != 'delivered' AND (v_items_array->i->>'status') != 'received' THEN
-            v_all_delivered := false;
-        END IF;
-        i := i + 1;
-    END LOOP;
-
     -- Update PO status
     UPDATE purchase_orders 
     SET 
         items = v_items_array,
-        status = CASE WHEN v_all_delivered THEN 'closed' ELSE 'partially_delivered' END,
-        is_closed = v_all_delivered,
+        status = CASE 
+            WHEN (SELECT bool_and((x->>'status' = 'delivered' OR x->>'status' = 'received')) FROM jsonb_array_elements(v_items_array) x) 
+            THEN 'closed' 
+            ELSE 'partially_delivered' 
+        END,
+        is_closed = (SELECT bool_and((x->>'status' = 'delivered' OR x->>'status' = 'received')) FROM jsonb_array_elements(v_items_array) x),
         updated_at = now()
     WHERE id = p_po_id;
 
-    -- 4. Update Stock and Movement (Main Product)
+    -- 4. Update Stock and Movement
     IF v_product_id IS NOT NULL THEN
         SELECT current_stock, COALESCE(weighted_avg_cost, 0) 
         INTO v_prev_stock, v_prev_wac 
@@ -157,22 +153,7 @@ BEGIN
             updated_at = now()
         WHERE id = v_product_id;
 
-        -- 4b. Update Distinct Tanks (If configured)
-        IF p_tank_distribution IS NOT NULL AND jsonb_array_length(p_tank_distribution) > 0 THEN
-            FOR v_tank_element IN SELECT * FROM jsonb_array_elements(p_tank_distribution) LOOP
-                v_tank_id := (v_tank_element->>'tank_id')::UUID;
-                v_tank_qty := (v_tank_element->>'quantity')::NUMERIC;
-                
-                IF v_tank_qty > 0 THEN
-                    UPDATE tanks 
-                    SET 
-                        current_level = COALESCE(current_level, 0) + v_tank_qty,
-                        updated_at = now()
-                    WHERE id = v_tank_id AND product_id = v_product_id;
-                END IF;
-            END LOOP;
-        END IF;
-
+        -- Record Stock Movement with CORRECTED movement_date
         INSERT INTO stock_movements (
             product_id, movement_type, quantity, 
             ordered_quantity, previous_stock, 
@@ -184,9 +165,11 @@ BEGIN
             v_ordered_qty, v_prev_stock,
             v_new_stock, v_rate_per_liter, v_new_wac,
             COALESCE(p_notes, 'Delivery against PO'), p_delivery_number, v_po.supplier_id,
+            -- FIX: Combine selected date with current local time
             (p_delivery_date::text || ' ' || (now() AT TIME ZONE 'Asia/Karachi')::time::text)::timestamp AT TIME ZONE 'Asia/Karachi'
         );
 
+        -- Update Stock Daily Register
         INSERT INTO stock_daily_register (product_type, register_date, total_deliveries, closing_stock)
         VALUES (
             COALESCE(v_item->>'product_category', 'other'), 
@@ -199,7 +182,17 @@ BEGIN
             closing_stock = EXCLUDED.closing_stock;
     END IF;
 
-    -- 6. Handle Hold Record (if applicable)
+    -- Handle Tank Distribution (if provided)
+    IF p_tank_distribution IS NOT NULL AND jsonb_array_length(p_tank_distribution) > 0 THEN
+        FOR v_tank_element IN SELECT * FROM jsonb_array_elements(p_tank_distribution) LOOP
+            UPDATE tanks 
+            SET current_level = COALESCE(current_level, 0) + (v_tank_element->>'quantity')::NUMERIC,
+                updated_at = now()
+            WHERE id = (v_tank_element->>'tank_id')::UUID;
+        END LOOP;
+    END IF;
+
+    -- Handle Hold Record
     IF v_hold_amount > 0 THEN
         INSERT INTO po_hold_records (
             purchase_order_id, delivery_id, hold_quantity, hold_amount, created_by,
@@ -213,3 +206,29 @@ BEGIN
     RETURN v_delivery_id;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+
+-- 2. Historical Backfill
+-- Sync existing purchase movements with their actual delivery dates
+UPDATE stock_movements m
+SET movement_date = (d.delivery_date::text || ' ' || m.created_at::time::text)::timestamp AT TIME ZONE 'Asia/Karachi'
+FROM deliveries d
+WHERE m.movement_type = 'purchase'
+AND m.reference_number = d.delivery_number
+AND (m.movement_date::date != d.delivery_date);
+
+-- Sync existing sale movements from nozzle readings
+UPDATE stock_movements m
+SET movement_date = (dr.sale_date::text || ' ' || m.created_at::time::text)::timestamp AT TIME ZONE 'Asia/Karachi'
+FROM daily_sales dr
+WHERE m.movement_type = 'sale'
+AND m.reference_number LIKE 'Nozzle%'
+AND (m.movement_date::date != dr.sale_date);
+
+-- Sync existing manual sales
+UPDATE stock_movements m
+SET movement_date = (ms.sale_date::text || ' ' || m.created_at::time::text)::timestamp AT TIME ZONE 'Asia/Karachi'
+FROM manual_sales ms
+WHERE m.movement_type = 'sale'
+AND (m.notes LIKE 'Manual Sale%' OR m.notes LIKE 'Product Sale%')
+AND (m.movement_date::date != ms.sale_date);

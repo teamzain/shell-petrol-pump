@@ -931,89 +931,24 @@ export async function releaseCardHold(holdId: string, targetId: string, releaseD
 
     if (updateErr) throw new Error(updateErr.message)
 
-    // 2b. Update the existing balance_transactions record if it exists
-    const { data: existingTx } = await supabase
-        .from('balance_transactions')
-        .select('id, balance_before')
-        .eq('card_hold_id', holdId)
-        .single()
-
-    if (existingTx) {
-        // Update the existing record instead of inserting new one
-        const newBalanceAfter = Number(existingTx.balance_before) + Number(hold.net_amount)
-        
-        await supabase.from('balance_transactions').update({
-            is_hold: false,
-            transaction_type: isBankTarget ? 'add_bank' : 'transfer_to_supplier',
-            amount: hold.net_amount,
-            bank_account_id: isBankTarget ? actualTargetId : null,
-            supplier_id: !isBankTarget ? actualTargetId : null,
-            description: `Card Settlement: ${hold.card_type} (Hold ID: ${hold.id})`,
-            balance_after: newBalanceAfter,
-            transaction_date: effectiveTransactionDate
-        }).eq('id', existingTx.id)
-    } else {
-        // Fallback: If no existing tx was linked, insert a new one (legacy or missing link)
-        if (isBankTarget) {
-            await supabase.from('balance_transactions').insert({
-                transaction_type: 'add_bank',
-                amount: hold.net_amount,
-                bank_account_id: actualTargetId,
-                description: `Card Settlement: ${hold.card_type} (Hold ID: ${hold.id})`,
-                transaction_date: effectiveTransactionDate,
-                created_by: user.id,
-                is_hold: false
-            })
-        } else {
-            await supabase.from('balance_transactions').insert({
-                transaction_type: 'supplier_transfer',
-                amount: hold.net_amount,
-                supplier_id: actualTargetId,
-                description: `Card Settlement: ${hold.card_type} (Hold ID: ${hold.id})`,
-                transaction_date: effectiveTransactionDate,
-                created_by: user.id,
-                is_hold: false
-            })
-        }
-    }
-
-    // 3. Update actual balances
-    if (isBankTarget) {
-        const { data: bank } = await supabase.from('bank_accounts').select('current_balance').eq('id', actualTargetId).single()
-        if (bank) {
-            await supabase.from('bank_accounts').update({
-                current_balance: Number(bank.current_balance) + Number(hold.net_amount)
-            }).eq('id', actualTargetId)
-        }
-    } else {
-        const { data: supplierAcc } = await supabase
-            .from('company_accounts')
-            .select('current_balance')
-            .eq('supplier_id', actualTargetId)
-            .single()
-
-        if (supplierAcc) {
-            await supabase.from('company_accounts').update({
-                current_balance: Number(supplierAcc.current_balance) + Number(hold.net_amount)
-            }).eq('supplier_id', actualTargetId)
-        }
-    }
-
-    // 4. Update daily_accounts_status (Subtract from hold, Add to received)
-    const { data: dailyStat } = await supabase
-        .from('daily_accounts_status')
-        .select('total_card_hold, total_card_received')
-        .eq('status_date', hold.sale_date)
-        .single()
-
-    if (dailyStat) {
-        await supabase.from('daily_accounts_status').update({
-            total_card_hold: Math.max(0, (Number(dailyStat.total_card_hold) || 0) - Number(hold.hold_amount)),
-            total_card_received: (Number(dailyStat.total_card_received) || 0) + Number(hold.net_amount)
-        }).eq('status_date', hold.sale_date)
-    }
+    // 3. Create a NEW balance_transactions record for the settlement
+    // This allows the original 'Hold' to remain in the Daily Summary while
+    // the new 'Settlement' row shows up as its own entry in the ledger.
+    const settlementDescription = `Card Settlement: ${hold.card_type} (Hold ID: ${hold.id})${!isBankTarget ? ' - Supplier Account' : ''}`;
+    
+    await recordBalanceTransaction({
+        transaction_type: isBankTarget ? 'add_bank' : 'transfer_to_supplier',
+        amount: Number(hold.net_amount),
+        bank_account_id: isBankTarget ? actualTargetId : undefined,
+        supplier_id: !isBankTarget ? actualTargetId : undefined,
+        description: settlementDescription,
+        date: effectiveTransactionDate,
+        is_hold: false,
+        card_hold_id: hold.id // Link it to the hold for audit trail
+    })
 
     revalidatePath('/dashboard/balance')
     revalidatePath('/dashboard/sales/history')
+    revalidatePath('/dashboard/suppliers')
     return { success: true }
 }

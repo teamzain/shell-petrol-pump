@@ -74,7 +74,7 @@ export function ProfitLossReport({ filters, onDataLoaded }: {
 
                 // 3. Fetch Expenses
                 const { data: expenses } = await supabase
-                    .from("expenses")
+                    .from("daily_expenses")
                     .select("amount")
                     .gte("expense_date", fromDate)
                     .lte("expense_date", toDate)

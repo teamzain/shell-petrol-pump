@@ -9,7 +9,12 @@ import {
     Calendar,
     CreditCard,
     FileText,
-    Package
+    Package,
+    Clock,
+    Truck,
+    RefreshCw,
+    Banknote,
+    ShieldCheck
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -62,7 +67,7 @@ export function PurchaseHistoryReport({ filters, onDetailClick, onDataLoaded }: 
                 // 3. Fetch Deliveries
                 let delQuery = supabase
                     .from("deliveries")
-                    .select("*, purchase_orders(*, products(name, category)), suppliers(name, product_type)")
+                    .select("*, purchase_orders(*, products(name, category)), suppliers(name, product_type), po_hold_records(*)")
                     .gte("delivery_date", fromDate)
                     .lte("delivery_date", toDate)
 
@@ -140,19 +145,43 @@ export function PurchaseHistoryReport({ filters, onDetailClick, onDataLoaded }: 
                                 paid_amount: 0,
                                 due_amount: 0,
                                 quantity: 0,
-                                purchase_price_per_unit: del.rate_per_liter || poData?.rate_per_liter || 0
+                                ordered_quantity: 0,
+                                hold_amount: 0,
+                                hold_quantity: 0,
+                                purchase_price_per_unit: del.rate_per_liter || poData?.rate_per_liter || 0,
+                                po_hold_records: []
                             }
                         }
                         const amount = Number(del.delivered_amount || (del.delivered_quantity * (poData?.rate_per_liter || 0)))
                         acc[key].total_amount += amount
                         acc[key].paid_amount += amount
                         acc[key].quantity += Number(del.delivered_quantity || 0)
+                        
+                        // Get ordered quantity for this specific item from PO items
+                        if (poData?.items && Array.isArray(poData.items) && del.po_item_index !== undefined) {
+                            const poItem = poData.items[del.po_item_index];
+                            if (poItem) {
+                                acc[key].ordered_quantity += Number(poItem.ordered_quantity || 0);
+                            }
+                        }
+
+                        // Add hold record info
+                        if (del.po_hold_records && del.po_hold_records.length > 0) {
+                            del.po_hold_records.forEach((h: any) => {
+                                acc[key].hold_amount += Number(h.hold_amount || 0);
+                                acc[key].hold_quantity += Number(h.hold_quantity || 0);
+                                acc[key].po_hold_records.push(h);
+                            });
+                        }
+
                         acc[key].items.push({
                             product_name: del.product_name || poData?.product_type || "Unknown",
                             quantity: del.delivered_quantity,
+                            ordered_quantity: (poData?.items && del.po_item_index !== undefined) ? poData.items[del.po_item_index]?.ordered_quantity : 0,
                             unit_type: del.unit_type || poData?.unit_type,
                             purchase_price_per_unit: del.rate_per_liter || poData?.rate_per_liter || 0,
-                            total_amount: amount
+                            total_amount: amount,
+                            po_hold_record: del.po_hold_records?.[0] || null
                         })
                         return acc
                     }, {})
@@ -164,13 +193,32 @@ export function PurchaseHistoryReport({ filters, onDetailClick, onDataLoaded }: 
                 
                 setOrders(allRecords)
 
-                const totalValue = allRecords.reduce((sum: number, r: any) => sum + (r.type === 'delivery' ? r.total_amount : 0), 0)
+                // Calculate calculations for export
+                const deliveries = allRecords.filter(r => r.type === 'delivery')
+                const totalValue = deliveries.reduce((sum: number, r: any) => sum + Number(r.total_amount || 0), 0)
                 const totalOrdersCount = allRecords.filter(r => r.type === 'order').length
+                
+                const totalOnHold = deliveries.reduce((sum: number, o: any) => {
+                    const holdAmount = (o.po_hold_records || []).filter((h: any) => h.status === 'on_hold').reduce((s: number, h: any) => s + Number(h.hold_amount || 0), 0)
+                    return sum + holdAmount
+                }, 0)
+
+                const totalReleased = deliveries.reduce((sum: number, o: any) => {
+                    const releasedAmount = (o.po_hold_records || []).filter((h: any) => h.status === 'released').reduce((s: number, h: any) => s + Number(h.hold_amount || 0), 0)
+                    return sum + releasedAmount
+                }, 0)
+
+                const totalPaid = totalValue - totalOnHold
+                const totalDues = 0
 
                 onDataLoaded?.({
                     orders: allRecords,
                     totalValue,
-                    totalOrders: totalOrdersCount
+                    totalOrders: totalOrdersCount,
+                    totalOnHold,
+                    totalReleased,
+                    totalPaid,
+                    totalDues
                 })
             } catch (error) {
                 console.error("Error fetching purchases:", error)
@@ -186,64 +234,106 @@ export function PurchaseHistoryReport({ filters, onDetailClick, onDataLoaded }: 
         return <Skeleton className="h-[400px] w-full rounded-xl" />
     }
 
+    // Calculate Summary Stats
     const totalValue = orders.filter(o => o.type === 'delivery').reduce((sum, o) => sum + Number(o.total_amount || 0), 0)
-    const totalPaid = totalValue 
     const totalOrders = orders.filter(o => o.type === 'order').length
+    
+    // Calculate Hold & Released amounts
+    const totalOnHold = orders.filter(o => o.type === 'delivery').reduce((sum, o) => {
+        const holdAmount = (o.po_hold_records || []).filter((h: any) => h.status === 'on_hold').reduce((s: number, h: any) => s + Number(h.hold_amount || 0), 0)
+        return sum + holdAmount
+    }, 0)
+
+    const totalReleased = orders.filter(o => o.type === 'delivery').reduce((sum, o) => {
+        const releasedAmount = (o.po_hold_records || []).filter((h: any) => h.status === 'released').reduce((s: number, h: any) => s + Number(h.hold_amount || 0), 0)
+        return sum + releasedAmount
+    }, 0)
+
+    const totalPaid = totalValue - totalOnHold // Assuming full payment minus active holds
+    const totalDues = 0 // In this system, SUPP.ACC. is usually considered clear if no explicitly tracked aging dues
 
     return (
         <div className="space-y-6">
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
                 <Card className="border-l-4 border-l-slate-700 shadow-sm">
-                    <CardHeader className="pb-2">
-                        <CardTitle className="text-xs font-bold text-muted-foreground uppercase tracking-widest flex items-center gap-2">
-                            <Package className="h-4 w-4 text-slate-700" />
-                            Total Orders Created
+                    <CardHeader className="p-3 pb-1">
+                        <CardTitle className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5 line-clamp-1">
+                            <Package className="h-3.5 w-3.5 text-slate-700" />
+                            Orders Created
                         </CardTitle>
                     </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-black tracking-tight">{totalOrders}</div>
-                        <p className="text-[10px] text-muted-foreground mt-1 flex items-center gap-1">
-                            <Calendar className="h-3 w-3" /> For selected period
+                    <CardContent className="p-3 pt-0">
+                        <div className="text-xl font-black tracking-tight">{totalOrders}</div>
+                        <p className="text-[9px] text-muted-foreground flex items-center gap-1 mt-0.5">
+                            <Calendar className="h-2.5 w-2.5" /> This period
                         </p>
                     </CardContent>
                 </Card>
+
                 <Card className="border-l-4 border-l-primary shadow-sm">
-                    <CardHeader className="pb-2">
-                        <CardTitle className="text-xs font-bold text-muted-foreground uppercase tracking-widest flex items-center gap-2">
-                            <ShoppingCart className="h-4 w-4 text-primary" />
-                            Total Delivered Value
+                    <CardHeader className="p-3 pb-1">
+                        <CardTitle className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5 line-clamp-1">
+                            <Truck className="h-3.5 w-3.5 text-primary" />
+                            Delivered Value
                         </CardTitle>
                     </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-black tracking-tight">Rs. {totalValue.toLocaleString()}</div>
-                        <p className="text-[10px] text-muted-foreground mt-1 flex items-center gap-1">
-                            <Calendar className="h-3 w-3" />
-                            For selected period
+                    <CardContent className="p-3 pt-0">
+                        <div className="text-xl font-black tracking-tight">Rs. {totalValue.toLocaleString()}</div>
+                        <p className="text-[9px] text-muted-foreground flex items-center gap-1 mt-0.5">
+                            <ShoppingCart className="h-2.5 w-2.5" /> Gross total
                         </p>
                     </CardContent>
                 </Card>
-                <Card className="border-l-4 border-l-emerald-500 shadow-sm">
-                    <CardHeader className="pb-2">
-                        <CardTitle className="text-xs font-bold text-muted-foreground uppercase tracking-widest flex items-center gap-2">
-                            <CreditCard className="h-4 w-4 text-emerald-500" />
-                            Total Paid Amount
+
+                <Card className="border-l-4 border-l-amber-500 shadow-sm bg-amber-500/5">
+                    <CardHeader className="p-3 pb-1">
+                        <CardTitle className="text-[10px] font-bold text-amber-600 uppercase tracking-wider flex items-center gap-1.5 line-clamp-1">
+                            <Clock className="h-3.5 w-3.5 text-amber-500" />
+                            Total On Hold
                         </CardTitle>
                     </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-black text-emerald-600 tracking-tight">Rs. {totalPaid.toLocaleString()}</div>
-                        <p className="text-[10px] text-emerald-600/70 mt-1 font-medium">Payment cleared</p>
+                    <CardContent className="p-3 pt-0">
+                        <div className="text-xl font-black text-amber-700 tracking-tight">Rs. {totalOnHold.toLocaleString()}</div>
+                        <p className="text-[9px] text-amber-600/70 font-bold uppercase mt-0.5">Shortage Hold</p>
                     </CardContent>
                 </Card>
-                <Card className="border-l-4 border-l-destructive shadow-sm bg-destructive/[0.02]">
-                    <CardHeader className="pb-2">
-                        <CardTitle className="text-xs font-bold text-muted-foreground uppercase tracking-widest flex items-center gap-2">
-                            <FileText className="h-4 w-4 text-destructive" />
+
+                <Card className="border-l-4 border-l-indigo-500 shadow-sm bg-indigo-500/5">
+                    <CardHeader className="p-3 pb-1">
+                        <CardTitle className="text-[10px] font-bold text-indigo-600 uppercase tracking-wider flex items-center gap-1.5 line-clamp-1">
+                            <RefreshCw className="h-3.5 w-3.5 text-indigo-500" />
+                            Total Released
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-3 pt-0">
+                        <div className="text-xl font-black text-indigo-700 tracking-tight">Rs. {totalReleased.toLocaleString()}</div>
+                        <p className="text-[9px] text-indigo-600/70 font-bold uppercase mt-0.5">Resolved Funds</p>
+                    </CardContent>
+                </Card>
+
+                <Card className="border-l-4 border-l-emerald-500 shadow-sm">
+                    <CardHeader className="p-3 pb-1">
+                        <CardTitle className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5 line-clamp-1">
+                            <Banknote className="h-3.5 w-3.5 text-emerald-500" />
+                            Paid (Net)
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-3 pt-0">
+                        <div className="text-xl font-black text-emerald-600 tracking-tight">Rs. {totalPaid.toLocaleString()}</div>
+                        <p className="text-[9px] text-emerald-600/70 font-bold uppercase mt-0.5">Final Payout</p>
+                    </CardContent>
+                </Card>
+
+                <Card className="border-l-4 border-l-rose-500 shadow-sm bg-rose-500/5">
+                    <CardHeader className="p-3 pb-1">
+                        <CardTitle className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5 line-clamp-1">
+                            <ShieldCheck className="h-3.5 w-3.5 text-rose-500" />
                             Outstanding Dues
                         </CardTitle>
                     </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-black text-destructive tracking-tight">Rs. {(totalValue - totalPaid).toLocaleString()}</div>
-                        <p className="text-[10px] text-destructive/70 mt-1 font-medium">Pending balance</p>
+                    <CardContent className="p-3 pt-0">
+                        <div className="text-xl font-black text-rose-700 tracking-tight">Rs. {totalDues.toLocaleString()}</div>
+                        <p className="text-[9px] text-rose-600/70 font-bold uppercase mt-0.5">Balance Dues</p>
                     </CardContent>
                 </Card>
             </div>

@@ -111,13 +111,18 @@ export async function recordManualSale(data: ManualSaleData) {
     const prevStock = currentProd?.current_stock ? currentProd.current_stock + data.quantity : product.current_stock
     const balanceAfter = currentProd?.current_stock || (product.current_stock - data.quantity)
 
+    // Join activeDate with current time for chronologically meaningful records in local TZ
+    const currentTime = new Date().toLocaleTimeString('en-GB', { hour12: false }); // HH:MM:SS
+    const movementDate = `${activeDate}T${currentTime}`;
+
     await supabase.from('stock_movements').insert([{
         product_id: data.product_id,
         movement_type: 'sale',
         quantity: -data.quantity,
         previous_stock: prevStock,
         balance_after: balanceAfter,
-        notes: `Manual Sale - ${data.customer_name || 'Walk-in'}`
+        notes: `Manual Sale - ${data.customer_name || 'Walk-in'}`,
+        movement_date: movementDate
     }])
 
     // 5. Update Cash Balance (if cash)

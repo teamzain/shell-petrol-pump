@@ -23,8 +23,10 @@ import {
     Loader2,
     Search,
     ShieldAlert,
-    ShieldCheck
+    ShieldCheck,
+    Eye
 } from "lucide-react"
+import { PODetailModal } from "../purchases/po-detail-modal"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -129,6 +131,8 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
     const [holds, setHolds] = useState<any[]>([])
     const [accountBalance, setAccountBalance] = useState<number | null>(null)
     const [holdFilter, setHoldFilter] = useState<"all" | "pending" | "released">("all")
+    const [selectedPOId, setSelectedPOId] = useState<string | null>(null)
+    const [isModalOpen, setIsModalOpen] = useState(false)
 
     const isCombined = !supplier
 
@@ -150,8 +154,44 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
                 poQuery = poQuery.eq("supplier_id", supplier.id)
             }
 
-            const { data: poData } = await poQuery
-            setPurchases(poData || [])
+            const { data: rawPoData } = await poQuery
+            
+            // Enrich PO items with product names (needed for multi-product orders)
+            let enrichedPoData = rawPoData || [];
+            if (enrichedPoData.length > 0) {
+                // Collect all product IDs
+                const productIds = new Set<string>();
+                enrichedPoData.forEach((po: any) => {
+                    if (po.items && Array.isArray(po.items)) {
+                        po.items.forEach((item: any) => {
+                            if (item.product_id) productIds.add(item.product_id);
+                        });
+                    }
+                });
+
+                if (productIds.size > 0) {
+                    const { data: productTable } = await supabase
+                        .from("products")
+                        .select("id, name")
+                        .in("id", Array.from(productIds));
+
+                    if (productTable) {
+                        const productMap = new Map(productTable.map((p: any) => [p.id, p]));
+                        enrichedPoData = enrichedPoData.map((po: any) => {
+                            if (po.items && Array.isArray(po.items)) {
+                                const newItems = po.items.map((item: any) => ({
+                                    ...item,
+                                    product_name: productMap.get(item.product_id)?.name || item.product_name
+                                }));
+                                return { ...po, items: newItems };
+                            }
+                            return po;
+                        });
+                    }
+                }
+            }
+            
+            setPurchases(enrichedPoData)
 
             if (supplier) {
                 // 2. Get company account
@@ -277,16 +317,6 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
 
     useEffect(() => { fetchLedger() }, [fetchLedger])
 
-    useEffect(() => {
-        if (!loading) {
-            onLedgerDataLoaded?.({
-                purchases,
-                transactions,
-                holds
-            })
-        }
-    }, [loading, purchases, transactions, holds, onLedgerDataLoaded])
-
     // ── Computed Summaries ──
     const totalPurchased = purchases.reduce((s, p) => s + Number(p.estimated_total || p.total_amount || 0), 0)
     const totalPaid = transactions.filter(t => t.transaction_type === "credit").reduce((s, t) => s + Number(t.amount), 0)
@@ -298,6 +328,24 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
     const releasedHolds = holds.filter(h => h._normalized_status === "released")
     const totalOnHold = pendingHolds.reduce((s, h) => s + Number(h.hold_amount || 0), 0)
     const totalReleased = releasedHolds.reduce((s, h) => s + Number(h.hold_amount || 0), 0)
+    const totalReleasedNet = releasedHolds.reduce((s, h) => s + Number(h.net_amount || h.hold_amount || 0), 0)
+
+    useEffect(() => {
+        if (!loading) {
+            onLedgerDataLoaded?.({
+                purchases,
+                transactions,
+                holds,
+                totalOnHold,
+                totalReleased,
+                totalReleasedNet,
+                totalPurchased,
+                totalPaid,
+                totalDeducted,
+                netPeriodBalance
+            })
+        }
+    }, [loading, purchases, transactions, holds, totalOnHold, totalReleased, totalReleasedNet, totalPurchased, totalPaid, totalDeducted, netPeriodBalance, onLedgerDataLoaded])
 
     if (loading) {
         return (
@@ -315,7 +363,7 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
         <div className="p-4 space-y-5 bg-slate-50/60 border-t border-dashed border-slate-200">
 
             {/* ── Period Summary Cards ── */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
                 <div className="bg-white rounded-xl border border-slate-200 p-3 shadow-sm">
                     <div className="text-[9px] font-black uppercase text-muted-foreground tracking-widest mb-1">Period Orders</div>
                     <div className="text-xl font-black text-slate-800">{purchases.length}</div>
@@ -335,6 +383,11 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
                     <div className="text-[9px] font-black uppercase text-rose-600/80 tracking-widest mb-1">Deductions Made</div>
                     <div className="text-lg font-black text-rose-700">Rs. {totalDeducted.toLocaleString()}</div>
                     <div className="text-[10px] text-muted-foreground mt-0.5">Debits in period</div>
+                </div>
+                <div className={`bg-white rounded-xl border p-3 shadow-sm ${netPeriodBalance >= 0 ? "border-emerald-200" : "border-rose-200"}`}>
+                    <div className={`text-[9px] font-black uppercase tracking-widest mb-1 ${netPeriodBalance >= 0 ? "text-emerald-600/80" : "text-rose-600/80"}`}>Net Period Movement</div>
+                    <div className={`text-lg font-black ${netPeriodBalance >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{netPeriodBalance >= 0 ? "+" : ""}Rs. {netPeriodBalance.toLocaleString()}</div>
+                    <div className="text-[10px] text-muted-foreground mt-0.5">Payments − Deductions</div>
                 </div>
             </div>
 
@@ -385,14 +438,22 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
                                         <TableHead className="text-[10px] font-black uppercase text-right whitespace-nowrap">Rate / L</TableHead>
                                         <TableHead className="text-[10px] font-black uppercase text-right whitespace-nowrap">Total Value</TableHead>
                                         <TableHead className="text-[10px] font-black uppercase text-center whitespace-nowrap">Status</TableHead>
+                                        <TableHead className="text-[10px] font-black uppercase text-center whitespace-nowrap">Action</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
                                     {purchases.map((po) => {
-                                        // Derive product name from items array or products join
-                                        const productName = po.products?.name ||
-                                            (po.items && po.items[0]?.product_name) ||
-                                            po.product_type || "—"
+                                        // Derivation of product names handling multiple items
+                                        const items = po.items || [];
+                                        const productNames = items.length > 0
+                                            ? items.map((i: any) => i.product_name).filter(Boolean)
+                                            : [po.products?.name || po.product_type].filter(Boolean);
+
+                                        const uniqueNames = Array.from(new Set(productNames));
+                                        const displayProductName = (uniqueNames.length > 1
+                                            ? `${uniqueNames[0]} (+${uniqueNames.length - 1} more)`
+                                            : (uniqueNames[0] || "—")) as string;
+
                                         const date = po.purchase_date || po.created_at
                                         return (
                                             <TableRow key={po.id} className="hover:bg-slate-50/50 transition-colors">
@@ -408,7 +469,7 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
                                                     {date ? format(parseISO(date.includes("T") ? date : date + "T00:00:00"), "dd MMM yyyy") : "—"}
                                                 </TableCell>
                                                 <TableCell className="text-xs whitespace-nowrap font-medium capitalize">
-                                                    {productName}
+                                                    {displayProductName}
                                                 </TableCell>
                                                 <TableCell className="text-xs font-mono text-right whitespace-nowrap">
                                                     {Number(po.ordered_quantity || 0).toLocaleString()} L
@@ -426,6 +487,19 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
                                                 </TableCell>
                                                 <TableCell className="text-center whitespace-nowrap">
                                                     <PurchaseStatusBadge status={po.status} />
+                                                </TableCell>
+                                                <TableCell className="text-center whitespace-nowrap">
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-8 w-8 hover:bg-primary/10 hover:text-primary transition-colors"
+                                                        onClick={() => {
+                                                            setSelectedPOId(po.id);
+                                                            setIsModalOpen(true);
+                                                        }}
+                                                    >
+                                                        <Eye className="h-4 w-4" />
+                                                    </Button>
                                                 </TableCell>
                                             </TableRow>
                                         )
@@ -479,6 +553,7 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
                                             <TableHead className="text-[10px] font-black uppercase whitespace-nowrap">Note / Description</TableHead>
                                             <TableHead className="text-[10px] font-black uppercase text-right whitespace-nowrap">Amount</TableHead>
                                             {!isCombined && <TableHead className="text-[10px] font-black uppercase text-right whitespace-nowrap">Balance After</TableHead>}
+                                            <TableHead className="text-[10px] font-black uppercase text-center whitespace-nowrap">Action</TableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
@@ -520,6 +595,20 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
                                                         </span>
                                                     </TableCell>
                                                 )}
+                                                <TableCell className="text-center whitespace-nowrap">
+                                                    {tx.purchase_order_id && (
+                                                        <button
+                                                            className="h-8 w-8 inline-flex items-center justify-center hover:bg-primary/10 hover:text-primary transition-colors rounded-md text-slate-400"
+                                                            onClick={() => {
+                                                                setSelectedPOId(tx.purchase_order_id);
+                                                                setIsModalOpen(true);
+                                                            }}
+                                                            title="View Purchase Detail"
+                                                        >
+                                                            <Eye className="h-4 w-4" />
+                                                        </button>
+                                                    )}
+                                                </TableCell>
                                             </TableRow>
                                         ))}
                                     </TableBody>
@@ -712,19 +801,25 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
                             </Table>
 
                             {/* Hold Summary Footer */}
-                            <div className="grid grid-cols-2 divide-x border-t bg-slate-50/80">
-                                <div className="px-4 py-2.5 text-center">
+                            <div className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x border-t bg-slate-50/80">
+                                <div className="px-4 py-3 text-center">
                                     <div className="text-[9px] font-black uppercase text-amber-600 tracking-wider">Total Pending</div>
                                     <div className="font-mono font-black text-sm text-amber-700">
                                         Rs. {totalOnHold.toLocaleString()}
-                                        <span className="text-[10px] font-medium text-muted-foreground ml-1">({pendingHolds.length} transaction{pendingHolds.length !== 1 ? "s" : ""})</span>
+                                        <span className="text-[10px] font-medium text-muted-foreground ml-1">({pendingHolds.length} tx)</span>
                                     </div>
                                 </div>
-                                <div className="px-4 py-2.5 text-center">
-                                    <div className="text-[9px] font-black uppercase text-emerald-600 tracking-wider">Total Released</div>
-                                    <div className="font-mono font-black text-sm text-emerald-700">
+                                <div className="px-4 py-3 text-center">
+                                    <div className="text-[9px] font-black uppercase text-blue-600 tracking-wider">Gross Total Released</div>
+                                    <div className="font-mono font-black text-sm text-blue-700">
                                         Rs. {totalReleased.toLocaleString()}
-                                        <span className="text-[10px] font-medium text-muted-foreground ml-1">({releasedHolds.length} transaction{releasedHolds.length !== 1 ? "s" : ""})</span>
+                                        <span className="text-[10px] font-medium text-muted-foreground ml-1">({releasedHolds.length} tx)</span>
+                                    </div>
+                                </div>
+                                <div className="px-4 py-3 text-center border-t sm:border-t-0 bg-emerald-50/40">
+                                    <div className="text-[9px] font-black uppercase text-emerald-600 tracking-wider">Total Released Amount (Net)</div>
+                                    <div className="font-mono font-black text-sm text-emerald-700">
+                                        Rs. {totalReleasedNet.toLocaleString()}
                                     </div>
                                 </div>
                             </div>
@@ -734,6 +829,13 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
             </div>
                 </TabsContent>
             </Tabs>
+
+            {/* Purchase Order Detail Modal */}
+            <PODetailModal
+                open={isModalOpen}
+                onOpenChange={setIsModalOpen}
+                poId={selectedPOId}
+            />
         </div>
     )
 }
@@ -765,6 +867,7 @@ export function SupplierPerformanceReport({ filters, onDetailClick, onDataLoaded
     const [searchQuery, setSearchQuery] = useState("")
     const [totalOnHold, setTotalOnHold] = useState(0)
     const [totalReleased, setTotalReleased] = useState(0)
+    const [totalReleasedNet, setTotalReleasedNet] = useState(0)
     
     const reportDataRef = useRef<any>({})
 
@@ -847,7 +950,7 @@ export function SupplierPerformanceReport({ filters, onDetailClick, onDataLoaded
                     const supplierIds = suppliersData.map((s: any) => s.id)
                     const { data: holdsData } = await supabase
                         .from("card_hold_records")
-                        .select("hold_amount, status, supplier_cards!inner(supplier_id)")
+                        .select("hold_amount, net_amount, status, supplier_cards!inner(supplier_id)")
                         .in("supplier_cards.supplier_id", supplierIds)
                         .not("supplier_card_id", "is", null)
                         .gte("sale_date", fromDate)
@@ -861,26 +964,36 @@ export function SupplierPerformanceReport({ filters, onDetailClick, onDataLoaded
 
                     let holdTotal = 0
                     let releasedTotal = 0
+                    let releasedNetTotal = 0
                     // Card holds
                     for (const h of (holdsData || [])) {
                         const amt = Number(h.hold_amount || 0)
+                        const netAmt = Number(h.net_amount || h.hold_amount || 0)
                         if (h.status !== "released") holdTotal += amt
-                        if (h.status === "released") releasedTotal += amt
+                        if (h.status === "released") {
+                            releasedTotal += amt
+                            releasedNetTotal += netAmt
+                        }
                     }
                     // PO holds
                     for (const h of (poHoldsData || [])) {
                         const amt = Number(h.hold_amount || 0)
                         if (h.status === "on_hold") holdTotal += amt
-                        if (h.status === "released") releasedTotal += amt
+                        if (h.status === "released") {
+                            releasedTotal += amt
+                            releasedNetTotal += amt // PO holds don't have separate net_amount currently
+                        }
                     }
                     setTotalOnHold(holdTotal)
                     setTotalReleased(releasedTotal)
+                    setTotalReleasedNet(releasedNetTotal)
 
                     const summaryData = {
                         suppliers: processed,
                         totalSuppliers: processed.length,
                         totalOnHold: holdTotal,
                         totalReleased: releasedTotal,
+                        totalReleasedNet: releasedNetTotal,
                         totalOrders: processed.reduce((sum, s) => sum + s.orderCount, 0),
                         totalOutstanding: processed.reduce((sum, s) => sum + s.outstandingDues, 0),
                     }
@@ -931,43 +1044,52 @@ export function SupplierPerformanceReport({ filters, onDetailClick, onDataLoaded
     return (
         <div className="space-y-6">
             {/* ── Overview Cards ── */}
-            <div className="grid gap-4 md:grid-cols-4">
+            <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
                 <Card className="bg-primary/5 border-primary/10">
                     <CardHeader className="pb-2">
-                        <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Total Suppliers</CardTitle>
+                        <CardTitle className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest px-0">Total Suppliers</CardTitle>
                     </CardHeader>
                     <CardContent>
-                        <div className="flex items-end gap-2">
-                            <div className="text-3xl font-black">{suppliers.length}</div>
-                            <div className="text-xs text-muted-foreground mb-1">in view</div>
+                        <div className="flex items-end gap-2 px-0">
+                            <div className="text-2xl font-black">{suppliers.length}</div>
+                            <div className="text-[10px] text-muted-foreground mb-1 font-medium">in view</div>
                         </div>
                     </CardContent>
                 </Card>
                 <Card className="bg-emerald-50 border-emerald-100">
                     <CardHeader className="pb-2">
-                        <CardTitle className="text-sm font-medium text-emerald-600 uppercase tracking-wider">Total Accounts Balance</CardTitle>
+                        <CardTitle className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest px-0">Total Balance</CardTitle>
                     </CardHeader>
-                    <CardContent>
-                        <div className={`text-3xl font-black ${totalAccountBalance >= 0 ? "text-emerald-700" : "text-rose-700"}`}>Rs. {totalAccountBalance.toLocaleString()}</div>
-                        <div className="text-xs text-emerald-600/70 mt-1">All supplier accounts combined</div>
+                    <CardContent className="px-5">
+                        <div className={`text-xl font-black ${totalAccountBalance >= 0 ? "text-emerald-700" : "text-rose-700"}`}>Rs. {totalAccountBalance.toLocaleString()}</div>
+                        <div className="text-[10px] text-emerald-600/70 mt-1 font-medium">Supplier accounts</div>
                     </CardContent>
                 </Card>
                 <Card className="bg-amber-50 border-amber-100">
                     <CardHeader className="pb-2">
-                        <CardTitle className="text-sm font-medium text-amber-600 uppercase tracking-wider">Total Amount On Hold</CardTitle>
+                        <CardTitle className="text-[10px] font-bold text-amber-600 uppercase tracking-widest px-0">Amount On Hold</CardTitle>
                     </CardHeader>
-                    <CardContent>
-                        <div className="text-3xl font-black text-amber-700">Rs. {totalOnHold.toLocaleString()}</div>
-                        <div className="text-xs text-amber-600/70 mt-1">Pending card holds across all suppliers</div>
+                    <CardContent className="px-5">
+                        <div className="text-xl font-black text-amber-700">Rs. {totalOnHold.toLocaleString()}</div>
+                        <div className="text-[10px] text-amber-600/70 mt-1 font-medium">Pending holds</div>
                     </CardContent>
                 </Card>
                 <Card className="bg-blue-50 border-blue-100">
                     <CardHeader className="pb-2">
-                        <CardTitle className="text-sm font-medium text-blue-600 uppercase tracking-wider">Total Released</CardTitle>
+                        <CardTitle className="text-[10px] font-bold text-blue-600 uppercase tracking-widest px-0">Gross Total Released</CardTitle>
                     </CardHeader>
-                    <CardContent>
-                        <div className="text-3xl font-black text-blue-700">Rs. {totalReleased.toLocaleString()}</div>
-                        <div className="text-xs text-blue-600/70 mt-1">Released card holds across all suppliers</div>
+                    <CardContent className="px-5">
+                        <div className="text-xl font-black text-blue-700">Rs. {totalReleased.toLocaleString()}</div>
+                        <div className="text-[10px] text-blue-600/70 mt-1 font-medium italic">Before deductions</div>
+                    </CardContent>
+                </Card>
+                <Card className="bg-emerald-100/50 border-emerald-200">
+                    <CardHeader className="pb-2">
+                        <CardTitle className="text-[10px] font-bold text-emerald-700 uppercase tracking-widest px-0">Total Released Amount (Net)</CardTitle>
+                    </CardHeader>
+                    <CardContent className="px-5">
+                        <div className="text-xl font-black text-emerald-800">Rs. {totalReleasedNet.toLocaleString()}</div>
+                        <div className="text-[10px] text-emerald-700/70 mt-1 font-black">Actual Received</div>
                     </CardContent>
                 </Card>
             </div>

@@ -50,10 +50,11 @@ export function DetailViewDialog({ isOpen, onOpenChange, item }: any) {
                 const mapped = item.items.map((i: any, idx: number) => ({
                     ...i,
                     id: i.id || `${item.id}-item-${idx}`,
-                    quantity: i.delivered_quantity || i.ordered_quantity || i.quantity,
-                    purchase_price_per_unit: i.rate_per_liter || i.purchase_price_per_unit || i.price,
-                    total_amount: i.total_amount || (Number(i.quantity || i.ordered_quantity) * Number(i.rate_per_liter || i.purchase_price_per_unit)),
-                    products: { product_name: i.product_name }
+                    // BUG FIX: Prioritize 'quantity' (delivered) over 'ordered_quantity' for this display mapping
+                    quantity: i.quantity || i.delivered_quantity || i.ordered_quantity,
+                    purchase_price_per_unit: i.purchase_price_per_unit || i.rate_per_liter || i.price,
+                    total_amount: i.total_amount || (Number(i.quantity || i.delivered_quantity || i.ordered_quantity) * Number(i.purchase_price_per_unit || i.rate_per_liter || i.price)),
+                    products: { product_name: i.product_name || (i.products?.product_name) }
                 }));
                 setSubItems(mapped);
                 setLoading(false);
@@ -368,37 +369,94 @@ export function DetailViewDialog({ isOpen, onOpenChange, item }: any) {
                                                 </div>
                                             ) : subItems.length > 0 ? (
                                                 <div className="space-y-4">
-                                                    {subItems.map((si, idx) => (
-                                                        <div key={si.id || `item-${idx}`} className="p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm space-y-3 hover:border-primary/20 transition-colors duration-300">
-                                                            <div className="flex justify-between items-center gap-4">
-                                                                <span className="font-black text-xs text-primary truncate">{si.products?.product_name}</span>
-                                                                <Badge variant="outline" className="text-[8px] h-4 uppercase bg-slate-50 dark:bg-slate-950 font-bold flex-shrink-0">ID-{(String(si.id || '') || 'N/A').slice(-4)}</Badge>
+                                                    {subItems.map((si, idx) => {
+                                                        const diff = (si.quantity || 0) - (si.ordered_quantity || 0);
+                                                        const isShort = diff < 0;
+                                                        const isExtra = diff > 0;
+                                                        
+                                                        return (
+                                                            <div key={si.id || `item-${idx}`} className="p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm space-y-3 hover:border-primary/20 transition-colors duration-300">
+                                                                <div className="flex justify-between items-start gap-4">
+                                                                    <div className="flex flex-col truncate">
+                                                                        <span className="font-black text-xs text-primary truncate">{si.products?.product_name || si.product_name}</span>
+                                                                        {isShort && (
+                                                                            <Badge variant="destructive" className="text-[8px] h-3.5 mt-1 w-fit uppercase font-bold px-1.5">
+                                                                                Shortage: {Math.abs(diff).toLocaleString()} L
+                                                                            </Badge>
+                                                                        )}
+                                                                        {isExtra && (
+                                                                            <Badge className="bg-emerald-500 hover:bg-emerald-600 text-[8px] h-3.5 mt-1 w-fit uppercase font-bold px-1.5">
+                                                                                Extra: {diff.toLocaleString()} L
+                                                                            </Badge>
+                                                                        )}
+                                                                    </div>
+                                                                    <Badge variant="outline" className="text-[8px] h-4 uppercase bg-slate-50 dark:bg-slate-950 font-bold flex-shrink-0">ID-{(String(si.id || '') || 'N/A').slice(-4)}</Badge>
+                                                                </div>
+                                                                <table className="w-full border-t border-slate-100 dark:border-slate-800 pt-2">
+                                                                    <thead>
+                                                                        <tr>
+                                                                            <th className="text-[8px] text-muted-foreground uppercase font-black text-left pt-2">Ordered</th>
+                                                                            <th className="text-[8px] text-muted-foreground uppercase font-black text-left pt-2">Received</th>
+                                                                            <th className="text-[8px] text-muted-foreground uppercase font-black text-left pt-2">Rate</th>
+                                                                            <th className="text-[8px] text-muted-foreground uppercase font-black text-right pt-2">Total</th>
+                                                                        </tr>
+                                                                    </thead>
+                                                                    <tbody>
+                                                                        <tr>
+                                                                            <td className="text-[11px] font-mono font-bold pt-1 text-muted-foreground">{(si.ordered_quantity || 0).toLocaleString()}L</td>
+                                                                            <td className={cn("text-[11px] font-mono font-bold pt-1", isShort ? "text-rose-600" : isExtra ? "text-emerald-600" : "")}>{(si.quantity || 0).toLocaleString()}L</td>
+                                                                            <td className="text-[11px] font-mono font-bold text-primary pt-1">Rs.{Math.round(si.purchase_price_per_unit || 0).toLocaleString()}</td>
+                                                                            <td className="text-xs font-black text-primary font-mono text-right pt-1">Rs.{Math.round(si.total_amount || 0).toLocaleString()}</td>
+                                                                        </tr>
+                                                                    </tbody>
+                                                                </table>
+
+                                                                {/* Bank Hold for this specific item if it exists */}
+                                                                {si.po_hold_record && (
+                                                                    <div className="mt-2 p-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg flex justify-between items-center">
+                                                                        <div className="flex items-center gap-2">
+                                                                            <div className="h-5 w-5 rounded bg-amber-500/20 flex items-center justify-center text-amber-600">
+                                                                                <Receipt className="h-3 w-3" />
+                                                                            </div>
+                                                                            <div className="flex flex-col">
+                                                                                <span className="text-[8px] font-black text-amber-700 dark:text-amber-400 uppercase tracking-tighter">Bank Hold (Shortage)</span>
+                                                                                <span className="text-[9px] font-bold text-amber-600">Qty: {si.po_hold_record.hold_quantity} L</span>
+                                                                            </div>
+                                                                        </div>
+                                                                        <div className="text-right">
+                                                                            <div className="text-[10px] font-black text-amber-700">Rs. {Number(si.po_hold_record.hold_amount).toLocaleString()}</div>
+                                                                            <Badge className={cn("text-[7px] h-3 uppercase p-1", si.po_hold_record.status === 'released' ? "bg-emerald-500" : "bg-amber-500")}>
+                                                                                {si.po_hold_record.status}
+                                                                            </Badge>
+                                                                        </div>
+                                                                    </div>
+                                                                )}
                                                             </div>
-                                                            <table className="w-full border-t border-slate-100 dark:border-slate-800 pt-2">
-                                                                <thead>
-                                                                    <tr>
-                                                                        <th className="text-[8px] text-muted-foreground uppercase font-black text-left pt-2 w-1/4">Qty</th>
-                                                                        <th className="text-[8px] text-muted-foreground uppercase font-black text-left pt-2 w-1/3">Rate</th>
-                                                                        <th className="text-[8px] text-muted-foreground uppercase font-black text-right pt-2">Total</th>
-                                                                    </tr>
-                                                                </thead>
-                                                                <tbody>
-                                                                    <tr>
-                                                                        <td className="text-[11px] font-mono font-bold pt-1">{si.quantity}<span className="text-[8px] font-sans ml-0.5 font-normal">L</span></td>
-                                                                        <td className="text-[11px] font-mono font-bold text-primary pt-1">Rs.{Math.round(si.purchase_price_per_unit || 0).toLocaleString()}</td>
-                                                                        <td className="text-xs font-black text-primary font-mono text-right pt-1">Rs.{Math.round(si.total_amount || 0).toLocaleString()}</td>
-                                                                    </tr>
-                                                                </tbody>
-                                                            </table>
-                                                        </div>
-                                                    ))}
+                                                        );
+                                                    })}
                                                 </div>
                                             ) : (
                                                 <div className="text-center py-6 bg-white dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-800">
                                                     <div className="text-sm font-bold text-primary">{item.products?.product_name || "Stock Arrival"}</div>
-                                                    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 pt-3 mt-3 border-t text-center">
+                                                    
+                                                    {/* Check for overall difference if subItems was empty */}
+                                                    {item.ordered_quantity !== undefined && (
+                                                        <div className="flex justify-center mt-1">
+                                                            {Number(item.delivered_quantity || item.quantity) < Number(item.ordered_quantity) ? (
+                                                                <Badge variant="destructive" className="text-[9px] h-4 uppercase font-bold">Shortage Detected</Badge>
+                                                            ) : Number(item.delivered_quantity || item.quantity) > Number(item.ordered_quantity) ? (
+                                                                <Badge className="bg-emerald-500 text-[9px] h-4 uppercase font-bold">Extra Quantity</Badge>
+                                                            ) : null}
+                                                        </div>
+                                                    )}
+
+                                                    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 pt-3 mt-3 border-t text-center px-4">
                                                         <div className="flex flex-col">
-                                                            <div className="text-[10px] uppercase font-black text-muted-foreground mb-0.5">Quantity</div>
+                                                            <div className="text-[10px] uppercase font-black text-muted-foreground mb-0.5">Ordered</div>
+                                                            <div className="text-sm font-bold font-mono text-muted-foreground">{item.ordered_quantity || "-"} <span className="text-[10px] font-sans">L</span></div>
+                                                        </div>
+                                                        <div className="flex flex-col">
+                                                            <div className="text-[10px] uppercase font-black text-muted-foreground mb-0.5">Received</div>
                                                             <div className="text-sm font-bold font-mono">{item.delivered_quantity || item.quantity || item.ordered_quantity} <span className="text-[10px] font-sans text-muted-foreground">L</span></div>
                                                         </div>
                                                         <div className="flex flex-col">
@@ -410,6 +468,20 @@ export function DetailViewDialog({ isOpen, onOpenChange, item }: any) {
                                                             <div className="text-base font-black text-primary font-mono leading-none">Rs.{Number(item.delivered_amount || item.total_amount || 0).toLocaleString()}</div>
                                                         </div>
                                                     </div>
+
+                                                    {/* Global Hold if exists */}
+                                                    {item.po_hold_records && item.po_hold_records.length > 0 && (
+                                                        <div className="mt-4 mx-4 p-3 bg-amber-50 dark:bg-amber-900/20 border border-dashed border-amber-300 dark:border-amber-800 rounded-xl flex justify-between items-center anim-pulse">
+                                                            <div className="text-left">
+                                                                <div className="text-[8px] font-black text-amber-700 uppercase">Aggregated Bank Hold</div>
+                                                                <div className="text-xs font-bold text-amber-600">Total Held: {item.hold_quantity} L</div>
+                                                            </div>
+                                                            <div className="text-right">
+                                                                <div className="text-sm font-black text-amber-700">Rs. {Number(item.hold_amount).toLocaleString()}</div>
+                                                                <span className="text-[8px] text-amber-600 font-bold uppercase tracking-widest">Awaiting reconciliation</span>
+                                                            </div>
+                                                        </div>
+                                                    )}
                                                 </div>
                                             )}
                                         </div>

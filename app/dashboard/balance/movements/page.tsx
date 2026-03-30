@@ -34,7 +34,7 @@ import {
     ChevronDown,
     FileText
 } from "lucide-react"
-import { getBalanceMovement, getBalanceMovementSummary } from "@/app/actions/balance-movement"
+import { getBalanceMovement, getBalanceMovementSummary, getSaleSummaryByDate } from "@/app/actions/balance-movement"
 import { getSuppliers } from "@/app/actions/suppliers"
 import { BrandLoader } from "@/components/ui/brand-loader"
 import { toast } from "sonner"
@@ -94,6 +94,8 @@ export default function BalanceMovementsPage() {
     const [supplierFilter, setSupplierFilter] = useState("all")
     const [accountTypeFilter, setAccountTypeFilter] = useState("all")
     const [suppliersList, setSuppliersList] = useState<any[]>([])
+    const [summaries, setSummaries] = useState<Record<string, any>>({})
+
 
     useEffect(() => {
         getSuppliers().then(setSuppliersList).catch(console.error)
@@ -163,8 +165,20 @@ export default function BalanceMovementsPage() {
                 getBalanceMovementSummary(filters)
             ])
 
-            setTransactions(txResult.data || [])
+            const filteredData = (txResult.data || []).filter((tx: any) => {
+                if (activeTab === 'purchase') {
+                    // 1. Hide daily sales summaries in purchase tab
+                    if (tx.source_table === 'daily_sales_summary') return false;
+                    
+                    // 2. Hide "Card Hold" (gross) if it's the Purchase tab, to avoid double-counting with settlements
+                    const note = tx.note?.toLowerCase() || "";
+                    if (note.includes("card hold") && !note.includes("settlement")) return false;
+                }
+                return true;
+            })
+            setTransactions(filteredData)
             setSummary(stats)
+            setSummaries(txResult.extended_data?.summaries || {})
         } catch (error) {
             toast.error("Failed to fetch balance data")
         } finally {
@@ -473,12 +487,15 @@ export default function BalanceMovementsPage() {
                                             const isManualSale = tx.source_table === 'manual_sales';
                                             const isExpense = tx.source_table === 'daily_expenses';
                                             const isSupplier = tx.source_table === 'company_account_transactions';
+                                            const isSummary = tx.source_table === 'daily_sales_summary';
+
+                                            const isSupplierSettlement = isInternal && tx.card_hold_id && tx.supplier_id;
 
                                             // Determine credit/debit
                                             let isCredit: boolean;
                                             if (isInternal) {
                                                 isCredit = ["add_cash", "add_bank", "cash_to_bank"].includes(tx.transaction_type) || !!tx.card_hold_id;
-                                            } else if (isFuelSale || isManualSale) {
+                                            } else if (isFuelSale || isManualSale || isSummary) {
                                                 isCredit = true;
                                             } else if (isExpense) {
                                                 isCredit = false;
@@ -495,7 +512,14 @@ export default function BalanceMovementsPage() {
                                                 else if (tx.transaction_type === 'bank_to_cash') displayDescription = "Bank to Cash Withdrawal";
                                                 else if (tx.transaction_type === 'add_cash') displayDescription = tx.is_opening ? "Opening Cash Balance" : "Manual Cash Addition";
                                                 else if (tx.transaction_type === 'add_bank') displayDescription = tx.is_opening ? "Opening Bank Balance" : "Manual Bank Deposit";
-                                                else if (tx.transaction_type === 'transfer_to_supplier') displayDescription = tx.card_hold_id ? `Card Settlement: ${tx.description?.split(':')?.pop() || 'Supplier'}` : "Transfer to Supplier Account";
+                                                else if (tx.transaction_type === 'transfer_to_supplier') {
+                                                    if (tx.card_hold_id) {
+                                                        const parts = tx.description?.split('Settlement:');
+                                                        displayDescription = parts && parts.length > 1 ? `Settlement: ${parts[1]}` : "Card Settlement";
+                                                    } else {
+                                                        displayDescription = "Transfer to Supplier Account";
+                                                    }
+                                                }
                                                 else displayDescription = tx.description || tx.transaction_type.replace("_", " ");
                                             } else if (isFuelSale) {
                                                 displayDescription = tx.note || `Fuel Sale`;
@@ -513,13 +537,17 @@ export default function BalanceMovementsPage() {
                                                 } else if (!displayDescription) {
                                                     displayDescription = "General Transaction";
                                                 }
+                                            } else if (isSummary) {
+                                                const fuelCount = tx.items?.fuel?.length || 0;
+                                                const manualCount = tx.items?.manual?.length || 0;
+                                                displayDescription = `Daily Inflow Summary | ${fuelCount} Fuel Tx, ${manualCount} Manual Tx`;
                                             }
 
                                             // Source badge label
-                                            const sourceLabel = isFuelSale ? "fuel sale" : isManualSale ? "product sale" : isExpense ? "expense" : (tx.transaction_source || tx.transaction_type || "").replace(/_/g, " ");
+                                            const sourceLabel = isFuelSale ? "fuel sale" : isManualSale ? "product sale" : isExpense ? "expense" : isSummary ? "sales summary" : (tx.transaction_source || tx.transaction_type || "").replace(/_/g, " ");
 
                                             const handleRowClick = () => {
-                                                if (isFuelSale || isManualSale || isExpense) {
+                                                if (isFuelSale || isManualSale || isExpense || isSummary) {
                                                     setSelectedTx(tx);
                                                 } else {
                                                     router.push(`/dashboard/balance/movements/${tx.id}`);
@@ -565,8 +593,8 @@ export default function BalanceMovementsPage() {
                                                             <TableCell className="text-right text-slate-500 font-medium text-xs">
                                                                 {tx.bank_before != null ? formatCurrency(tx.bank_before) : "—"}
                                                             </TableCell>
-                                                            <TableCell className={`text-right font-black text-sm ${isCredit ? 'text-green-600' : 'text-red-600'}`}>
-                                                                {isCredit ? '+' : '-'} {formatCurrency(tx.amount)}
+                                                            <TableCell className={`text-right font-black text-sm ${isSupplierSettlement ? 'text-purple-600' : isCredit ? 'text-green-600' : 'text-red-600'}`}>
+                                                                {!isSupplierSettlement && (isCredit ? '+ ' : '- ')} {formatCurrency(tx.amount)}
                                                             </TableCell>
                                                             <TableCell className={`text-right font-black text-sm ${tx.cash_after == null ? 'text-slate-400' : Number(tx.cash_after || 0) >= 0 ? 'text-slate-900' : 'text-red-600'}`}>
                                                                 {tx.cash_after != null ? formatCurrency(tx.cash_after) : "—"}
@@ -575,7 +603,7 @@ export default function BalanceMovementsPage() {
                                                                 {tx.bank_after != null ? formatCurrency(tx.bank_after) : "—"}
                                                             </TableCell>
                                                             <TableCell className="text-center font-bold text-[10px] uppercase text-slate-500">
-                                                                <Badge variant="outline" className={`${tx.account_type === 'Cash' ? 'text-green-600 border-green-200 bg-green-50' : tx.account_type === 'Bank' ? 'text-blue-600 border-blue-200 bg-blue-50' : 'text-slate-600'} text-[9px] uppercase px-2 py-0.5`}>
+                                                                <Badge variant="outline" className={`${tx.account_type === 'Cash' ? 'text-green-600 border-green-200 bg-green-50' : tx.account_type === 'Bank' ? 'text-blue-600 border-blue-200 bg-blue-50' : tx.account_type === 'Supplier Account' ? 'text-purple-600 border-purple-200 bg-purple-50' : 'text-slate-600'} text-[9px] uppercase px-2 py-0.5 whitespace-nowrap`}>
                                                                     {tx.account_type || "—"}
                                                                 </Badge>
                                                             </TableCell>
@@ -603,9 +631,51 @@ export default function BalanceMovementsPage() {
                                                         )}
                                                     </TableCell>
                                                     <TableCell className="text-center">
-                                                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => { e.stopPropagation(); handleRowClick(); }}>
-                                                            <Eye className="h-3 w-3 text-slate-400 hover:text-primary transition-colors" />
-                                                        </Button>
+                                                        <div className="flex items-center justify-center gap-1">
+                                                            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => { e.stopPropagation(); handleRowClick(); }}>
+                                                                <Eye className="h-3 w-3 text-slate-400 hover:text-primary transition-colors" />
+                                                            </Button>
+                                                            {tx.card_hold_id && tx.card_hold_records?.sale_date && (
+                                                                <Button 
+                                                                    variant="ghost" 
+                                                                    size="icon" 
+                                                                    className="h-6 w-6" 
+                                                                    title="View Original Sale Summary"
+                                                                    onClick={(e) => { 
+                                                                        e.stopPropagation(); 
+                                                                        const saleDate = tx.card_hold_records.sale_date;
+                                                                        const summaryId = `summary-sale-${saleDate}`;
+                                                                        let summaryTx = transactions.find(t => t.id === summaryId);
+                                                                        
+                                                                        // If not in the current list (common in Purchase tab), look in the extended summaries
+                                                                        if (!summaryTx && summaries[saleDate]) {
+                                                                            summaryTx = summaries[saleDate];
+                                                                        }
+
+                                                                        if (summaryTx) {
+                                                                            setSelectedTx(summaryTx);
+                                                                        } else {
+                                                                            toast.promise(
+                                                                                getSaleSummaryByDate(saleDate).then(data => {
+                                                                                    if (data.items.fuel.length === 0 && data.items.manual.length === 0 && data.items.holds.length === 0) {
+                                                                                        throw new Error("No sales data found for this date");
+                                                                                    }
+                                                                                    setSelectedTx(data);
+                                                                                }),
+                                                                                {
+                                                                                    loading: 'Fetching original sale summary...',
+                                                                                    success: 'Sale summary loaded',
+                                                                                    error: 'Original sales summary not found for this date'
+                                                                                }
+                                                                            )
+                                                                        }
+                                                                    }}
+                                                                >
+                                                                    <FileText className="h-3 w-3 text-purple-600 hover:text-purple-800 transition-colors" />
+                                                                </Button>
+                                                            )}
+
+                                                        </div>
                                                     </TableCell>
                                                 </TableRow>
                                             );
@@ -619,7 +689,7 @@ export default function BalanceMovementsPage() {
             </Tabs>
 
             <Dialog open={!!selectedTx} onOpenChange={(open: boolean) => !open && setSelectedTx(null)}>
-                <DialogContent className="max-w-md">
+                <DialogContent className={selectedTx?.source_table === 'daily_sales_summary' ? "max-w-4xl max-h-[90vh] overflow-y-auto" : "max-w-md"}>
                     <DialogHeader>
                         <DialogTitle className="uppercase tracking-widest text-primary font-black">Transaction Details</DialogTitle>
                         <DialogDescription className="text-xs uppercase font-bold tracking-wider">
@@ -628,10 +698,10 @@ export default function BalanceMovementsPage() {
                     </DialogHeader>
                     {selectedTx && (
                         <div className="space-y-4 py-4">
-                            <div className="grid grid-cols-2 gap-4 text-sm">
+                            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
                                 <div>
-                                    <p className="text-[10px] uppercase font-bold tracking-widest text-muted-foreground mb-1">Date & Time</p>
-                                    <p className="font-bold">{new Date(selectedTx.transaction_date || selectedTx.created_at).toLocaleString()}</p>
+                                    <p className="text-[10px] uppercase font-bold tracking-widest text-muted-foreground mb-1">Date</p>
+                                    <p className="font-bold">{format(new Date(selectedTx.transaction_date || selectedTx.created_at), "dd MMM yyyy")}</p>
                                 </div>
                                 <div>
                                     <p className="text-[10px] uppercase font-bold tracking-widest text-muted-foreground mb-1">Reference No.</p>
@@ -645,37 +715,212 @@ export default function BalanceMovementsPage() {
                                 </div>
                                 <div>
                                     <p className="text-[10px] uppercase font-bold tracking-widest text-muted-foreground mb-1">Account Impact</p>
-                                    <Badge variant="outline" className={`capitalize text-[10px] font-bold ${selectedTx.account_type === 'Cash' ? 'text-green-600 border-green-200' : selectedTx.account_type === 'Bank' ? 'text-blue-600 border-blue-200' : ''}`}>
+                                    <Badge variant="outline" className={`capitalize text-[10px] font-bold ${selectedTx.account_type?.includes('Cash') ? 'text-green-600 border-green-200' : selectedTx.account_type?.includes('Bank') ? 'text-blue-600 border-blue-200' : ''}`}>
                                         {selectedTx.account_type || "N/A"}
                                     </Badge>
                                 </div>
-                                <div>
-                                    <p className="text-[10px] uppercase font-bold tracking-widest text-muted-foreground mb-1">Entity / Party</p>
-                                    <p className="font-bold text-slate-900">{selectedTx.entity_name || "General"}</p>
-                                </div>
-                                <div className="col-span-2 bg-slate-50 p-3 rounded-lg border">
-                                    <p className="text-[10px] uppercase font-bold tracking-widest text-muted-foreground mb-2">Description & Notes</p>
-                                    <p className="font-bold text-sm text-slate-800">{selectedTx.note || selectedTx.description || selectedTx.transaction_type?.replace(/_/g, " ") || "No additional description."}</p>
-                                </div>
-                                <div className="col-span-2 flex items-center justify-between border-t pt-4">
-                                    <p className="text-[10px] uppercase font-black tracking-widest text-muted-foreground">Transaction Amount</p>
-                                    <p className={`text-xl font-black ${selectedTx.display_type === 'credit' || selectedTx.transaction_type === 'add_cash' || selectedTx.transaction_type === 'add_bank' ? 'text-green-600' : 'text-red-600'}`}>
-                                        {formatCurrency(selectedTx.amount)}
-                                    </p>
-                                </div>
-                                {selectedTx.source_table !== 'balance_transactions' && (
-                                    <div className="col-span-2">
-                                        <p className="text-[10px] text-center text-muted-foreground mt-2 italic">Note: This is a system aggregated record. Financial editing is locked at the ledger level.</p>
-                                    </div>
-                                )}
                             </div>
-                            <div className="flex justify-end pt-2">
-                                <Button variant="outline" onClick={() => setSelectedTx(null)}>Close</Button>
+
+                            {selectedTx.source_table === 'daily_sales_summary' ? (
+                                <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                                    {/* Breakdown Tables */}
+                                    <div className="space-y-4">
+                                        {/* Fuel Sales */}
+                                        {selectedTx.items?.fuel?.length > 0 && (
+                                            <div className="rounded-xl border shadow-sm overflow-hidden bg-white">
+                                                <div className="bg-slate-50 px-4 py-3 border-b flex justify-between items-center">
+                                                    <h3 className="text-xs font-black uppercase tracking-widest text-slate-600 flex items-center gap-2">
+                                                        <FileText size={14} className="text-primary" />
+                                                        Fuel Sales Breakdown
+                                                    </h3>
+                                                    <Badge variant="secondary" className="font-bold">{selectedTx.items.fuel.length} Entries</Badge>
+                                                </div>
+                                                <Table>
+                                                    <TableHeader className="bg-slate-50/50">
+                                                        <TableRow>
+                                                            <TableHead className="h-9 text-[10px] font-black uppercase">Nozzle</TableHead>
+                                                            <TableHead className="h-9 text-[10px] font-black uppercase">Product</TableHead>
+                                                            <TableHead className="h-9 text-[10px] font-black uppercase text-right">Qty (L)</TableHead>
+                                                            <TableHead className="h-9 text-[10px] font-black uppercase text-right">Price</TableHead>
+                                                            <TableHead className="h-9 text-[10px] font-black uppercase text-right">Total</TableHead>
+                                                        </TableRow>
+                                                    </TableHeader>
+                                                    <TableBody>
+                                                        {selectedTx.items.fuel.map((item: any, idx: number) => (
+                                                            <TableRow key={idx}>
+                                                                <TableCell className="py-2 text-xs font-bold">{item.nozzle_name}</TableCell>
+                                                                <TableCell className="py-2 text-xs text-muted-foreground font-semibold">{item.product_name}</TableCell>
+                                                                <TableCell className="py-2 text-xs text-right font-mono">{Number(item.quantity).toLocaleString()}</TableCell>
+                                                                <TableCell className="py-2 text-xs text-right font-mono">Rs. {Number(item.unit_price).toLocaleString()}</TableCell>
+                                                                <TableCell className="py-2 text-xs text-right font-bold">Rs. {Number(item.revenue || item.total_amount).toLocaleString()}</TableCell>
+                                                            </TableRow>
+                                                        ))}
+                                                    </TableBody>
+                                                </Table>
+                                            </div>
+                                        )}
+
+                                        {/* Manual Sales */}
+                                        {selectedTx.items?.manual?.length > 0 && (
+                                            <div className="rounded-xl border shadow-sm overflow-hidden bg-white">
+                                                <div className="bg-slate-50 px-4 py-3 border-b flex justify-between items-center">
+                                                    <h3 className="text-xs font-black uppercase tracking-widest text-slate-600 flex items-center gap-2">
+                                                        <FileText size={14} className="text-primary" />
+                                                        Product Sales Breakdown
+                                                    </h3>
+                                                    <Badge variant="secondary" className="font-bold">{selectedTx.items.manual.length} Entries</Badge>
+                                                </div>
+                                                <Table>
+                                                    <TableHeader className="bg-slate-50/50">
+                                                        <TableRow>
+                                                            <TableHead className="h-9 text-[10px] font-black uppercase">Description</TableHead>
+                                                            <TableHead className="h-9 text-[10px] font-black uppercase text-right">Qty</TableHead>
+                                                            <TableHead className="h-9 text-[10px] font-black uppercase text-right">Price</TableHead>
+                                                            <TableHead className="h-9 text-[10px] font-black uppercase text-right">Total</TableHead>
+                                                        </TableRow>
+                                                    </TableHeader>
+                                                    <TableBody>
+                                                        {selectedTx.items.manual.map((item: any, idx: number) => (
+                                                            <TableRow key={idx}>
+                                                                <TableCell className="py-2 text-xs font-bold">
+                                                                    {item.product_name}
+                                                                    <span className="block text-[9px] text-muted-foreground font-normal">Ref: {item.customer_name || 'Walk-in'}</span>
+                                                                </TableCell>
+                                                                <TableCell className="py-2 text-xs text-right font-mono">{Number(item.quantity).toLocaleString()}</TableCell>
+                                                                <TableCell className="py-2 text-xs text-right font-mono">Rs. {Number(item.unit_price).toLocaleString()}</TableCell>
+                                                                <TableCell className="py-2 text-xs text-right font-bold">Rs. {Number(item.total_amount).toLocaleString()}</TableCell>
+                                                            </TableRow>
+                                                        ))}
+                                                    </TableBody>
+                                                </Table>
+                                            </div>
+                                        )}
+
+                                        {/* Card Holds */}
+                                        {selectedTx.items?.holds?.length > 0 && (
+                                            <div className="rounded-xl border border-amber-200 shadow-sm overflow-hidden bg-amber-50/30">
+                                                <div className="bg-amber-100/50 px-4 py-3 border-b border-amber-200 flex justify-between items-center">
+                                                    <h3 className="text-xs font-black uppercase tracking-widest text-amber-700 flex items-center gap-2">
+                                                        <Wallet size={14} className="text-amber-600" />
+                                                        Card Settlements & Holds
+                                                    </h3>
+                                                    <Badge className="bg-amber-200 text-amber-800 border-amber-300 font-bold hover:bg-amber-200">{selectedTx.items.holds.length} Holds</Badge>
+                                                </div>
+                                                <Table>
+                                                    <TableHeader>
+                                                        <TableRow className="bg-amber-50/50">
+                                                            <TableHead className="h-9 text-[10px] font-black uppercase text-amber-800">Card/Bank</TableHead>
+                                                            <TableHead className="h-9 text-[10px] font-black uppercase text-amber-800">Status</TableHead>
+                                                            <TableHead className="h-9 text-[10px] font-black uppercase text-amber-800">Released At</TableHead>
+                                                            <TableHead className="h-9 text-[10px] font-black uppercase text-amber-800">Settlement</TableHead>
+                                                            <TableHead className="h-9 text-[10px] font-black uppercase text-right text-amber-800">Amount</TableHead>
+                                                        </TableRow>
+                                                    </TableHeader>
+                                                    <TableBody>
+                                                        {selectedTx.items.holds.map((item: any, idx: number) => (
+                                                            <TableRow key={idx} className="border-amber-100">
+                                                                <TableCell className="py-2 text-xs font-bold text-amber-900">
+                                                                    {item.entity_name || 'System Card'}
+                                                                    <span className="block text-[9px] text-amber-700/70 font-normal truncate max-w-[200px]">{item.description}</span>
+                                                                </TableCell>
+                                                                <TableCell className="py-2 text-[10px] uppercase font-black">
+                                                                    {item.card_hold_records?.status === 'released' ? (
+                                                                        <span className="text-green-600">Released</span>
+                                                                    ) : (
+                                                                        <span className="text-amber-600">Pending</span>
+                                                                    )}
+                                                                </TableCell>
+                                                                <TableCell className="py-2 text-[10px] font-bold text-amber-700/80">
+                                                                    {item.card_hold_records?.released_at 
+                                                                        ? format(new Date(item.card_hold_records.released_at), "dd MMM, HH:mm") 
+                                                                        : "—"}
+                                                                </TableCell>
+                                                                <TableCell className="py-2 text-[10px] uppercase font-bold text-amber-900">
+                                                                    {item.settlement_info ? (
+                                                                        <Button 
+                                                                            variant="link" 
+                                                                            className="h-auto p-0 text-[10px] font-black text-purple-600 hover:text-purple-800"
+                                                                            onClick={() => router.push(`/dashboard/balance/movements/${item.settlement_info.id}`)}
+                                                                        >
+                                                                            {item.settlement_info.ref}
+                                                                        </Button>
+                                                                    ) : "—"}
+                                                                </TableCell>
+                                                                <TableCell className="py-2 text-xs text-right font-black text-amber-700">- {formatCurrency(item.amount)}</TableCell>
+                                                            </TableRow>
+                                                        ))}
+                                                    </TableBody>
+                                                </Table>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Final Calc Footer */}
+                                    <div className="bg-slate-900 text-white rounded-xl p-6 shadow-2xl relative overflow-hidden group">
+                                        <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity">
+                                            <Scale size={100} />
+                                        </div>
+                                        <div className="flex flex-col gap-4">
+                                            <div className="flex justify-between items-center border-b border-white/10 pb-4">
+                                                <div>
+                                                    <p className="text-[10px] uppercase font-black tracking-widest text-slate-400">Total Gross Sale</p>
+                                                    <p className="text-xl font-bold">
+                                                        {formatCurrency(
+                                                            selectedTx.items.fuel.reduce((acc: number, cur: any) => acc + Number(cur.revenue || cur.total_amount), 0) +
+                                                            selectedTx.items.manual.reduce((acc: number, cur: any) => acc + Number(cur.total_amount), 0)
+                                                        )}
+                                                    </p>
+                                                </div>
+                                                <div className="text-right">
+                                                    <p className="text-[10px] uppercase font-black tracking-widest text-amber-400">Total Card Hold</p>
+                                                    <p className="text-xl font-bold text-amber-400">
+                                                        - {formatCurrency(selectedTx.items.holds.reduce((acc: number, cur: any) => acc + Number(cur.amount), 0))}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                            <div className="flex justify-between items-end">
+                                                <div>
+                                                    <h4 className="text-[11px] font-black uppercase tracking-[0.2em] text-primary">Final Net Inflow</h4>
+                                                    <p className="text-muted-foreground text-[10px] uppercase mt-1">This amount is added to the system Ledger Balance.</p>
+                                                </div>
+                                                <div className="text-4xl font-black text-white tracking-tighter animate-pulse">
+                                                    {formatCurrency(selectedTx.amount)}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            ) : (
+                                <>
+                                    <div className="col-span-2">
+                                        <p className="text-[10px] uppercase font-bold tracking-widest text-muted-foreground mb-1">Entity / Party</p>
+                                        <p className="font-bold text-slate-900 text-lg">{selectedTx.entity_name || "General"}</p>
+                                    </div>
+                                    <div className="col-span-2 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                                        <p className="text-[10px] uppercase font-bold tracking-widest text-muted-foreground mb-2">Description & Notes</p>
+                                        <p className="font-bold text-sm text-slate-800 leading-relaxed">{selectedTx.note || selectedTx.description || selectedTx.transaction_type?.replace(/_/g, " ") || "No additional description."}</p>
+                                    </div>
+                                    <div className="col-span-2 flex items-center justify-between bg-slate-100/50 p-4 rounded-xl border-2 border-dashed border-slate-200">
+                                        <div>
+                                            <p className="text-[10px] uppercase font-black tracking-widest text-muted-foreground">Transaction Amount</p>
+                                            <p className="text-[9px] text-muted-foreground uppercase font-bold">Injected into system ledger</p>
+                                        </div>
+                                        <p className={`text-2xl font-black ${selectedTx.display_type === 'credit' || selectedTx.transaction_type?.includes('add') ? 'text-green-600' : 'text-red-600'}`}>
+                                            {formatCurrency(selectedTx.amount)}
+                                        </p>
+                                    </div>
+                                </>
+                            )}
+                            
+                            <div className="flex justify-between items-center pt-4 border-t">
+                                <p className="text-[10px] text-muted-foreground italic max-w-[240px]">Note: Financial editing is locked at the ledger level for audit integrity.</p>
+                                <Button variant="outline" className="font-bold uppercase tracking-widest text-[10px] h-8" onClick={() => setSelectedTx(null)}>Close Detail</Button>
                             </div>
                         </div>
                     )}
                 </DialogContent>
             </Dialog>
+
         </div>
     )
 }

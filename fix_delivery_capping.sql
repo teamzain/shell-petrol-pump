@@ -149,12 +149,14 @@ BEGIN
             product_id, movement_type, quantity, 
             ordered_quantity, previous_stock, 
             balance_after, unit_price, weighted_avg_after, 
-            notes, reference_number, supplier_id
+            notes, reference_number, supplier_id,
+            movement_date
         ) VALUES (
             v_product_id, 'purchase', p_received_qty,
             v_ordered_qty, v_prev_stock,
             v_new_stock, v_rate_per_liter, v_new_wac,
-            COALESCE(p_notes, 'Delivery against PO'), p_delivery_number, v_po.supplier_id
+            p_notes, p_delivery_number, v_po.supplier_id,
+            (p_delivery_date::text || ' ' || (now() AT TIME ZONE 'Asia/Karachi')::time::text)::timestamp AT TIME ZONE 'Asia/Karachi'
         );
 
         INSERT INTO stock_daily_register (product_type, register_date, total_deliveries, closing_stock)

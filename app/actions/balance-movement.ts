@@ -19,7 +19,7 @@ export async function getBalanceMovement(filters?: {
     const from = (page - 1) * pageSize
     const to = from + pageSize - 1
 
-    const category = filters?.category || 'all'
+    const category = (filters?.category || 'all').toLowerCase()
 
     let companyTx: any[] = []
     let balanceTx: any[] = []
@@ -52,6 +52,53 @@ export async function getBalanceMovement(filters?: {
         const { data, error } = await companyQuery
         if (error) throw error
         companyTx = data || []
+        
+        // 1b. For Settlements that might not have card_hold_id set explicitly on companyTx, extract it from note
+        companyTx = companyTx.map(tx => {
+            if (!tx.card_hold_id && tx.note?.includes("Hold ID: ")) {
+                const match = tx.note.match(/Hold ID: ([a-f0-9\-]+)/);
+                if (match && match[1]) {
+                    tx.card_hold_id = match[1];
+                }
+            }
+            return tx;
+        });
+
+        // Manual join for card_hold_records to avoid relationship errors
+        const holdIds = companyTx.filter(tx => tx.card_hold_id).map(tx => tx.card_hold_id);
+        if (holdIds.length > 0) {
+            const { data: holds } = await supabase
+                .from("card_hold_records")
+                .select("id, status, released_at, sale_date")
+                .in("id", holdIds);
+            
+            if (holds) {
+                const holdMap = Object.fromEntries(holds.map(h => [h.id, h]));
+                companyTx = companyTx.map(tx => ({
+                    ...tx,
+                    card_hold_records: tx.card_hold_id ? holdMap[tx.card_hold_id] : null
+                }));
+            }
+        }
+
+        // Also fetch balance_transactions that affect suppliers (like card settlements)
+        let bSuppQuery = supabase.from("balance_transactions").select(`
+            *,
+            bank_accounts:bank_account_id ( account_name ),
+            suppliers:supplier_id ( name ),
+            card_hold_records ( status, released_at, sale_date )
+        `).not("supplier_id", "is", null)
+
+        if (filters?.date_from) bSuppQuery = bSuppQuery.gte("transaction_date", filters.date_from)
+        if (filters?.date_to) bSuppQuery = bSuppQuery.lte("transaction_date", filters.date_to)
+        if (filters?.supplier_id && filters.supplier_id !== 'all') bSuppQuery = bSuppQuery.eq("supplier_id", filters.supplier_id)
+        
+        const { data: bSuppData } = await bSuppQuery
+        if (bSuppData) {
+            // Filter out those already in balanceTx to avoid duplicates if category === 'all'
+            const existingIds = new Set(balanceTx.map(t => t.id))
+            balanceTx = [...balanceTx, ...bSuppData.filter(t => !existingIds.has(t.id))]
+        }
     }
 
     // 2. Fetch Internal Balance Transactions (Sale Category)
@@ -62,13 +109,14 @@ export async function getBalanceMovement(filters?: {
                 *,
                 bank_accounts:bank_account_id ( account_name ),
                 to_bank_accounts:to_bank_account_id ( account_name ),
-                suppliers:supplier_id ( name )
+                suppliers:supplier_id ( name ),
+                card_hold_records ( status, released_at, sale_date )
             `)
         
         if (category === 'sale') {
             balanceQuery = balanceQuery.or(`is_hold.eq.true,card_hold_id.not.is.null,transaction_type.neq.transfer_to_supplier,transaction_type.neq.supplier_to_bank`)
         } else {
-            balanceQuery = balanceQuery.or(`is_hold.eq.true,card_hold_id.not.is.null,and(transaction_type.neq.transfer_to_supplier,transaction_type.neq.supplier_to_bank)`)
+            // For 'all', we want everything
         }
 
         if (filters?.date_from) balanceQuery = balanceQuery.gte("transaction_date", filters.date_from)
@@ -84,7 +132,10 @@ export async function getBalanceMovement(filters?: {
 
         const { data, error } = await balanceQuery
         if (error) throw error
-        balanceTx = data || []
+        
+        // Merge with existing balanceTx (from purchase block) if any
+        const existingIds = new Set(balanceTx.map(t => t.id))
+        balanceTx = [...balanceTx, ...(data || []).filter(t => !existingIds.has(t.id))]
     }
 
     // 3. Fetch Fuel Sales (Sale Category)
@@ -128,9 +179,100 @@ export async function getBalanceMovement(filters?: {
             expensesTx = data || []
         }
     }
-
     // 6. Unify and Transform
-    let unified = [
+    let unified: any[] = []
+
+    // 6a. Group Sales into Summaries (Always done to ensure Action buttons work)
+    const dailySummary: Record<string, any> = {}
+    const settlementMap: Record<string, any> = {}
+    const settlements = balanceTx.filter(tx => tx.card_hold_id && !tx.is_hold)
+    settlements.forEach(s => {
+        if (s.card_hold_id) settlementMap[s.card_hold_id] = { id: s.id, ref: s.reference_number || 'SETTLEMENT' }
+    })
+
+    // Fuel Sales
+    salesTx.forEach(tx => {
+        const date = tx.sale_date
+        if (!dailySummary[date]) {
+            dailySummary[date] = {
+                id: `summary-sale-${date}`,
+                transaction_date: date,
+                created_at: `${date}T23:59:59Z`,
+                source_table: 'daily_sales_summary',
+                entity_name: 'Daily Sales Summary',
+                transaction_type: 'credit',
+                transaction_source: 'sales_summary',
+                display_type: 'credit',
+                amount: 0,
+                reference_number: 'DAILY-SUMMARY',
+                items: { fuel: [], manual: [], holds: [] },
+                note: 'Consolidated Daily Sales Inflow'
+            }
+        }
+        dailySummary[date].amount += Number(tx.revenue ?? tx.total_amount)
+        dailySummary[date].items.fuel.push({
+            ...tx,
+            product_name: tx.nozzles?.products?.name || 'Fuel',
+            nozzle_name: tx.nozzles?.nozzle_number || 'N/A'
+        })
+    })
+
+    // Manual Sales
+    manualSalesTx.forEach(tx => {
+        const date = tx.sale_date
+        if (!dailySummary[date]) {
+            dailySummary[date] = {
+                id: `summary-sale-${date}`,
+                transaction_date: date,
+                created_at: `${date}T23:59:59Z`,
+                source_table: 'daily_sales_summary',
+                entity_name: 'Daily Sales Summary',
+                transaction_type: 'credit',
+                transaction_source: 'sales_summary',
+                display_type: 'credit',
+                amount: 0,
+                reference_number: 'DAILY-SUMMARY',
+                items: { fuel: [], manual: [], holds: [] },
+                note: 'Consolidated Daily Sales Inflow'
+            }
+        }
+        dailySummary[date].amount += Number(tx.total_amount)
+        dailySummary[date].items.manual.push({
+            ...tx,
+            product_name: tx.products?.name || 'Product'
+        })
+    })
+
+    // Card Holds
+    const holds = balanceTx.filter(tx => tx.is_hold)
+    holds.forEach(tx => {
+        const date = tx.transaction_date || tx.created_at?.split('T')[0]
+        if (!dailySummary[date]) {
+            dailySummary[date] = {
+                id: `summary-sale-${date}`,
+                transaction_date: date,
+                created_at: `${date}T23:59:59Z`,
+                source_table: 'daily_sales_summary',
+                entity_name: 'Daily Sales Summary',
+                transaction_type: 'credit',
+                transaction_source: 'sales_summary',
+                display_type: 'credit',
+                amount: 0,
+                reference_number: 'DAILY-SUMMARY',
+                items: { fuel: [], manual: [], holds: [] },
+                note: 'Consolidated Daily Sales Inflow'
+            }
+        }
+        dailySummary[date].amount -= Number(tx.amount)
+        const settlementInfo = tx.card_hold_id ? settlementMap[tx.card_hold_id] : null
+        dailySummary[date].items.holds.push({
+            ...tx,
+            settlement_info: settlementInfo
+        })
+    })
+
+    // Determine what to include in final unified list
+    const nonGroupedCommon = [
         ...companyTx.map(tx => {
             const supplierName = tx.company_accounts?.suppliers?.name || 'Supplier';
             const bankName = tx.bank_accounts?.account_name;
@@ -142,7 +284,30 @@ export async function getBalanceMovement(filters?: {
                 display_type: tx.transaction_type
             };
         }),
-        ...balanceTx.map(tx => {
+        ...balanceTx.filter(tx => {
+            // General filter out grouped records (holds are grouped)
+            if (tx.is_hold) return false;
+            
+            // In SALE tab, only show if it's NOT a hold (already handled)
+            if (category === 'sale') return true;
+            
+            // In PURCHASE tab, only show if it affects a supplier 
+            if (category === 'purchase') {
+                // Deduplicate CardHold vs Settlement:
+                // 1. If it's explicitly a "Card Hold" (gross value), we hide it in the Purchase ledger
+                // because the user only wants to see the final Settlement (net value after tax).
+                const note = tx.note?.toLowerCase() || "";
+                if (note.includes("card hold") && !note.includes("settlement")) return false;
+
+                // 2. Card settlements that hit a supplier ledger already exist as 'company_account_transactions'.
+                // If it has both supplier_id and card_hold_id, it is almost certainly a duplicate of a companyTx record.
+                if (tx.supplier_id && tx.card_hold_id) return false; 
+                
+                return !!tx.supplier_id;
+            }
+            
+            return true;
+        }).map(tx => {
             let entityName = tx.bank_accounts?.account_name || tx.suppliers?.name || 'System / Cash';
             if (tx.transaction_type === 'bank_to_bank' && tx.to_bank_accounts?.account_name) {
                 entityName = `${tx.bank_accounts?.account_name || 'N/A'} ➜ ${tx.to_bank_accounts.account_name}`;
@@ -160,34 +325,6 @@ export async function getBalanceMovement(filters?: {
                 display_type: tx.transaction_type
             };
         }),
-        ...salesTx.map(tx => ({
-            ...tx,
-            source_table: 'daily_sales',
-            amount: tx.revenue ?? tx.total_amount,
-            transaction_date: tx.sale_date,
-            entity_name: tx.nozzles?.nozzle_number || 'Fuel Pump',
-            transaction_type: 'credit',
-            balance_before: null,
-            balance_after: null,
-            reference_number: null,
-            transaction_source: 'fuel_sale',
-            display_type: 'credit',
-            note: `Fuel Sale — ${tx.nozzles?.products?.name || 'Fuel'} | Qty: ${tx.quantity ?? 'N/A'} L @ Rs.${tx.unit_price ?? 'N/A'}`
-        })),
-        ...manualSalesTx.map(tx => ({
-            ...tx,
-            source_table: 'manual_sales',
-            amount: tx.total_amount,
-            transaction_date: tx.sale_date,
-            entity_name: tx.customer_name || 'Walk-in Customer',
-            transaction_type: 'credit',
-            balance_before: null,
-            balance_after: null,
-            reference_number: null,
-            transaction_source: 'manual_sale',
-            display_type: 'credit',
-            note: `Product Sale — ${tx.products?.name || 'Product'} × ${tx.quantity} @ Rs.${tx.unit_price}`
-        })),
         ...expensesTx.map(tx => ({
             ...tx,
             source_table: 'daily_expenses',
@@ -203,6 +340,24 @@ export async function getBalanceMovement(filters?: {
             note: tx.description || tx.expense_categories?.category_name || 'Daily Expense'
         }))
     ]
+
+    if (category === 'sale') {
+        unified = [
+            ...nonGroupedCommon,
+            ...Object.values(dailySummary)
+        ]
+    } else if (category === 'purchase') {
+        // Ensure NO daily sales summary is included in purchase tab
+        unified = nonGroupedCommon.filter(tx => tx.source_table !== 'daily_sales_summary');
+    } else {
+        // all or other
+        unified = [
+            ...nonGroupedCommon,
+            ...Object.values(dailySummary)
+        ]
+    }
+
+
 
     // 7. Sort in JS (descending chronological order)
     unified.sort((a, b) => {
@@ -236,18 +391,43 @@ export async function getBalanceMovement(filters?: {
             tx.bank_after = runningBank;
 
             const isInternal = tx.source_table === 'balance_transactions';
+            const isSummary = tx.source_table === 'daily_sales_summary';
             let cashImpact = 0;
             let bankImpact = 0;
             let amount = Number(tx.amount || 0);
 
-            if (isInternal) {
+            if (isSummary) {
+                // The amount is already net (Total sales - Card holds)
+                // Sales inflow goes to cash
+                cashImpact = amount;
+                
+                // Card holds (if we tracked them separately in this record)
+                // Actually, the card holds were subtracted.
+                // If card holds are part of this row, the amount only reflects the cash portion.
+                // But the Bank balance should technically increase by the hold amount if we want it accurate?
+                // Wait, if I subtract card holds from the summary row, those holds aren't being added to the bank balance here.
+                // Let's rethink. If I want the running bank balance to be correct, I should add the holds to bank impact within the summary row.
+                const holdAmountTotal = tx.items.holds.reduce((acc: number, h: any) => acc + Number(h.amount), 0);
+                bankImpact = holdAmountTotal;
+            } else if (isInternal) {
                 const type = tx.transaction_type;
                 if (type === 'add_cash') cashImpact = amount;
                 else if (type === 'add_bank') bankImpact = amount;
                 else if (type === 'cash_to_bank') { cashImpact = -amount; bankImpact = amount; }
                 else if (type === 'bank_to_cash') { bankImpact = -amount; cashImpact = amount; }
-                else if (type === 'transfer_to_supplier' || type === 'supplier_to_bank') {
-                    bankImpact = -amount; 
+                else if (type === 'transfer_to_supplier') {
+                    // Shell Card / Supplier Card Settlements don't affect physical cash/bank in Sale Tab
+                    // as they represent a ledger movement to a supplier's account.
+                    if (tx.card_hold_id) {
+                        cashImpact = 0;
+                        bankImpact = 0;
+                    } else if (tx.bank_account_id) {
+                        bankImpact = -amount;
+                    } else {
+                        cashImpact = -amount;
+                    }
+                } else if (type === 'supplier_to_bank') {
+                    bankImpact = amount;
                 } else if (tx.card_hold_id) {
                     bankImpact = tx.is_hold ? -amount : amount;
                 }
@@ -258,8 +438,12 @@ export async function getBalanceMovement(filters?: {
                 else cashImpact = -amount;
             }
 
-            if (cashImpact !== 0 && bankImpact !== 0) {
-                tx.account_type = "Cash & Bank";
+            const isSupplierSettlement = isInternal && tx.card_hold_id && tx.supplier_id;
+
+            if (isSupplierSettlement) {
+                tx.account_type = "Supplier Account";
+            } else if (cashImpact !== 0 && bankImpact !== 0) {
+                tx.account_type = isSummary ? "Mixed (Sales/Holds)" : "Cash & Bank";
             } else if (cashImpact !== 0) {
                 tx.account_type = "Cash";
             } else if (bankImpact !== 0) {
@@ -277,6 +461,7 @@ export async function getBalanceMovement(filters?: {
             runningCash = cashBefore;
             runningBank = bankBefore;
         }
+
         
         // 8a. Post-process filtering for Sale Tab
         if (filters?.account_type && filters.account_type !== 'all') {
@@ -337,9 +522,13 @@ export async function getBalanceMovement(filters?: {
         data: paginated,
         total: unified.length,
         page,
-        totalPages: Math.ceil(unified.length / pageSize)
+        totalPages: Math.ceil(unified.length / pageSize),
+        extended_data: {
+            summaries: dailySummary
+        }
     }
 }
+
 
 export async function getBalanceMovementSummary(filters?: {
     date_from?: string;
@@ -376,6 +565,30 @@ export async function getBalanceMovementSummary(filters?: {
             totalCredits += credits
             totalDebits += debits
             
+            // Also include balance_transactions that affect suppliers
+            let bQuery = supabase.from("balance_transactions").select("amount, transaction_type, is_hold, note, card_hold_id").not("supplier_id", "is", null)
+            if (filters?.date_from) bQuery = bQuery.gte("transaction_date", filters.date_from)
+            if (filters?.date_to) bQuery = bQuery.lte("transaction_date", filters.date_to)
+            if (filters?.supplier_id && filters.supplier_id !== 'all') bQuery = bQuery.eq("supplier_id", filters.supplier_id)
+            
+            const { data: bTxs } = await bQuery
+            if (bTxs) {
+                // Deduplicate: Exclude "Card Hold:" (gross) from credits if we want net settlement
+                const bCredits = bTxs.filter(t => 
+                    !t.is_hold && 
+                    !t.note?.startsWith("Card Hold:") && 
+                    (["add_cash", "add_bank", "cash_to_bank", "transfer_to_supplier", "credit"].includes(t.transaction_type))
+                ).reduce((acc, t) => acc + Number(t.amount), 0)
+                
+                const bDebits = bTxs.filter(t => 
+                    !t.is_hold && 
+                    (["debit"].includes(t.transaction_type))
+                ).reduce((acc, t) => acc + Number(t.amount), 0)
+                
+                totalCredits += bCredits
+                totalDebits += bDebits
+            }
+
             let holdsQuery = supabase.from("po_hold_records").select("hold_amount").eq("status", "on_hold")
             const { data: activeHolds } = await holdsQuery
             const poHolds = activeHolds?.reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
@@ -401,16 +614,22 @@ export async function getBalanceMovementSummary(filters?: {
         // 2a. Internal balance_transactions inflows/outflows
         let internalInflow = 0
         let internalOutflow = 0
-        let bQuery = supabase.from("balance_transactions").select("amount, transaction_type, is_hold")
+        let bQuery = supabase.from("balance_transactions").select("amount, transaction_type, is_hold, card_hold_id, card_hold_records(status)")
         if (filters?.date_from) bQuery = bQuery.gte("transaction_date", filters.date_from)
         if (filters?.date_to) bQuery = bQuery.lte("transaction_date", filters.date_to)
         
         const { data: bTxs } = await bQuery
         if (bTxs) {
-            internalInflow = bTxs.filter(t => ["add_cash", "add_bank", "cash_to_bank"].includes(t.transaction_type) && !t.is_hold).reduce((acc, t) => acc + Number(t.amount), 0)
-            internalOutflow = bTxs.filter(t => ["bank_to_cash"].includes(t.transaction_type) && !t.is_hold).reduce((acc, t) => acc + Number(t.amount), 0)
+            internalInflow = bTxs.filter(t => ["add_cash", "add_bank", "supplier_to_bank"].includes(t.transaction_type) && !t.is_hold).reduce((acc, t) => acc + Number(t.amount), 0)
+            internalOutflow = bTxs.filter(t => t.transaction_type === "transfer_to_supplier" && !t.card_hold_id && !t.is_hold).reduce((acc, t) => acc + Number(t.amount), 0)
             
-            const salesCardHolds = bTxs.filter(t => t.is_hold).reduce((acc, h) => acc + Number(h.amount), 0) || 0
+            const salesCardHolds = bTxs.filter(t => {
+                if (!t.is_hold) return false;
+                const chr: any = t.card_hold_records;
+                const status = Array.isArray(chr) ? chr[0]?.status : chr?.status;
+                return status === 'on_hold';
+            }).reduce((acc, h) => acc + Number(h.amount), 0) || 0;
+            
             if (category === 'sale') {
                 totalHolds = salesCardHolds
             } else {
@@ -580,4 +799,87 @@ export async function snoozePOHoldNotification(id: string) {
     }
 
     return { success: true }
+}
+
+export async function getSaleSummaryByDate(date: string) {
+    const supabase = await createClient()
+
+    const { data: fuelSales } = await supabase
+        .from("daily_sales")
+        .select(`*, nozzles ( nozzle_number, product_id, products ( name ) )`)
+        .eq("sale_date", date)
+
+    const { data: manualSales } = await supabase
+        .from("manual_sales")
+        .select(`*, products ( name )`)
+        .eq("sale_date", date)
+
+    const { data: holdsData } = await supabase
+        .from("balance_transactions")
+        .select(`*, bank_accounts:bank_account_id ( account_name ), card_hold_records ( status, released_at, sale_date )`)
+        .eq("is_hold", true)
+
+    // Settlements map
+    const { data: settlements } = await supabase
+        .from("balance_transactions")
+        .select("id, reference_number, card_hold_id")
+        .not("card_hold_id", "is", null)
+        .eq("is_hold", false)
+        .not("reference_number", "is", null)
+        
+    const settlementMap: Record<string, any> = {}
+    if (settlements) {
+        settlements.forEach(s => {
+            if (s.card_hold_id) settlementMap[s.card_hold_id] = { id: s.id, ref: s.reference_number || 'SETTLEMENT' }
+        })
+    }
+
+    const summary = {
+        id: `summary-sale-${date}`,
+        transaction_date: date,
+        created_at: `${date}T23:59:59Z`,
+        source_table: 'daily_sales_summary',
+        entity_name: 'Daily Sales Summary',
+        transaction_type: 'credit',
+        transaction_source: 'sales_summary',
+        display_type: 'credit',
+        amount: 0,
+        reference_number: 'DAILY-SUMMARY',
+        items: { fuel: [] as any[], manual: [] as any[], holds: [] as any[] },
+        note: 'Consolidated Daily Sales Inflow'
+    }
+
+    if (fuelSales) {
+        fuelSales.forEach(tx => {
+            summary.amount += Number(tx.revenue ?? tx.total_amount)
+            summary.items.fuel.push({
+                ...tx,
+                product_name: tx.nozzles?.products?.name || 'Fuel',
+                nozzle_name: tx.nozzles?.nozzle_number || 'N/A'
+            })
+        })
+    }
+
+    if (manualSales) {
+        manualSales.forEach(tx => {
+            summary.amount += Number(tx.total_amount)
+            summary.items.manual.push({
+                ...tx,
+                product_name: tx.products?.name || 'Product'
+            })
+        })
+    }
+
+    const filteredHolds = (holdsData || []).filter(h => h.card_hold_records?.sale_date === date || h.transaction_date === date || h.created_at?.startsWith(date))
+
+    filteredHolds.forEach(tx => {
+        summary.amount -= Number(tx.amount)
+        const settlementInfo = tx.card_hold_id ? settlementMap[tx.card_hold_id] : null
+        summary.items.holds.push({
+            ...tx,
+            settlement_info: settlementInfo
+        })
+    })
+
+    return summary
 }

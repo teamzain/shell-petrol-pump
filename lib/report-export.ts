@@ -10,9 +10,10 @@ interface ExportOptions {
     reportData: any
     filters: any
     stationName?: string
+    scope?: string // e.g. "full", "purchases", "ledger", "holds"
 }
 
-export function exportReport({ activeTab, reportData, filters, stationName = "United Filling Station" }: ExportOptions, type: ExportType) {
+export function exportReport({ activeTab, reportData, filters, stationName = "United Filling Station", scope = "full" }: ExportOptions, type: ExportType) {
     if (!reportData) return
 
     try {
@@ -23,7 +24,7 @@ export function exportReport({ activeTab, reportData, filters, stationName = "Un
         if (type === "csv") {
             exportToCSV(activeTab, reportData, dateRangeStr, filters)
         } else {
-            exportToPDF(activeTab, reportData, dateRangeStr, stationName, filters)
+            exportToPDF(activeTab, reportData, dateRangeStr, stationName, filters, scope)
         }
     } catch (error) {
         console.error(`Error exporting ${type} report:`, error)
@@ -247,6 +248,55 @@ function exportToCSV(activeTab: string, reportData: any, dateRangeStr: string, f
             ]
             csvContent += row.join(",") + "\n"
         })
+    } else if (activeTab === "daily-recap" && reportData.financials) {
+        const d = reportData
+        csvContent += "DAILY RECAP REPORT\n"
+        csvContent += `Date,${d._date || dateRangeStr}\n`
+        csvContent += `Generated,${format(new Date(), "PPpp")}\n\n`
+
+        // Total Balance Summary
+        const totalOpening = (d.financials.cash.opening || 0) + (d.financials.bank.opening || 0)
+        const totalClosing = (d.financials.cash.closing || 0) + (d.financials.bank.closing || 0)
+        csvContent += "TOTAL BUSINESS BALANCE (CASH + BANK)\n"
+        csvContent += "Metric,Amount (Rs.)\n"
+        csvContent += `Total Opening Balance,${totalOpening}\n`
+        csvContent += `Total Closing Balance,${totalClosing}\n`
+        csvContent += `Net Change,${totalClosing - totalOpening}\n\n`
+
+        csvContent += "CASH ACCOUNT\n"
+        csvContent += "Metric,Amount (Rs.)\n"
+        csvContent += `Opening Balance,${d.financials.cash.opening}\n`
+        csvContent += `Cash Sales (In),${d.financials.cash.sale}\n`
+        csvContent += `Cash Expenses (Out),${d.financials.cash.expense}\n`
+        csvContent += `Closing Balance,${d.financials.cash.closing}\n\n`
+
+        csvContent += "BANK ACCOUNT\n"
+        csvContent += "Metric,Amount (Rs.)\n"
+        csvContent += `Opening Balance,${d.financials.bank.opening}\n`
+        csvContent += `Card Sales (In),${d.financials.bank.sale}\n`
+        csvContent += `Bank Payments (Out),${d.financials.bank.expense}\n`
+        csvContent += `Card Holds (Today),${d.financials.bank.hold}\n`
+        csvContent += `Card Releases (Today),${d.financials.bank.released}\n`
+        csvContent += `Closing Balance,${d.financials.bank.closing}\n\n`
+
+        csvContent += "SUPPLIER LIABILITIES\n"
+        csvContent += "Metric,Amount (Rs.)\n"
+        csvContent += `Initial Balance,${d.suppliers.opening}\n`
+        csvContent += `Purchases Added,${d.suppliers.additions}\n`
+        csvContent += `Payments Made,${d.suppliers.payments}\n`
+        csvContent += `Closing Debt,${d.suppliers.closing}\n`
+        csvContent += `Supplier Card On Hold,${d.suppliers.cardOnHold}\n`
+        csvContent += `Supplier Card Released,${d.suppliers.cardReleased}\n`
+        csvContent += `Shortage Holds (Today),${d.suppliers.purchaseHoldOnHold}\n`
+        csvContent += `Shortage Releases (Today),${d.suppliers.purchaseHoldReleased}\n\n`
+
+        if (d.inventory && d.inventory.length > 0) {
+            csvContent += "STOCK MOVEMENTS\n"
+            csvContent += "Item,Opening Stock,Received (In),Sold (Out),Closing Stock,Unit\n"
+            d.inventory.forEach((item: any) => {
+                csvContent += `"${item.name}",${item.opening},${item.in},${item.out},${item.closing},${item.unit}\n`
+            })
+        }
     } else {
         csvContent += "Data Error: Export not fully configured for this tab yet."
     }
@@ -259,7 +309,7 @@ function exportToCSV(activeTab: string, reportData: any, dateRangeStr: string, f
     document.body.removeChild(link)
 }
 
-function exportToPDF(activeTab: string, reportData: any, dateRangeStr: string, stationName: string, filters: any) {
+function exportToPDF(activeTab: string, reportData: any, dateRangeStr: string, stationName: string, filters: any, scope: string = "full") {
     const doc = new jsPDF()
     const title = activeTab.split("-").map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(" ")
 
@@ -277,25 +327,31 @@ function exportToPDF(activeTab: string, reportData: any, dateRangeStr: string, s
         ["Report Period", dateRangeStr]
     ]
 
-    // Category Filter
-    let categoryLabel = "All Categories"
-    if (filters.productType === "fuel") categoryLabel = "Fuel Only"
-    if (filters.productType === "oil_lubricant") categoryLabel = "Lubricants Only"
-    metadataBody.push(["Category", categoryLabel])
+    if (activeTab === "expense-breakdown") {
+        // Special Header for Expenses - Remove Product references
+        metadataBody.push(["Expense Category", reportData.selectedCategoryName || "All Categories"])
+        if (reportData.searchQuery) {
+            metadataBody.push(["Search Term", reportData.searchQuery])
+        }
+    } else {
+        // Standard Header for Sales/Purchases/etc.
+        let categoryLabel = "All Categories"
+        if (filters.productType === "fuel") categoryLabel = "Fuel Only"
+        if (filters.productType === "oil_lubricant") categoryLabel = "Lubricants Only"
+        metadataBody.push(["Category", categoryLabel])
 
-    // Product Filter
-    let productLabel = "All Products"
-    if (filters.productId !== "all" && reportData.productBreakdown?.length > 0) {
-        const found = reportData.productBreakdown.find((p: any) => p.product_id === filters.productId)
-        productLabel = found ? found.name : "Specific Product"
-    } else if (filters.productId !== "all") {
-        productLabel = "Specific Product"
-    }
-    metadataBody.push(["Selected Product", productLabel])
+        let productLabel = "All Products"
+        if (filters.productId !== "all" && reportData.productBreakdown?.length > 0) {
+            const found = reportData.productBreakdown.find((p: any) => p.product_id === filters.productId)
+            productLabel = found ? found.name : "Specific Product"
+        } else if (filters.productId !== "all") {
+            productLabel = "Specific Product"
+        }
+        metadataBody.push(["Selected Product", productLabel])
 
-    // Supplier Filter (if exists in filters)
-    if (filters.supplierId && filters.supplierId !== "all") {
-        metadataBody.push(["Supplier", "Filtered Specific"])
+        if (filters.supplierId && filters.supplierId !== "all") {
+            metadataBody.push(["Supplier", "Filtered Specific"])
+        }
     }
 
     metadataBody.push(["Generated On", format(new Date(), "PPpp")])
@@ -334,7 +390,84 @@ function exportToPDF(activeTab: string, reportData: any, dateRangeStr: string, s
     }
 
     // Tab-specific Exports
-    if (activeTab === "profit-loss") {
+    if (activeTab === "daily-recap" && reportData.financials) {
+        const d = reportData
+        const fmt = (n: number) => `Rs. ${Number(n || 0).toLocaleString("en-PK", { minimumFractionDigits: 2 })}`
+
+        // Total Balance KPI (hero card)
+        const totalOpening = (d.financials.cash.opening || 0) + (d.financials.bank.opening || 0)
+        const totalClosing = (d.financials.cash.closing || 0) + (d.financials.bank.closing || 0)
+        addKPIGrid(
+            "Total Business Balance (Cash + Bank Combined)",
+            ["TOTAL OPENING", "CASH CLOSING", "BANK CLOSING", "TOTAL CLOSING BALANCE"],
+            [fmt(totalOpening), fmt(d.financials.cash.closing), fmt(d.financials.bank.closing), fmt(totalClosing)],
+            [49, 46, 129]
+        )
+
+        // Cash & Bank KPIs
+        addKPIGrid(
+            "Cash Account Summary",
+            ["OPENING BALANCE", "CASH SALES (IN)", "CASH EXPENSES (OUT)", "CLOSING BALANCE"],
+            [fmt(d.financials.cash.opening), fmt(d.financials.cash.sale), fmt(d.financials.cash.expense), fmt(d.financials.cash.closing)],
+            [39, 78, 19]
+        )
+
+        addKPIGrid(
+            "Bank Account Summary",
+            ["OPENING BALANCE", "CARD SALES (IN)", "BANK PAYMENTS (OUT)", "CARD HOLDS", "CARD RELEASES", "CLOSING BALANCE"],
+            [fmt(d.financials.bank.opening), fmt(d.financials.bank.sale), fmt(d.financials.bank.expense), fmt(d.financials.bank.hold), fmt(d.financials.bank.released), fmt(d.financials.bank.closing)],
+            [31, 97, 141]
+        )
+
+        // Supplier Liabilities
+        doc.setFontSize(11)
+        doc.setFont("helvetica", "bold")
+        doc.setTextColor(50)
+        doc.text("Supplier Liabilities Summary", 14, nextY)
+        autoTable(doc, {
+            startY: nextY + 3,
+            body: [
+                ["Initial Balance", fmt(d.suppliers.opening)],
+                ["Purchases Added", `+ ${fmt(d.suppliers.additions)}`],
+                ["Payments Made", `- ${fmt(d.suppliers.payments)}`],
+                ["Closing Debt", fmt(d.suppliers.closing)],
+                ["Supplier Card — On Hold", fmt(d.suppliers.cardOnHold)],
+                ["Supplier Card — Released", fmt(d.suppliers.cardReleased)],
+                ["Shortage Holds (Today)", fmt(d.suppliers.purchaseHoldOnHold)],
+                ["Shortage Releases (Today)", fmt(d.suppliers.purchaseHoldReleased)],
+            ],
+            theme: "grid",
+            styles: { fontSize: 9, cellPadding: 2.5 },
+            columnStyles: { 0: { fontStyle: "bold", cellWidth: 80, fillColor: [245, 245, 245] }, 1: { halign: "right" } },
+            margin: { left: 14, right: 14 }
+        })
+        nextY = (doc as any).lastAutoTable.finalY + 10
+
+        // Stock Movements
+        if (d.inventory && d.inventory.length > 0) {
+            doc.setFontSize(11)
+            doc.setFont("helvetica", "bold")
+            doc.text("Stock Movements Summary", 14, nextY)
+            autoTable(doc, {
+                startY: nextY + 3,
+                head: [["Item", "Opening Stock", "Received (In)", "Sold (Out)", "Closing Stock"]],
+                body: d.inventory.map((item: any) => [
+                    item.name,
+                    `${Number(item.opening).toFixed(1)} ${item.unit}`,
+                    `+${Number(item.in).toFixed(1)}`,
+                    `-${Math.abs(Number(item.out)).toFixed(1)}`,
+                    `${Number(item.closing).toFixed(1)} ${item.unit}`,
+                ]),
+                theme: "grid",
+                headStyles: { fillColor: [52, 73, 94], textColor: 255 },
+                alternateRowStyles: { fillColor: [248, 249, 250] },
+                styles: { fontSize: 9, cellPadding: 3 },
+                columnStyles: { 0: { fontStyle: "bold" }, 1: { halign: "right" }, 2: { halign: "right", textColor: [39, 174, 96] }, 3: { halign: "right", textColor: [192, 57, 43] }, 4: { halign: "right" } },
+                margin: { left: 14, right: 14 }
+            })
+        }
+
+    } else if (activeTab === "profit-loss") {
         const data = reportData
         const netMargin = data.total.revenue > 0 ? ((data.total.netProfit / data.total.revenue) * 100).toFixed(1) : "0.0"
 
@@ -423,15 +556,39 @@ function exportToPDF(activeTab: string, reportData: any, dateRangeStr: string, s
         }
 
     } else if (activeTab === "purchase-history" && reportData.orders) {
-        addKPIGrid("Purchase Summary", ["TOTAL VALUE", "PAID AMOUNT", "OUTSTANDING"], [`Rs. ${reportData.totalValue?.toLocaleString()}`, `Rs. ${reportData.totalPaid?.toLocaleString()}`, `Rs. ${reportData.outstandingDues?.toLocaleString()}`])
+        // Display all 6 KPIs in two rows
+        addKPIGrid("Purchase Summary - Highlights", 
+            ["ORDERS CREATED", "DELIVERED VALUE", "TOTAL ON HOLD"], 
+            [
+                (reportData.totalOrders || 0).toString(), 
+                `Rs. ${(reportData.totalValue || 0).toLocaleString()}`, 
+                `Rs. ${(reportData.totalOnHold || 0).toLocaleString()}`
+            ],
+            [41, 128, 185]
+        )
+        addKPIGrid("Financial Reconciliation", 
+            ["TOTAL RELEASED", "PAID (NET)", "OUTSTANDING DUES"], 
+            [
+                `Rs. ${(reportData.totalReleased || 0).toLocaleString()}`, 
+                `Rs. ${(reportData.totalPaid || 0).toLocaleString()}`, 
+                `Rs. ${(reportData.totalDues || 0).toLocaleString()}`
+            ],
+            [52, 73, 94]
+        )
         autoTable(doc, {
             startY: nextY,
             head: [["Date", "Invoice", "Supplier", "Amount", "Status"]],
-            body: reportData.orders.map((o: any) => [o.purchase_date, o.invoice_number, o.suppliers?.name || "N/A", o.total_amount.toLocaleString(), o.status]),
+            body: reportData.orders.map((o: any) => [
+                o.display_date ? format(new Date(o.display_date), "dd MMM yyyy") : o.purchase_date, 
+                o.invoice_number || o.po_number, 
+                o.supplier_name || o.suppliers?.name || "N/A", 
+                (o.total_amount || 0).toLocaleString(), 
+                (o.status || "").replace(/_/g, " ").toUpperCase()
+            ]),
             theme: "grid",
             headStyles: { fillColor: [41, 128, 185], textColor: 255 },
             alternateRowStyles: { fillColor: [242, 247, 252] },
-            styles: { fontSize: 9, cellPadding: 3 },
+            styles: { fontSize: 8, cellPadding: 2.5 },
             margin: { left: 14, right: 14 }
         })
     } else if (activeTab === "expense-breakdown" && reportData.expenses) {
@@ -460,65 +617,157 @@ function exportToPDF(activeTab: string, reportData: any, dateRangeStr: string, s
             margin: { left: 14, right: 14 }
         })
     } else if (activeTab === "supplier-tracking" && reportData.suppliers) {
-        addKPIGrid("Supplier Summary", 
-            ["SUPPLIERS", "TOTAL ORDERS", "ON HOLD", "OUTSTANDING DUES"], 
-            [`${reportData.totalSuppliers}`, `${reportData.totalOrders}`, `Rs. ${reportData.totalOnHold?.toLocaleString() || 0}`, `Rs. ${reportData.totalOutstanding?.toLocaleString() || 0}`]
-        )
-        autoTable(doc, {
-            startY: nextY,
-            head: [["Supplier", "Type", "Period Purchases", "Lifetime Total", "Outstanding"]],
-            body: reportData.suppliers.map((s: any) => [
-                s.name, 
-                (s.supplier_type || "general").replace(/_/g, " "), 
-                (s.periodPurchases || 0).toLocaleString(), 
-                (s.total_purchases || 0).toLocaleString(), 
-                (s.outstandingDues || 0).toLocaleString()
-            ]),
-            theme: "grid",
-            headStyles: { fillColor: [41, 128, 185], textColor: 255 },
-            alternateRowStyles: { fillColor: [242, 247, 252] },
-            styles: { fontSize: 9, cellPadding: 3 },
-            margin: { left: 14, right: 14 }
-        })
+        const titleSuffix = scope === "full" ? "" : ` - ${scope.charAt(0).toUpperCase() + scope.slice(1)}`
+        doc.setFontSize(14)
+        doc.text(titleSuffix, 80, 32)
+        
+        // 1. DATA EXTRACTION
+        const totalSuppliers = reportData.totalSuppliers || 0
+        const totalBalance = reportData.totalOutstanding !== undefined ? reportData.totalOutstanding : (reportData.totalAccountBalance || 0)
+        const onHold = reportData.totalOnHold || 0
+        const grossReleased = reportData.totalReleased || 0
+        const netReceived = reportData.totalReleasedNet || 0
+        
+        const periodOrders = reportData.totalOrders || reportData.purchases?.length || 0
+        const periodPurchases = reportData.totalPurchased || 0
+        const paymentsIn = reportData.totalPaid || 0
+        const deductions = reportData.totalDeducted || 0
+        const netMovement = reportData.netPeriodBalance || 0
 
-        if (reportData.purchases && reportData.purchases.length > 0) {
-            nextY = (doc as any).lastAutoTable.finalY + 10
-            doc.setFontSize(12)
-            doc.setTextColor(40)
-            doc.text("Purchase Orders", 14, nextY)
+        // 2. KPI / CARDS SECTION
+        if (scope === "holds") {
+            // ONLY 3 CARDS for Card Holds Report
+            doc.setFontSize(11)
+            doc.setFont("helvetica", "bold")
+            doc.setTextColor(50)
+            doc.text("Card Payment Holds & Releases Summary", 14, nextY)
             
-            const totalPO = reportData.purchases.reduce((sum: number, p: any) => sum + Number(p.estimated_total || 0), 0)
+            autoTable(doc, {
+                startY: nextY + 3,
+                head: [["AMOUNT ON HOLD", "GROSS TOTAL RELEASED", "TOTAL RELEASED AMOUNT (NET)"]],
+                body: [
+                    [
+                        `Rs. ${onHold.toLocaleString()}`, 
+                        `Rs. ${grossReleased.toLocaleString()}`, 
+                        `Rs. ${netReceived.toLocaleString()}`
+                    ],
+                    ["Pending holds", "Before deductions", "Actual Received"]
+                ],
+                theme: "grid",
+                headStyles: { fillColor: [217, 119, 6], textColor: 255, halign: "center", fontSize: 9 },
+                bodyStyles: { halign: "center", fontStyle: "bold" },
+                didParseCell: (data) => {
+                    if (data.row.index === 1) {
+                        data.cell.styles.fontSize = 7
+                        data.cell.styles.fontStyle = "normal"
+                        data.cell.styles.textColor = [100, 100, 100]
+                        data.cell.styles.cellPadding = 1
+                    }
+                },
+                margin: { left: 14, right: 14 }
+            })
+            nextY = (doc as any).lastAutoTable.finalY + 10
+        } else {
+            // ALL 10 CARDS in two rows
+            // Row 1: Overview
+            addKPIGrid("Business Overview", 
+                ["TOTAL SUPPLIERS", "TOTAL BALANCE", "AMOUNT ON HOLD", "GROSS RELEASED", "NET RECEIVED"], 
+                [
+                    totalSuppliers.toString(), 
+                    `Rs. ${totalBalance.toLocaleString()}`, 
+                    `Rs. ${onHold.toLocaleString()}`, 
+                    `Rs. ${grossReleased.toLocaleString()}`,
+                    `Rs. ${netReceived.toLocaleString()}`
+                ],
+                [41, 128, 185] // Blue
+            )
+            // Row 2: Performance
+            addKPIGrid("Period Movement Performance", 
+                ["PERIOD ORDERS", "PERIOD PURCHASES", "PAYMENTS RECEIVED", "DEDUCTIONS MADE", "NET PERIOD MOVEMENT"], 
+                [
+                    periodOrders.toString(), 
+                    `Rs. ${periodPurchases.toLocaleString()}`, 
+                    `Rs. ${paymentsIn.toLocaleString()}`,
+                    `Rs. ${deductions.toLocaleString()}`,
+                    `${netMovement >= 0 ? '+' : ''}Rs. ${netMovement.toLocaleString()}`
+                ],
+                [52, 73, 94] // Dark grey/blue
+            )
+        }
+
+        if (scope === "full") {
+            autoTable(doc, {
+                startY: nextY,
+                head: [["Supplier", "Type", "Period Purchases", "Lifetime Total", "Outstanding Balance"]],
+                body: reportData.suppliers.map((s: any) => [
+                    s.name, 
+                    (s.supplier_type || "general").replace(/_/g, " "), 
+                    (s.periodPurchases || 0).toLocaleString(), 
+                    (s.total_purchases || 0).toLocaleString(), 
+                    (s.outstandingDues || 0).toLocaleString()
+                ]),
+                theme: "grid",
+                headStyles: { fillColor: [41, 128, 185], textColor: 255 },
+                alternateRowStyles: { fillColor: [242, 247, 252] },
+                styles: { fontSize: 8, cellPadding: 2.5 },
+                margin: { left: 14, right: 14 }
+            })
+            nextY = (doc as any).lastAutoTable.finalY + 10
+        }
+
+        if ((scope === "full" || scope === "purchases") && reportData.purchases && reportData.purchases.length > 0) {
+            doc.setFontSize(11)
+            doc.setTextColor(40)
+            doc.text("Purchase Orders Ledger Detail", 14, nextY)
+            
+            const totalPO = reportData.purchases.reduce((sum: number, p: any) => sum + Number(p.estimated_total || p.total_amount || 0), 0)
             
             autoTable(doc, {
                 startY: nextY + 4,
-                head: [["Date", "PO Number", "Supplier", "Product", "Est Total", "Status"]],
-                body: reportData.purchases.map((p: any) => [
-                    format(new Date(p.created_at || p.purchase_date), "dd MMM yyyy"),
-                    p.po_number,
-                    p.suppliers?.name || '-',
-                    p.products?.name || '-',
-                    p.estimated_total?.toLocaleString() || '0',
-                    (p.status || "").replace(/_/g, " ")
-                ]),
+                head: [["Date", "PO Number", "Supplier", "Product", "Ordered", "Delivered", "Rate", "Total", "Status"]],
+                body: reportData.purchases.map((p: any) => {
+                    const items = p.items || [];
+                    const productNames = items.length > 0
+                        ? items.map((i: any) => i.product_name).filter(Boolean)
+                        : [p.products?.name || p.product_type].filter(Boolean);
+
+                    const uniqueNames = Array.from(new Set(productNames));
+                    const displayProductName = uniqueNames.length > 1
+                        ? `${uniqueNames[0]} (+${uniqueNames.length - 1} more)`
+                        : uniqueNames[0] || "—";
+
+                    return [
+                        format(new Date(p.purchase_date || p.created_at), "dd MMM yyyy"),
+                        p.po_number,
+                        p.suppliers?.name || '-',
+                        displayProductName,
+                        `${Number(p.ordered_quantity || 0).toLocaleString()} L`,
+                        `${Number(p.delivered_quantity || 0).toLocaleString()} L`,
+                        `Rs. ${Number(p.rate_per_liter || 0).toLocaleString()}`,
+                        Number(p.estimated_total || p.total_amount || 0).toLocaleString(),
+                        (p.status || "").replace(/_/g, " ").toUpperCase()
+                    ]
+                }),
                 foot: [[
-                    { content: "PERIOD PURCHASE TOTAL", colSpan: 4, styles: { halign: "left", fontStyle: "bold", textColor: [41, 128, 185] } },
-                    { content: "Rs. " + totalPO.toLocaleString(), styles: { fontStyle: "bold", textColor: [41, 128, 185] } },
+                    { content: "PURCHASE ORDERS PERIOD TOTAL", colSpan: 7, styles: { halign: "left", fontStyle: "bold", textColor: [41, 128, 185] } },
+                    { content: "Rs. " + totalPO.toLocaleString(), styles: { halign: "right", fontStyle: "bold", textColor: [41, 128, 185] } },
                     ""
                 ]],
                 theme: "grid",
                 headStyles: { fillColor: [41, 128, 185], textColor: 255 },
                 footStyles: { fillColor: [242, 247, 252], textColor: [41, 128, 185] },
                 alternateRowStyles: { fillColor: [250, 252, 255] },
-                styles: { fontSize: 8, cellPadding: 3 },
+                styles: { fontSize: 7, cellPadding: 2 },
+                columnStyles: { 4: { halign: "right" }, 5: { halign: "right" }, 6: { halign: "right" }, 7: { halign: "right" } },
                 margin: { left: 14, right: 14 }
             })
+            nextY = (doc as any).lastAutoTable.finalY + 10
         }
 
-        if (reportData.transactions && reportData.transactions.length > 0) {
-            nextY = (doc as any).lastAutoTable.finalY + 10
-            doc.setFontSize(12)
+        if ((scope === "full" || scope === "ledger") && reportData.transactions && reportData.transactions.length > 0) {
+            doc.setFontSize(11)
             doc.setTextColor(40)
-            doc.text("Transactions", 14, nextY)
+            doc.text("Supplier Payment & Transaction Ledger", 14, nextY)
             
             let inTotal = 0, outTotal = 0
             reportData.transactions.forEach((t: any) => {
@@ -529,59 +778,71 @@ function exportToPDF(activeTab: string, reportData: any, dateRangeStr: string, s
             
             autoTable(doc, {
                 startY: nextY + 4,
-                head: [["Date", "Supplier", "Amount", "Type"]],
+                head: [["Date", "Supplier / Account", "Type", "Ref / Bank", "Note", "Amount", "Balance"]],
                 body: reportData.transactions.map((t: any) => [
                     format(new Date(t.transaction_date), "dd MMM yyyy"),
                     t.company_accounts?.suppliers?.name || t.bank_accounts?.account_name || '-',
-                    t.amount?.toLocaleString() || '0',
-                    t.transaction_type
+                    t.transaction_type.toUpperCase(),
+                    `${t.reference_number || '-'} ${t.bank_accounts?.account_name ? `(${t.bank_accounts.account_name})` : ''}`,
+                    (t.description || t.note || "").substring(0, 30),
+                    `${t.transaction_type === 'credit' ? '+' : '-'} ${Number(t.amount || 0).toLocaleString()}`,
+                    Number(t.balance_after || 0).toLocaleString()
                 ]),
                 foot: [[
-                    { content: "PAYMENTS IN: Rs. " + inTotal.toLocaleString(), colSpan: 2, styles: { halign: "left", fontStyle: "bold", textColor: [22, 163, 74] } },
-                    { content: "DEDUCTIONS: Rs. " + outTotal.toLocaleString(), styles: { fontStyle: "bold", textColor: [220, 38, 38] } },
-                    { content: "NET: Rs. " + (inTotal - outTotal).toLocaleString(), styles: { fontStyle: "bold" } }
+                    { content: `Total Payments In: Rs. ${inTotal.toLocaleString()}`, colSpan: 3, styles: { halign: "left", fontStyle: "bold", textColor: [22, 163, 74] } },
+                    { content: `Total Deductions: Rs. ${outTotal.toLocaleString()}`, colSpan: 2, styles: { fontStyle: "bold", textColor: [220, 38, 38] } },
+                    { content: `Net Period Movement: Rs. ${(inTotal - outTotal).toLocaleString()}`, colSpan: 2, styles: { fontStyle: "bold", halign: "right" } }
                 ]],
                 theme: "grid",
                 headStyles: { fillColor: [41, 128, 185], textColor: 255 },
                 footStyles: { fillColor: [242, 247, 252] },
                 alternateRowStyles: { fillColor: [250, 252, 255] },
-                styles: { fontSize: 8, cellPadding: 3 },
+                styles: { fontSize: 6.5, cellPadding: 1.5 },
+                columnStyles: { 5: { halign: "right" }, 6: { halign: "right" } },
                 margin: { left: 14, right: 14 }
             })
+            nextY = (doc as any).lastAutoTable.finalY + 10
         }
 
-        if (reportData.holds && reportData.holds.length > 0) {
-            nextY = (doc as any).lastAutoTable.finalY + 10
-            doc.setFontSize(12)
+        if ((scope === "full" || scope === "holds") && reportData.holds && reportData.holds.length > 0) {
+            doc.setFontSize(11)
             doc.setTextColor(40)
-            doc.text("Card Holds", 14, nextY)
+            doc.text("Card Hold & Settlement Details", 14, nextY)
             
-            let pendingTotal = 0, receivedTotal = 0
+            let pendingGross = 0, receivedGross = 0, receivedNet = 0
             reportData.holds.forEach((h: any) => {
                 const amt = Number(h.hold_amount || 0)
-                if (h.status === "pending") pendingTotal += amt
-                else if (h.status === "received") receivedTotal += amt
+                const net = Number(h.net_amount || h.hold_amount || 0)
+                if (h.status !== "released") pendingGross += amt
+                else {
+                    receivedGross += amt
+                    receivedNet += net
+                }
             })
             
             autoTable(doc, {
                 startY: nextY + 4,
-                head: [["Date", "Supplier", "Card Name", "Amount", "Status"]],
+                head: [["Date", "Supplier", "Card Name", "Gross Amt", "Tax", "Net Amount", "Status"]],
                 body: reportData.holds.map((h: any) => [
-                    format(new Date(h.created_at), "dd MMM yyyy"),
+                    format(new Date(h.sale_date || h.created_at), "dd MMM yyyy"),
                     h.supplier_cards?.suppliers?.name || '-',
                     h.supplier_cards?.card_name || '-',
-                    h.hold_amount?.toLocaleString() || '0',
-                    (h.status || "").replace(/_/g, " ")
+                    Number(h.hold_amount || 0).toLocaleString(),
+                    Number(h.tax_amount || 0).toLocaleString(),
+                    Number(h.net_amount || h.hold_amount || 0).toLocaleString(),
+                    (h.status || "").replace(/_/g, " ").toUpperCase()
                 ]),
                 foot: [[
-                    { content: "TOTAL PENDING: Rs. " + pendingTotal.toLocaleString(), colSpan: 3, styles: { halign: "left", fontStyle: "bold", textColor: [217, 119, 6] } },
-                    { content: "TOTAL RECEIVED: Rs. " + receivedTotal.toLocaleString(), colSpan: 2, styles: { fontStyle: "bold", textColor: [22, 163, 74] } }
+                    { content: "TOTAL PENDING: Rs. " + pendingGross.toLocaleString(), colSpan: 3, styles: { halign: "left", fontStyle: "bold", textColor: [217, 119, 6] } },
+                    { content: "GROSS RELEASED: Rs. " + receivedGross.toLocaleString(), colSpan: 2, styles: { fontStyle: "bold", textColor: [41, 128, 185] } },
+                    { content: "NET RECEIVED: Rs. " + receivedNet.toLocaleString(), colSpan: 2, styles: { fontStyle: "bold", textColor: [22, 163, 74], halign: "right" } }
                 ]],
                 theme: "grid",
                 headStyles: { fillColor: [41, 128, 185], textColor: 255 },
                 footStyles: { fillColor: [242, 247, 252] },
                 alternateRowStyles: { fillColor: [250, 252, 255] },
-                styles: { fontSize: 8, cellPadding: 3 },
+                styles: { fontSize: 7, cellPadding: 2 },
+                columnStyles: { 3: { halign: "right" }, 4: { halign: "right" }, 5: { halign: "right" } },
                 margin: { left: 14, right: 14 }
             })
         }

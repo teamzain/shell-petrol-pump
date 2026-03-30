@@ -65,12 +65,14 @@ export default function NozzleSettingsPage() {
         nozzle_number: "",
         product_id: "",
         dispenser_id: "",
+        tank_id: "",
         nozzle_side: "",
         initial_reading: "",
         status: "active"
     })
     const [editingNozzle, setEditingNozzle] = useState<any>(null)
     const [dispensers, setDispensers] = useState<any[]>([])
+    const [tanks, setTanks] = useState<any[]>([])
 
     const supabase = createClient()
 
@@ -86,7 +88,8 @@ export default function NozzleSettingsPage() {
                 .select(`
           *,
           products(name),
-          dispensers(name)
+          dispensers(name),
+          tanks(name)
         `)
                 .order("nozzle_number")
 
@@ -98,12 +101,17 @@ export default function NozzleSettingsPage() {
 
             const { data: dispenserData } = await supabase
                 .from("dispensers")
-                .select("id, name")
+                .select("id, name, tank_ids")
                 .eq("status", "active")
+
+            const { data: tankData } = await supabase
+                .from("tanks")
+                .select("id, name, product_id")
 
             setNozzles(nozzleData || [])
             setProducts(productData || [])
             setDispensers(dispenserData || [])
+            setTanks(tankData || [])
         } catch (error) {
             console.error("Fetch error:", error)
             toast.error("Failed to load settings")
@@ -122,6 +130,7 @@ export default function NozzleSettingsPage() {
                     nozzle_number: formData.nozzle_number,
                     product_id: formData.product_id,
                     dispenser_id: formData.dispenser_id,
+                    tank_id: formData.tank_id,
                     nozzle_side: formData.nozzle_side,
                     status: formData.status
                 })
@@ -131,6 +140,7 @@ export default function NozzleSettingsPage() {
                     nozzle_number: formData.nozzle_number,
                     product_id: formData.product_id,
                     dispenser_id: formData.dispenser_id,
+                    tank_id: formData.tank_id,
                     nozzle_side: formData.nozzle_side,
                     initial_reading: parseFloat(formData.initial_reading),
                 })
@@ -138,7 +148,7 @@ export default function NozzleSettingsPage() {
             }
 
             setIsDialogOpen(false)
-            setFormData({ nozzle_number: "", product_id: "", dispenser_id: "", nozzle_side: "", initial_reading: "", status: "active" })
+            setFormData({ nozzle_number: "", product_id: "", dispenser_id: "", tank_id: "", nozzle_side: "", initial_reading: "", status: "active" })
             setEditingNozzle(null)
             fetchData()
         } finally {
@@ -162,6 +172,7 @@ export default function NozzleSettingsPage() {
             nozzle_number: nozzle.nozzle_number,
             product_id: nozzle.product_id,
             dispenser_id: nozzle.dispenser_id || "",
+            tank_id: nozzle.tank_id || "",
             nozzle_side: nozzle.nozzle_side || "",
             initial_reading: nozzle.initial_reading?.toString() || "0",
             status: nozzle.status || "active"
@@ -175,6 +186,7 @@ export default function NozzleSettingsPage() {
             nozzle_number: "",
             product_id: "",
             dispenser_id: "",
+            tank_id: "",
             nozzle_side: "",
             initial_reading: "",
             status: "active"
@@ -193,7 +205,7 @@ export default function NozzleSettingsPage() {
                     setIsDialogOpen(open)
                     if (!open) {
                         setEditingNozzle(null)
-                        setFormData({ nozzle_number: "", product_id: "", dispenser_id: "", nozzle_side: "", initial_reading: "", status: "active" })
+                        setFormData({ nozzle_number: "", product_id: "", dispenser_id: "", tank_id: "", nozzle_side: "", initial_reading: "", status: "active" })
                     }
                 }}>
                     <DialogTrigger asChild>
@@ -245,7 +257,7 @@ export default function NozzleSettingsPage() {
                                     <Label htmlFor="dispenser">Dispenser</Label>
                                     <Select
                                         value={formData.dispenser_id}
-                                        onValueChange={(v) => setFormData({ ...formData, dispenser_id: v })}
+                                        onValueChange={(v) => setFormData({ ...formData, dispenser_id: v, tank_id: "" })}
                                     >
                                         <SelectTrigger>
                                             <SelectValue placeholder="Select dispenser (Optional)" />
@@ -258,6 +270,38 @@ export default function NozzleSettingsPage() {
                                             ))}
                                         </SelectContent>
                                     </Select>
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label htmlFor="tank">Target Tank</Label>
+                                    <Select
+                                        value={formData.tank_id}
+                                        onValueChange={(v) => setFormData({ ...formData, tank_id: v })}
+                                        disabled={!formData.dispenser_id}
+                                    >
+                                        <SelectTrigger>
+                                            <SelectValue placeholder={!formData.dispenser_id ? "Select dispenser first" : "Select connected tank"} />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {(() => {
+                                                const selectedDispenser = dispensers.find(d => d.id === formData.dispenser_id)
+                                                if (!selectedDispenser) return <SelectItem value="_" disabled>No dispenser selected</SelectItem>
+
+                                                const filteredTanks = tanks.filter(t =>
+                                                    selectedDispenser.tank_ids?.includes(t.id) &&
+                                                    t.product_id === formData.product_id
+                                                )
+
+                                                if (filteredTanks.length === 0) return <SelectItem value="_" disabled>No matching tanks found</SelectItem>
+
+                                                return filteredTanks.map((t) => (
+                                                    <SelectItem key={t.id} value={t.id}>
+                                                        {t.name}
+                                                    </SelectItem>
+                                                ))
+                                            })()}
+                                        </SelectContent>
+                                    </Select>
+                                    <p className="text-[10px] text-muted-foreground">Select the tank this nozzle draws fuel from</p>
                                 </div>
                                 <div className="grid gap-2">
                                     <Label htmlFor="nozzle_side">Location/Side (Optional)</Label>
@@ -341,6 +385,7 @@ export default function NozzleSettingsPage() {
                                     <TableHead>Nozzle</TableHead>
                                     <TableHead>Fuel Type</TableHead>
                                     <TableHead>Dispenser</TableHead>
+                                    <TableHead>Tank</TableHead>
                                     <TableHead>Location/Side</TableHead>
                                     <TableHead className="text-right">Last Reading</TableHead>
                                     <TableHead>Status</TableHead>
@@ -353,6 +398,7 @@ export default function NozzleSettingsPage() {
                                         <TableCell className="font-medium">{nozzle.nozzle_number}</TableCell>
                                         <TableCell>{nozzle.products?.name}</TableCell>
                                         <TableCell>{nozzle.dispensers?.name || "Unassigned"}</TableCell>
+                                        <TableCell>{nozzle.tanks?.name || "Unassigned"}</TableCell>
                                         <TableCell>{nozzle.nozzle_side || "-"}</TableCell>
                                         <TableCell className="text-right font-mono">
                                             {(nozzle.last_reading || 0).toLocaleString()} L
