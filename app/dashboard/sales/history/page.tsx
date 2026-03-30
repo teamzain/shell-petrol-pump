@@ -19,7 +19,8 @@ import {
     Wallet,
     ArrowDownRight,
     Coins,
-    Layers
+    Layers,
+    Tag
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
@@ -227,7 +228,11 @@ export default function SalesHistoryPage() {
                 sale_date: "Date & Time",
                 "products.name": "Product",
                 quantity: "Quantity",
-                total_amount: "Total (Rs)",
+                unit_price: "Unit Price (Rs)",
+                total_amount: "Net Total (Rs)",
+                discount_type: "Discount Type",
+                discount_value: "Discount Value",
+                discount_amount: "Discount Amount (Rs)",
                 payment_method: "Payment",
                 customer_name: "Customer",
                 profit: "Profit (Rs)"
@@ -250,6 +255,7 @@ export default function SalesHistoryPage() {
     const summaryData = useMemo(() => {
         const totalFuelRevenue = fuelSales.reduce((sum, s) => sum + (Number(s.revenue) || 0), 0)
         const totalManualRevenue = manualSales.reduce((sum, s) => sum + (Number(s.total_amount) || 0), 0)
+        const totalManualDiscount = manualSales.reduce((sum, s) => sum + (Number(s.discount_amount) || 0), 0)
         const totalSale = totalFuelRevenue + totalManualRevenue
 
         const totalCardHolding = allCardRecords
@@ -282,7 +288,8 @@ export default function SalesHistoryPage() {
             totalNetCash,
             totalCardHolding,
             totalReleased,
-            productBreakdown
+            productBreakdown,
+            totalManualDiscount
         }
     }, [fuelSales, manualSales, allCardRecords])
 
@@ -384,6 +391,12 @@ export default function SalesHistoryPage() {
                             <div>
                                 <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Total Sale</p>
                                 <h3 className="text-2xl font-bold mt-1">{formatCurrency(summaryData.totalSale)}</h3>
+                                {summaryData.totalManualDiscount > 0 && (
+                                    <div className="flex items-center gap-1 mt-1 text-[10px] text-orange-600 font-bold bg-orange-50 px-2 py-0.5 rounded w-fit">
+                                        <Tag className="w-3 h-3" />
+                                        Discounts: {formatCurrency(summaryData.totalManualDiscount)}
+                                    </div>
+                                )}
                             </div>
                             <div className="p-3 bg-blue-50 rounded-full">
                                 <TrendingUp className="w-5 h-5 text-blue-600" />
@@ -554,8 +567,10 @@ export default function SalesHistoryPage() {
                                     <TableRow>
                                         <TableHead>Date & Time</TableHead>
                                         <TableHead>Product</TableHead>
-                                        <TableHead className="text-right">Quantity</TableHead>
-                                        <TableHead className="text-right">Total</TableHead>
+                                        <TableHead className="text-right">Qty</TableHead>
+                                        <TableHead className="text-right">Unit Price</TableHead>
+                                        <TableHead className="text-right">Discount</TableHead>
+                                        <TableHead className="text-right">Net Total</TableHead>
                                         <TableHead>Payment</TableHead>
                                         <TableHead>Customer</TableHead>
                                         <TableHead className="text-right">Profit</TableHead>
@@ -563,9 +578,9 @@ export default function SalesHistoryPage() {
                                 </TableHeader>
                                 <TableBody>
                                     {isLoading ? (
-                                        <TableRow><TableCell colSpan={7} className="text-center py-10">Loading...</TableCell></TableRow>
+                                        <TableRow><TableCell colSpan={9} className="text-center py-10">Loading...</TableCell></TableRow>
                                     ) : manualSales.length === 0 ? (
-                                        <TableRow><TableCell colSpan={7} className="text-center py-10 text-muted-foreground">No records found</TableCell></TableRow>
+                                        <TableRow><TableCell colSpan={9} className="text-center py-10 text-muted-foreground">No records found</TableCell></TableRow>
                                     ) : manualSales.map((sale) => (
                                         <TableRow key={sale.id}>
                                             <TableCell className="font-mono text-xs">
@@ -573,7 +588,21 @@ export default function SalesHistoryPage() {
                                             </TableCell>
                                             <TableCell className="font-medium">{sale.products?.name}</TableCell>
                                             <TableCell className="text-right">{sale.quantity}</TableCell>
-                                            <TableCell className="text-right font-mono">Rs. {(sale.total_amount || 0).toLocaleString()}</TableCell>
+                                            <TableCell className="text-right font-mono text-xs">Rs. {(sale.unit_price || 0).toLocaleString()}</TableCell>
+                                            <TableCell className="text-right">
+                                                {sale.discount_amount > 0 ? (
+                                                    <Badge variant="outline" className="bg-orange-50 text-orange-700 border-orange-200 text-[10px] gap-1">
+                                                        <Tag className="w-2.5 h-2.5" />
+                                                        {sale.discount_type === 'percentage'
+                                                            ? `${sale.discount_value}%`
+                                                            : `Rs. ${sale.discount_amount.toLocaleString()}`
+                                                        }
+                                                    </Badge>
+                                                ) : (
+                                                    <span className="text-muted-foreground text-xs">—</span>
+                                                )}
+                                            </TableCell>
+                                            <TableCell className="text-right font-mono font-bold">Rs. {(sale.total_amount || 0).toLocaleString()}</TableCell>
                                             <TableCell>
                                                 <div className="flex items-center gap-1">
                                                     {sale.payment_method === 'cash' ? <Banknote className="w-3 h-3" /> : <CreditCard className="w-3 h-3" />}

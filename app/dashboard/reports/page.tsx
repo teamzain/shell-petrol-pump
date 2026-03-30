@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import {
     FileText,
     BarChart3,
@@ -11,12 +11,14 @@ import {
     Download,
     Filter,
     Calendar as CalendarIcon,
+    TrendingDown,
     Wallet,
     X,
     ChevronDown,
     RefreshCcw,
     Printer,
-    CreditCard
+    CreditCard,
+    Package
 } from "lucide-react"
 import { BrandLoader } from "@/components/ui/brand-loader"
 import { createClient } from "@/lib/supabase/client"
@@ -59,6 +61,8 @@ import { ProfitLossReport } from "@/components/reports/profit-loss-report"
 import { SalesReport } from "@/components/reports/sales-report"
 import { BankCardReport } from "@/components/reports/bank-card-report"
 import { DailyRecapReport } from "@/components/reports/daily-recap"
+import { StockReport } from "@/components/reports/stock-report"
+import { GainLossReport } from "@/components/reports/gain-loss-report"
 
 import {
     Dialog,
@@ -104,6 +108,29 @@ export default function ReportsPage() {
     const [isDetailOpen, setIsDetailOpen] = useState(false)
     const [baseDate, setBaseDate] = useState<Date>(new Date())
     const [isInitializing, setIsInitializing] = useState(true)
+
+    // Separate states for combined Sale Report export
+    const [salesProductsData, setSalesProductsData] = useState<any[]>([])
+    const [bankCardData, setBankCardData] = useState<any[]>([])
+    const [saleActiveTab, setSaleActiveTab] = useState("products")
+
+    // Reset Sale sub-tab when main tab changes to sales-report
+    useEffect(() => {
+        if (activeTab === "sales-report") {
+            setSaleActiveTab("products")
+        }
+    }, [activeTab])
+
+    // Memoize callbacks to prevent infinite re-render loops in child components
+    const handleSalesProductsLoaded = useCallback((data: any[]) => {
+        setSalesProductsData(data)
+        setReportData(data)
+    }, [])
+
+    const handleBankCardDataLoaded = useCallback((data: any[]) => {
+        setBankCardData(data)
+        setReportData(data)
+    }, [])
 
     // Fetch active date, suppliers & products
     useEffect(() => {
@@ -158,8 +185,19 @@ export default function ReportsPage() {
     }
 
     const handleExport = (type: ExportType, scope: string = "full") => {
-        if (!reportData) return
-        exportReport({ activeTab, reportData, filters, scope }, type)
+        if (activeTab === "sales-report") {
+            // For Sale tab, we provide a combined object if scope is 'full',
+            // or specific arrays if scope is partitioned.
+            exportReport({ 
+                activeTab, 
+                reportData: { products: salesProductsData, bankCards: bankCardData }, 
+                filters, 
+                scope 
+            }, type)
+        } else {
+            if (!reportData) return
+            exportReport({ activeTab, reportData, filters, scope }, type)
+        }
     }
 
     // Handle Preset Date Ranges
@@ -237,7 +275,7 @@ export default function ReportsPage() {
                                 
                                 <DropdownMenuSeparator />
                                 <DropdownMenuLabel>PDF Export Options</DropdownMenuLabel>
-                                {activeTab === "supplier-tracking" ? (
+                                 {activeTab === "supplier-tracking" ? (
                                     <>
                                         <DropdownMenuItem onClick={() => handleExport("pdf", "full")}>
                                             <Download className="mr-2 h-4 w-4" /> Full Supplier Report
@@ -250,6 +288,18 @@ export default function ReportsPage() {
                                         </DropdownMenuItem>
                                         <DropdownMenuItem onClick={() => handleExport("pdf", "holds")}>
                                             <CreditCard className="mr-2 h-4 w-4 text-amber-600" /> Card Holds Only
+                                        </DropdownMenuItem>
+                                    </>
+                                ) : activeTab === "sales-report" ? (
+                                    <>
+                                        <DropdownMenuItem onClick={() => handleExport("pdf", "full")}>
+                                            <Download className="mr-2 h-4 w-4" /> Full Sale Report (Combined)
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem onClick={() => handleExport("pdf", "products")}>
+                                            <TrendingUp className="mr-2 h-4 w-4 text-primary" /> Products & Fuel Only
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem onClick={() => handleExport("pdf", "bank-cards")}>
+                                            <CreditCard className="mr-2 h-4 w-4 text-emerald-600" /> Bank Card Report Only
                                         </DropdownMenuItem>
                                     </>
                                 ) : (
@@ -444,6 +494,12 @@ export default function ReportsPage() {
                                 <TabsTrigger value="sales-report" className="px-6 data-[state=active]:bg-background data-[state=active]:shadow-sm">
                                     <TrendingUp className="mr-2 h-4 w-4" /> Sale
                                 </TabsTrigger>
+                                <TabsTrigger value="stock" className="px-6 data-[state=active]:bg-background data-[state=active]:shadow-sm">
+                                    <Package className="mr-2 h-4 w-4" /> Stock
+                                </TabsTrigger>
+                                <TabsTrigger value="gain-loss" className="px-6 data-[state=active]:bg-background data-[state=active]:shadow-sm">
+                                    <TrendingDown className="mr-2 h-4 w-4" /> Gain / Loss
+                                </TabsTrigger>
                             </TabsList>
                         </div>
                     </div>
@@ -486,18 +542,42 @@ export default function ReportsPage() {
                         </TabsContent>
 
                         <TabsContent value="sales-report" className="animate-in fade-in-50 duration-500">
-                            <Tabs defaultValue="products" className="w-full">
+                            <Tabs value={saleActiveTab} onValueChange={setSaleActiveTab} className="w-full">
                                 <TabsList className="bg-muted/30 p-0.5 h-9 mb-6">
                                     <TabsTrigger value="products" className="px-4 text-[10px] font-bold uppercase tracking-wider h-8">Products & Fuel</TabsTrigger>
                                     <TabsTrigger value="bank-cards" className="px-4 text-[10px] font-bold uppercase tracking-wider h-8">Bank Card Report</TabsTrigger>
                                 </TabsList>
-                                <TabsContent value="products" className="mt-0">
-                                    <SalesReport filters={filters} onDetailClick={openDetail} onDataLoaded={setReportData} />
+                                <TabsContent 
+                                    value="products" 
+                                    forceMount 
+                                    className={cn("mt-0", saleActiveTab !== "products" && "hidden")}
+                                >
+                                    <SalesReport 
+                                        filters={filters} 
+                                        onDetailClick={openDetail} 
+                                        onDataLoaded={handleSalesProductsLoaded} 
+                                    />
                                 </TabsContent>
-                                <TabsContent value="bank-cards" className="mt-0">
-                                    <BankCardReport filters={filters} onDetailClick={openDetail} onDataLoaded={setReportData} />
+                                <TabsContent 
+                                    value="bank-cards" 
+                                    forceMount 
+                                    className={cn("mt-0", saleActiveTab !== "bank-cards" && "hidden")}
+                                >
+                                    <BankCardReport 
+                                        filters={filters} 
+                                        onDetailClick={openDetail} 
+                                        onDataLoaded={handleBankCardDataLoaded} 
+                                    />
                                 </TabsContent>
                             </Tabs>
+                        </TabsContent>
+
+                        <TabsContent value="stock" className="animate-in fade-in-50 duration-500">
+                            <StockReport filters={filters} onDataLoaded={setReportData} />
+                        </TabsContent>
+
+                        <TabsContent value="gain-loss" className="animate-in fade-in-50 duration-500">
+                            <GainLossReport filters={filters} onDataLoaded={setReportData} />
                         </TabsContent>
                     </div>
                 </Tabs>

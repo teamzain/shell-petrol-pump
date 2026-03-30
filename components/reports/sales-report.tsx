@@ -20,7 +20,8 @@ import {
     Package, 
     Banknote,
     ArrowUpRight,
-    Search
+    Search,
+    Tag
 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -81,6 +82,7 @@ export function SalesReport({ filters, onDetailClick, onDataLoaded }: SalesRepor
                     .from("manual_sales")
                     .select(`
                         *,
+                        discount_amount,
                         products:product_id (name, type, category)
                     `)
                     .gte("sale_date", fromDate)
@@ -116,6 +118,7 @@ export function SalesReport({ filters, onDetailClick, onDataLoaded }: SalesRepor
                     unit: "L",
                     rate: f.unit_price || f.rate_per_liter,
                     total: f.revenue || f.total_amount,
+                    discount: 0,
                     profit: f.gross_profit,
                     paid: f.revenue || f.total_amount, // Fuel sales are assumed mostly paid for this view
                     payment: f.payment_method || 'cash',
@@ -135,6 +138,7 @@ export function SalesReport({ filters, onDetailClick, onDataLoaded }: SalesRepor
                     unit: "Unit",
                     rate: m.unit_price,
                     total: m.total_amount,
+                    discount: m.discount_amount || 0,
                     profit: m.profit,
                     paid: m.cash_payment_amount !== undefined ? (Number(m.cash_payment_amount || 0) + Number(m.card_payment_amount || 0)) : m.total_amount,
                     payment: m.payment_method,
@@ -182,10 +186,11 @@ export function SalesReport({ filters, onDetailClick, onDataLoaded }: SalesRepor
             acc.totalRevenue += Number(s.total) || 0
             acc.totalProfit += Number(s.profit) || 0
             acc.totalDue += (Number(s.total) || 0) - (Number(s.paid) || 0)
+            acc.totalDiscount += Number(s.discount) || 0
             if (s.category === "fuel") acc.fuelRevenue += Number(s.total) || 0
             else acc.productRevenue += Number(s.total) || 0
             return acc
-        }, { totalRevenue: 0, fuelRevenue: 0, productRevenue: 0, totalProfit: 0, totalDue: 0 })
+        }, { totalRevenue: 0, fuelRevenue: 0, productRevenue: 0, totalProfit: 0, totalDue: 0, totalDiscount: 0 })
     }, [filteredSales])
 
     const netSaleCash = summary.totalRevenue - bankCardTotal
@@ -206,7 +211,7 @@ export function SalesReport({ filters, onDetailClick, onDataLoaded }: SalesRepor
     return (
         <div className="space-y-6">
             {/* Summary Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 <Card className="border-l-4 border-l-blue-500 shadow-sm bg-blue-50/5">
                     <CardContent className="p-6">
                         <div className="flex items-center justify-between">
@@ -230,6 +235,20 @@ export function SalesReport({ filters, onDetailClick, onDataLoaded }: SalesRepor
                             </div>
                             <div className="p-3 bg-orange-500/10 rounded-full">
                                 <Fuel className="h-5 w-5 text-orange-600" />
+                            </div>
+                        </div>
+                    </CardContent>
+                </Card>
+
+                <Card className="border-l-4 border-l-yellow-500 shadow-sm bg-yellow-50/5">
+                    <CardContent className="p-6">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Total Discounts</p>
+                                <h3 className="text-2xl font-bold mt-1 text-yellow-600">Rs. {summary.totalDiscount.toLocaleString()}</h3>
+                            </div>
+                            <div className="p-3 bg-yellow-500/10 rounded-full">
+                                <Tag className="h-5 w-5 text-yellow-600" />
                             </div>
                         </div>
                     </CardContent>
@@ -319,7 +338,8 @@ export function SalesReport({ filters, onDetailClick, onDataLoaded }: SalesRepor
                                 <TableHead>Description</TableHead>
                                 <TableHead className="text-right">Quantity</TableHead>
                                 <TableHead className="text-right">Rate</TableHead>
-                                <TableHead className="text-right">Total</TableHead>
+                                <TableHead className="text-right">Discount</TableHead>
+                                <TableHead className="text-right">Net Total</TableHead>
                                 <TableHead className="text-right">Paid</TableHead>
                                 <TableHead className="text-right">Balance</TableHead>
                                 <TableHead>Payment</TableHead>
@@ -359,6 +379,12 @@ export function SalesReport({ filters, onDetailClick, onDataLoaded }: SalesRepor
                                         </TableCell>
                                         <TableCell className="text-right font-mono text-xs text-muted-foreground">
                                             Rs. {sale.rate?.toLocaleString()}
+                                        </TableCell>
+                                        <TableCell className="text-right font-mono text-xs">
+                                            {sale.discount > 0 
+                                                ? <span className="text-orange-600 font-semibold">- Rs. {sale.discount.toLocaleString()}</span>
+                                                : <span className="text-muted-foreground">Rs. 0</span>
+                                            }
                                         </TableCell>
                                         <TableCell className="text-right">
                                             <div className="font-bold text-sm">Rs. {sale.total?.toLocaleString()}</div>

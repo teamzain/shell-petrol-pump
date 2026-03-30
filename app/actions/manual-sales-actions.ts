@@ -14,6 +14,8 @@ export type ManualSaleData = {
     customer_name?: string
     notes?: string
     paid_amount?: number
+    discount_type?: 'percentage' | 'amount' | null
+    discount_value?: number
 }
 
 /**
@@ -42,7 +44,18 @@ export async function recordManualSale(data: ManualSaleData) {
         throw new Error(`Insufficient stock. Available: ${product.current_stock}`)
     }
 
-    const totalAmount = data.quantity * data.unit_price
+    const subtotal = data.quantity * data.unit_price
+
+    // Calculate discount
+    let discountAmount = 0
+    if (data.discount_type === 'percentage' && data.discount_value) {
+        discountAmount = Math.round((subtotal * data.discount_value / 100) * 100) / 100
+    } else if (data.discount_type === 'amount' && data.discount_value) {
+        discountAmount = data.discount_value
+    }
+    discountAmount = Math.min(discountAmount, subtotal) // Can't discount more than total
+
+    const totalAmount = subtotal - discountAmount
     const totalCost = await calculateFifoCost(data.product_id, data.quantity)
     const profit = totalAmount - totalCost
 
@@ -63,7 +76,10 @@ export async function recordManualSale(data: ManualSaleData) {
             notes: data.notes,
             sale_date: activeDate,
             cash_payment_amount: data.paid_amount || totalAmount,
-            card_payment_amount: 0
+            card_payment_amount: 0,
+            discount_type: data.discount_type || null,
+            discount_value: data.discount_value || 0,
+            discount_amount: discountAmount
         }])
         .select()
         .single()
@@ -81,7 +97,10 @@ export async function recordManualSale(data: ManualSaleData) {
                 customer_name: data.customer_name,
                 profit: profit,
                 notes: data.notes,
-                sale_date: activeDate
+                sale_date: activeDate,
+                discount_type: data.discount_type || null,
+                discount_value: data.discount_value || 0,
+                discount_amount: discountAmount
             }])
             .select()
             .single()

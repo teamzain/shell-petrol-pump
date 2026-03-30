@@ -13,7 +13,8 @@ import {
     Droplets,
     PieChart,
     BarChart2,
-    Package
+    Package,
+    Tag
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -59,7 +60,7 @@ export function ProfitLossReport({ filters, onDataLoaded }: {
                 // 2. Fetch Manual Sales (Lubricants)
                 let manualQuery = supabase
                     .from("manual_sales")
-                    .select("total_amount, profit, quantity, product_id")
+                    .select("total_amount, profit, quantity, product_id, discount_amount")
                     .gte("sale_date", fromDate)
                     .lte("sale_date", toDate)
 
@@ -92,22 +93,28 @@ export function ProfitLossReport({ filters, onDataLoaded }: {
 
                 const totalExpense = expenses?.reduce((sum, e) => sum + Number(e.amount || 0), 0) || 0
 
+                const totalManualDiscount = manualSales?.reduce((sum, s) => sum + Number(s.discount_amount || 0), 0) || 0
+                const grossLubeRevenue = lubeRevenue + totalManualDiscount
+
                 const totalRevenue = fuelRevenue + lubeRevenue
+                const totalGrossSales = fuelRevenue + grossLubeRevenue
                 const totalCogs = fuelCost + lubeCost
                 const grossProfit = totalRevenue - totalCogs
                 const netProfit = grossProfit - totalExpense
 
                 const finalStats = {
                     fuel: { revenue: fuelRevenue, cost: fuelCost, profit: fuelProfit, qty: fuelQty },
-                    lube: { revenue: lubeRevenue, cost: lubeCost, profit: lubeProfit, qty: lubeQty },
+                    lube: { revenue: lubeRevenue, grossRevenue: grossLubeRevenue, discount: totalManualDiscount, cost: lubeCost, profit: lubeProfit, qty: lubeQty },
                     total: {
+                        grossSales: totalGrossSales,
+                        discount: totalManualDiscount,
                         revenue: totalRevenue,
                         cogs: totalCogs,
                         grossProfit: grossProfit,
                         expense: totalExpense,
                         netProfit: netProfit
                     },
-                    productBreakdown: [] as { name: string; type: string; revenue: number; cost: number; profit: number; qty: number }[]
+                    productBreakdown: [] as { name: string; type: string; revenue: number; grossRevenue: number; discount: number; cost: number; profit: number; qty: number }[]
                 }
 
                 // 4. Per-Product Breakdown
@@ -130,15 +137,16 @@ export function ProfitLossReport({ filters, onDataLoaded }: {
                 const { data: fuelDetail } = await fuelDetailQuery
 
                 // Aggregate fuel sales per product
-                const fuelByProduct: Record<string, { name: string; type: string; revenue: number; cost: number; profit: number; qty: number }> = {}
+                const fuelByProduct: Record<string, { name: string; type: string; revenue: number; grossRevenue: number; discount: number; cost: number; profit: number; qty: number }> = {}
                 fuelDetail?.forEach((s: any) => {
                     const nozzle = Array.isArray(s.nozzles) ? s.nozzles[0] : s.nozzles
                     const product = Array.isArray(nozzle?.products) ? nozzle?.products[0] : nozzle?.products
                     const pid = nozzle?.product_id
                     const pname = product?.name || "Unknown Fuel"
                     if (!pid) return
-                    if (!fuelByProduct[pid]) fuelByProduct[pid] = { name: pname, type: "fuel", revenue: 0, cost: 0, profit: 0, qty: 0 }
+                    if (!fuelByProduct[pid]) fuelByProduct[pid] = { name: pname, type: "fuel", revenue: 0, grossRevenue: 0, discount: 0, cost: 0, profit: 0, qty: 0 }
                     fuelByProduct[pid].revenue += Number(s.revenue || 0)
+                    fuelByProduct[pid].grossRevenue += Number(s.revenue || 0)
                     fuelByProduct[pid].cost += Number(s.cogs || 0)
                     fuelByProduct[pid].profit += Number(s.gross_profit || 0)
                     fuelByProduct[pid].qty += Number(s.quantity || 0)
@@ -147,7 +155,7 @@ export function ProfitLossReport({ filters, onDataLoaded }: {
                 // Manual (lubricant) sales per product
                 let manualDetailQuery = supabase
                     .from("manual_sales")
-                    .select("total_amount, profit, quantity, product_id, products!inner(name, type)")
+                    .select("total_amount, profit, quantity, product_id, discount_amount, products!inner(name, type)")
                     .gte("sale_date", fromDate)
                     .lte("sale_date", toDate)
 
@@ -159,14 +167,16 @@ export function ProfitLossReport({ filters, onDataLoaded }: {
 
                 const { data: manualDetail } = await manualDetailQuery
 
-                const lubeByProduct: Record<string, { name: string; type: string; revenue: number; cost: number; profit: number; qty: number }> = {}
+                const lubeByProduct: Record<string, { name: string; type: string; revenue: number; grossRevenue: number; discount: number; cost: number; profit: number; qty: number }> = {}
                 manualDetail?.forEach((s: any) => {
                     const product = Array.isArray(s.products) ? s.products[0] : s.products
                     const pid = s.product_id
                     const pname = product?.name || "Unknown Product"
                     if (!pid) return
-                    if (!lubeByProduct[pid]) lubeByProduct[pid] = { name: pname, type: "oil_lubricant", revenue: 0, cost: 0, profit: 0, qty: 0 }
+                    if (!lubeByProduct[pid]) lubeByProduct[pid] = { name: pname, type: "oil_lubricant", revenue: 0, grossRevenue: 0, discount: 0, cost: 0, profit: 0, qty: 0 }
                     lubeByProduct[pid].revenue += Number(s.total_amount || 0)
+                    lubeByProduct[pid].discount += Number(s.discount_amount || 0)
+                    lubeByProduct[pid].grossRevenue += Number(s.total_amount || 0) + Number(s.discount_amount || 0)
                     lubeByProduct[pid].profit += Number(s.profit || 0)
                     lubeByProduct[pid].cost += Number(s.total_amount || 0) - Number(s.profit || 0)
                     lubeByProduct[pid].qty += Number(s.quantity || 0)
@@ -204,15 +214,27 @@ export function ProfitLossReport({ filters, onDataLoaded }: {
     return (
         <div className="space-y-6">
             {/* High Level Overview */}
-            <div className="grid gap-4 md:grid-cols-4">
+            <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-5">
                 <Card className="bg-emerald-50 border-emerald-100">
                     <CardHeader className="pb-2">
-                        <CardTitle className="text-xs font-semibold text-emerald-600 uppercase tracking-tight">Total Revenue</CardTitle>
+                        <CardTitle className="text-xs font-semibold text-emerald-600 uppercase tracking-tight">Gross Revenue</CardTitle>
                     </CardHeader>
                     <CardContent>
-                        <div className="text-2xl font-bold text-emerald-700">Rs. {stats.total.revenue.toLocaleString()}</div>
+                        <div className="text-2xl font-bold text-emerald-700">Rs. {stats.total.grossSales.toLocaleString()}</div>
                         <p className="text-[10px] text-emerald-600/70 mt-1 flex items-center gap-1">
                             <TrendingUp className="h-3 w-3" /> Combined Sales
+                        </p>
+                    </CardContent>
+                </Card>
+
+                <Card className="bg-orange-50 border-orange-100">
+                    <CardHeader className="pb-2">
+                        <CardTitle className="text-xs font-semibold text-orange-600 uppercase tracking-tight">Total Discounts</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="text-2xl font-bold text-orange-700">Rs. {stats.total.discount.toLocaleString()}</div>
+                        <p className="text-[10px] text-orange-600/70 mt-1 flex items-center gap-1">
+                            <Tag className="h-3 w-3" /> Promotional Offers
                         </p>
                     </CardContent>
                 </Card>
@@ -337,9 +359,21 @@ export function ProfitLossReport({ filters, onDataLoaded }: {
                         <Table>
                             <TableBody>
                                 <TableRow>
-                                    <TableCell className="font-medium">Gross Revenue</TableCell>
+                                    <TableCell className="font-medium">Gross Sales</TableCell>
                                     <TableCell className="text-right font-mono text-emerald-600 font-bold">
-                                        + Rs. {stats.total.revenue.toLocaleString()}
+                                        + Rs. {stats.total.grossSales.toLocaleString()}
+                                    </TableCell>
+                                </TableRow>
+                                <TableRow>
+                                    <TableCell className="font-medium pl-6 text-xs text-orange-600">Less: Discounts Given</TableCell>
+                                    <TableCell className="text-right font-mono text-xs text-orange-600 italic">
+                                        - Rs. {stats.total.discount.toLocaleString()}
+                                    </TableCell>
+                                </TableRow>
+                                <TableRow className="border-t-2">
+                                    <TableCell className="font-bold">Net Revenue</TableCell>
+                                    <TableCell className="text-right font-mono text-emerald-700 font-black">
+                                        Rs. {stats.total.revenue.toLocaleString()}
                                     </TableCell>
                                 </TableRow>
                                 <TableRow>

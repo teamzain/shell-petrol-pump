@@ -23,7 +23,7 @@ export async function getDailyReportData(date: string) {
     
     const { data: manualSales } = await supabase
         .from("manual_sales")
-        .select("total_amount, quantity, product_id, payment_method")
+        .select("total_amount, quantity, product_id, payment_method, discount_amount")
         .eq("sale_date", targetDate)
 
     const cashSalesTotal = (fuelSales?.filter(s => s.payment_method === 'cash').reduce((acc: number, s: any) => acc + Number(s.revenue ?? s.total_amount), 0) || 0) +
@@ -156,7 +156,8 @@ export async function getDailyReportData(date: string) {
                 released: bankReleased
             },
             totalSale,
-            totalPurchase: totalCashBankPurchase
+            totalPurchase: totalCashBankPurchase,
+            totalDiscounts: manualSales?.reduce((acc: number, s: any) => acc + Number(s.discount_amount || 0), 0) || 0
         },
         suppliers: {
             opening: supplierOpening,

@@ -1,28 +1,28 @@
 Read Attempt: {
   "data": [
     {
-      "id": "2e9d93fb-bdf8-4fec-a753-d87a0ba6e35f",
+      "id": "ad350e24-f502-4e81-9168-f28a5265ecf6",
       "sale_id": null,
       "payment_method_id": null,
       "payment_type": "bank_card",
       "supplier_id": null,
-      "hold_amount": 200,
-      "sale_date": "2026-03-07",
+      "hold_amount": 1000,
+      "sale_date": "2026-03-28",
       "expected_release_date": null,
       "actual_release_date": null,
       "status": "released",
       "release_note": null,
       "created_by": null,
-      "created_at": "2026-03-06T22:50:07.734807+00:00",
-      "updated_at": "2026-03-06T22:50:07.734807+00:00",
-      "bank_card_id": "100b3e3e-7fab-4ee5-b611-17ec59eedf5c",
+      "created_at": "2026-03-28T17:35:22.471792+00:00",
+      "updated_at": "2026-03-28T17:35:22.471792+00:00",
+      "bank_card_id": "1b001ec2-0cc1-4109-970a-eefd6abb12a7",
       "supplier_card_id": null,
       "card_type": "bank_card",
-      "tax_percentage": 10,
-      "tax_amount": 20,
-      "net_amount": 180,
-      "released_at": "2026-03-07T10:45:30.588+00:00",
-      "bank_account_id": "6554222c-4dbe-4fe8-a5a6-db682a19efca"
+      "tax_percentage": 0,
+      "tax_amount": 0,
+      "net_amount": 1000,
+      "released_at": "2026-03-28T00:00:00+00:00",
+      "bank_account_id": "6d01f018-4e68-45d2-af0e-463c2cb8dcd7"
     }
   ],
   "error": null
@@ -30,7 +30,7 @@ Read Attempt: {
 
 Insert Attempt (Empty): {
   "code": "23502",
-  "details": "Failing row contains (19245a5a-a55d-4eae-9875-964b4e0ec607, null, null, null, null, null, null, null, null, pending, null, null, 2026-03-07 17:38:19.137474+00, 2026-03-07 17:38:19.137474+00, null, null, null, 0.00, 0.00, 0.00, null, null).",
+  "details": "Failing row contains (b7bbd07c-78c0-4568-9648-7313552d689e, null, null, null, null, null, null, null, null, pending, null, null, 2026-03-30 10:56:06.305476+00, 2026-03-30 10:56:06.305476+00, null, null, null, 0.00, 0.00, 0.00, null, null).",
   "hint": null,
   "message": "null value in column \"hold_amount\" of relation \"card_hold_records\" violates not-null constraint"
 }

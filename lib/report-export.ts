@@ -64,7 +64,9 @@ function exportToCSV(activeTab: string, reportData: any, dateRangeStr: string, f
         // Section 1: Financial Statement
         csvContent += "FINANCIAL STATEMENT\n"
         csvContent += "Metric,Amount (Rs.)\n"
-        csvContent += `Gross Revenue,${data.total.revenue.toLocaleString()}\n`
+        csvContent += `Gross Sales,${data.total.grossSales.toLocaleString()}\n`
+        csvContent += `Less: Discounts Given,${data.total.discount.toLocaleString()}\n`
+        csvContent += `Net Revenue,${data.total.revenue.toLocaleString()}\n`
         csvContent += `Cost of Sales (COGS),${data.total.cogs.toLocaleString()}\n`
         csvContent += `Gross Profit,${data.total.grossProfit.toLocaleString()}\n`
         csvContent += `Operating Expenses,${data.total.expense.toLocaleString()}\n`
@@ -215,7 +217,7 @@ function exportToCSV(activeTab: string, reportData: any, dateRangeStr: string, f
         csvContent += `Period,${dateRangeStr}\n`
         csvContent += `Category,${categoryLabel}\n`
         csvContent += `Generated,${format(new Date(), "PPpp")}\n\n`
-        const headers = ["Date", "Description", "Category", "Quantity", "Rate", "Total", "Profit", "Payment"]
+        const headers = ["Date", "Description", "Category", "Quantity", "Rate", "Discount", "Total", "Profit", "Payment"]
         csvContent += headers.join(",") + "\n"
         reportData.forEach((s: any) => {
             const row = [ 
@@ -224,6 +226,7 @@ function exportToCSV(activeTab: string, reportData: any, dateRangeStr: string, f
                 s.type, // 'Fuel' or 'Lubricant'
                 s.quantity, 
                 s.rate, 
+                s.discount || 0,
                 s.total, 
                 s.profit, 
                 s.payment 
@@ -254,14 +257,16 @@ function exportToCSV(activeTab: string, reportData: any, dateRangeStr: string, f
         csvContent += `Date,${d._date || dateRangeStr}\n`
         csvContent += `Generated,${format(new Date(), "PPpp")}\n\n`
 
-        // Total Balance Summary
         const totalOpening = (d.financials.cash.opening || 0) + (d.financials.bank.opening || 0)
         const totalClosing = (d.financials.cash.closing || 0) + (d.financials.bank.closing || 0)
         csvContent += "TOTAL BUSINESS BALANCE (CASH + BANK)\n"
         csvContent += "Metric,Amount (Rs.)\n"
         csvContent += `Total Opening Balance,${totalOpening}\n`
         csvContent += `Total Closing Balance,${totalClosing}\n`
-        csvContent += `Net Change,${totalClosing - totalOpening}\n\n`
+        csvContent += `Net Change,${totalClosing - totalOpening}\n`
+        if (d.financials.totalDiscounts > 0) csvContent += `Discounts Given,${d.financials.totalDiscounts}\n`
+        csvContent += "\n"
+
 
         csvContent += "CASH ACCOUNT\n"
         csvContent += "Metric,Amount (Rs.)\n"
@@ -297,6 +302,57 @@ function exportToCSV(activeTab: string, reportData: any, dateRangeStr: string, f
                 csvContent += `"${item.name}",${item.opening},${item.in},${item.out},${item.closing},${item.unit}\n`
             })
         }
+    } else if (activeTab === "stock" && Array.isArray(reportData)) {
+        csvContent += "STOCK MOVEMENT & DIP REPORT\n"
+        csvContent += `Period,${dateRangeStr}\n`
+        csvContent += `Category,${categoryLabel}\n`
+        csvContent += `Generated,${format(new Date(), "PPpp")}\n\n`
+        const headers = ["Date", "Product", "Type", "Prev. Stock", "Sale Qty", "Purchase", "Dip Qty", "Gain / Loss", "Net Stock", "Reference / Note"]
+        csvContent += headers.join(",") + "\n"
+        reportData.forEach((s: any) => {
+            const isNegative = s.quantity && s.quantity < 0
+            const isPositive = s.quantity && s.quantity > 0
+            const isDip = s.row_type === "dip_reading"
+            const rawQty = s.quantity ? Math.abs(s.quantity) : 0
+            
+            const row = [ 
+                s.movement_date, 
+                `"${s.product_name}"`, 
+                s.movement_type,
+                s.previous_stock || 0,
+                isNegative ? `-${rawQty}` : "0",
+                isPositive ? `+${rawQty}` : "0",
+                isDip ? s.dip_quantity || 0 : "0",
+                isDip ? (Number(s.gain_amount || 0) > 0 ? `+${s.gain_amount}` : Number(s.loss_amount || 0) > 0 ? `-${s.loss_amount}` : "0") : "0",
+                s.balance_after || 0,
+                `"${s.notes || ''}"`
+            ]
+            csvContent += row.join(",") + "\n"
+        })
+    } else if (activeTab === "gain-loss" && reportData.records) {
+        csvContent += "STOCK GAIN / LOSS DISCREPANCY REPORT\n"
+        csvContent += `Period,${dateRangeStr}\n`
+        csvContent += `Generated,${format(new Date(), "PPpp")}\n\n`
+        csvContent += `TOTAL GAIN,${reportData.totalGain.toFixed(1)}\n`
+        csvContent += `TOTAL LOSS,${reportData.totalLoss.toFixed(1)}\n`
+        csvContent += `NET VARIANCE,${reportData.netVariance.toFixed(1)}\n\n`
+        
+        const headers = ["Date", "Tank", "Product", "System Stock", "Dip Stock", "Variance (L)", "New Stock", "Var %", "Notes"]
+        csvContent += headers.join(",") + "\n"
+        reportData.records.forEach((r: any) => {
+            const row = [ 
+                r.reading_date, 
+                `"${r.tank_name}"`, 
+                `"${r.product_name}"`, 
+                r.system_stock, 
+                r.dip_stock, 
+                r.variance.toFixed(2), 
+                r.dip_stock, // Use dip stock as final new stock
+                r.variance_percentage.toFixed(2), 
+                `"${r.notes || ''}"`
+            ]
+            csvContent += row.join(",") + "\n"
+        })
     } else {
         csvContent += "Data Error: Export not fully configured for this tab yet."
     }
@@ -397,10 +453,13 @@ function exportToPDF(activeTab: string, reportData: any, dateRangeStr: string, s
         // Total Balance KPI (hero card)
         const totalOpening = (d.financials.cash.opening || 0) + (d.financials.bank.opening || 0)
         const totalClosing = (d.financials.cash.closing || 0) + (d.financials.bank.closing || 0)
+        const totalDiscounts = d.financials.totalDiscounts || 0
+        const netChange = totalClosing - totalOpening
+        
         addKPIGrid(
             "Total Business Balance (Cash + Bank Combined)",
-            ["TOTAL OPENING", "CASH CLOSING", "BANK CLOSING", "TOTAL CLOSING BALANCE"],
-            [fmt(totalOpening), fmt(d.financials.cash.closing), fmt(d.financials.bank.closing), fmt(totalClosing)],
+            ["TOTAL OPENING", "TOTAL CLOSING BALANCE", "NET CHANGE", "DISCOUNTS GIVEN"],
+            [fmt(totalOpening), fmt(totalClosing), `${netChange >= 0 ? '+' : ''}${fmt(netChange)}`, fmt(totalDiscounts)],
             [49, 46, 129]
         )
 
@@ -474,9 +533,10 @@ function exportToPDF(activeTab: string, reportData: any, dateRangeStr: string, s
         // Section 1: Top KPIs Grid
         addKPIGrid(
             "Overall Key Performance Indicators (KPIs)",
-            ["TOTAL REVENUE", "COST OF GOODS SOLD", "OPERATING EXPENSE", "NET PROFIT / LOSS"],
+            ["GROSS REVENUE", "DISCOUNTS GIVEN", "COST OF GOODS SOLD", "OPERATING EXPENSE", "NET PROFIT / LOSS"],
             [
-                `Rs. ${data.total.revenue.toLocaleString()}`,
+                `Rs. ${data.total.grossSales.toLocaleString()}`,
+                `Rs. ${data.total.discount.toLocaleString()}`,
                 `Rs. ${data.total.cogs.toLocaleString()}`,
                 `Rs. ${data.total.expense.toLocaleString()}`,
                 `Rs. ${data.total.netProfit.toLocaleString()}`
@@ -491,7 +551,9 @@ function exportToPDF(activeTab: string, reportData: any, dateRangeStr: string, s
         autoTable(doc, {
             startY: nextY + 3,
             body: [
-                ["Gross Revenue", `+ Rs. ${data.total.revenue.toLocaleString()}`],
+                ["Gross Sales", `+ Rs. ${data.total.grossSales.toLocaleString()}`],
+                ["Less: Discounts Given", `- Rs. ${data.total.discount.toLocaleString()}`],
+                ["Net Revenue", `+ Rs. ${data.total.revenue.toLocaleString()}`],
                 ["Cost of Goods Sold (COGS)", `- Rs. ${data.total.cogs.toLocaleString()}`],
                 ["Gross Profit", `Rs. ${data.total.grossProfit.toLocaleString()}`],
                 ["Operating Expenses", `- Rs. ${data.total.expense.toLocaleString()}`],
@@ -846,27 +908,147 @@ function exportToPDF(activeTab: string, reportData: any, dateRangeStr: string, s
                 margin: { left: 14, right: 14 }
             })
         }
-    } else if (activeTab === "sales-report" && Array.isArray(reportData)) {
-        doc.setFontSize(11)
-        doc.setFont("helvetica", "bold")
-        doc.text("Sales Transactions Log", 14, nextY)
-        autoTable(doc, {
-            startY: nextY + 3,
-            head: [["Date", "Description", "Category", "Qty", "Total", "Profit"]],
-            body: reportData.map((s: any) => [
-                format(new Date(s.date), "dd MMM"),
-                s.description,
-                s.type,
-                s.quantity.toLocaleString(),
-                s.total.toLocaleString(),
-                s.profit.toLocaleString()
-            ]),
-            theme: "grid",
-            headStyles: { fillColor: [41, 128, 185], textColor: 255 },
-            styles: { fontSize: 8, cellPadding: 2 },
-            columnStyles: { 3: { halign: "right" }, 4: { halign: "right" }, 5: { halign: "right" } },
-            margin: { left: 14, right: 14 }
-        })
+    } else if (activeTab === "sales-report") {
+        // 1. DATA EXTRACTION
+        const products = reportData.products || (Array.isArray(reportData) ? reportData : [])
+        const bankCards = reportData.bankCards || []
+        
+        const showProducts = scope === "full" || scope === "products"
+        const showCards = scope === "full" || scope === "bank-cards"
+
+        // 2. PRODUCT SALES SECTION
+        if (showProducts && products.length > 0) {
+            const totalRevenue = products.reduce((sum: number, s: any) => sum + Number(s.total || 0), 0)
+            const totalDiscount = products.reduce((sum: number, s: any) => sum + Number(s.discount || 0), 0)
+            const totalProfit = products.reduce((sum: number, s: any) => sum + Number(s.profit || 0), 0)
+            const grossSales = totalRevenue + totalDiscount
+
+            addKPIGrid("Product & Fuel Performance Summary", 
+                ["GROSS SALES", "DISCOUNTS GIVEN", "NET REVENUE", "EST. PROFIT"], 
+                [
+                    `Rs. ${grossSales.toLocaleString()}`,
+                    `Rs. ${totalDiscount.toLocaleString()}`,
+                    `Rs. ${totalRevenue.toLocaleString()}`,
+                    `Rs. ${totalProfit.toLocaleString()}`
+                ],
+                [41, 128, 185] // Blue
+            )
+
+            doc.setFontSize(11)
+            doc.setFont("helvetica", "bold")
+            doc.text("Detailed Product & Fuel Sales Log", 14, nextY)
+            autoTable(doc, {
+                startY: nextY + 3,
+                head: [["Date", "Description", "Category", "Qty", "Rate", "Discount", "Net Total", "Profit"]],
+                body: products.map((s: any) => [
+                    format(new Date(s.date), "dd MMM yyyy"),
+                    s.description || s.item_name || "-",
+                    s.type,
+                    `${Number(s.quantity || 0).toLocaleString()} ${s.unit || ""}`,
+                    `Rs. ${Number(s.rate || 0).toLocaleString()}`,
+                    Number(s.discount || 0) > 0 ? `Rs. ${Number(s.discount).toLocaleString()}` : "-",
+                    `Rs. ${Number(s.total || 0).toLocaleString()}`,
+                    s.profit ? `Rs. ${Number(s.profit).toLocaleString()}` : "-"
+                ]),
+                foot: [[
+                    { content: `TOTALS — ${products.length} record(s)`, colSpan: 5, styles: { halign: "left", fontStyle: "bold", fillColor: [44, 62, 80], textColor: 255 } },
+                    { content: totalDiscount > 0 ? `Rs. ${totalDiscount.toLocaleString()}` : "-", styles: { halign: "right", fontStyle: "bold", fillColor: [230, 126, 34], textColor: 255 } },
+                    { content: `Rs. ${totalRevenue.toLocaleString()}`, styles: { halign: "right", fontStyle: "bold", fillColor: [44, 62, 80], textColor: 255 } },
+                    { content: `Rs. ${totalProfit.toLocaleString()}`, styles: { halign: "right", fontStyle: "bold", fillColor: [39, 174, 96], textColor: 255 } },
+                ]],
+                theme: "grid",
+                headStyles: { fillColor: [41, 128, 185], textColor: 255 },
+                footStyles: { fontStyle: "bold" },
+                alternateRowStyles: { fillColor: [248, 249, 250] },
+                styles: { fontSize: 7, cellPadding: 2 },
+                columnStyles: {
+                    3: { halign: "right" },
+                    4: { halign: "right" },
+                    5: { halign: "right", textColor: [230, 126, 34] },
+                    6: { halign: "right", fontStyle: "bold" },
+                    7: { halign: "right", textColor: [39, 174, 96] }
+                },
+                didParseCell: (data: any) => {
+                    if (data.section === "body" && data.column.index === 5) {
+                        const rowData = products[data.row.index]
+                        if (rowData && Number(rowData.discount) > 0) {
+                            data.cell.styles.fillColor = [255, 243, 224]
+                            data.cell.styles.textColor = [180, 80, 0]
+                            data.cell.styles.fontStyle = "bold"
+                        }
+                    }
+                },
+                margin: { left: 14, right: 14 }
+            })
+            nextY = (doc as any).lastAutoTable.finalY + 15
+        } else if (showProducts) {
+             doc.setFontSize(10)
+             doc.setTextColor(150)
+             doc.text("No product sales data found for the selected range.", 14, nextY)
+             nextY += 10
+        }
+
+        // 3. BANK CARDS SECTION
+        if (showCards && bankCards.length > 0) {
+            // If starting fresh page
+            if (nextY > 200 && showProducts) {
+                doc.addPage()
+                nextY = 20
+            }
+
+            const totalHold = bankCards.reduce((sum: number, r: any) => sum + Number(r.hold_amount || 0), 0)
+            const totalTax = bankCards.reduce((sum: number, r: any) => sum + Number(r.tax_amount || 0), 0)
+            const totalNet = bankCards.reduce((sum: number, r: any) => sum + Number(r.net_amount || 0), 0)
+
+            addKPIGrid("Bank Card Settlements Summary", 
+                ["TOTAL CARD SALES", "TOTAL CARD TAX", "NET BANK AMOUNT"], 
+                [
+                    `Rs. ${totalHold.toLocaleString()}`,
+                    `Rs. ${totalTax.toLocaleString()}`,
+                    `Rs. ${totalNet.toLocaleString()}`
+                ],
+                [22, 163, 74] // Green
+            )
+
+            doc.setFontSize(11)
+            doc.setFont("helvetica", "bold")
+            doc.setTextColor(50)
+            doc.text("Bank Card Settlements Log", 14, nextY)
+
+            autoTable(doc, {
+                startY: nextY + 3,
+                head: [["Date", "Card Name", "Bank Account", "Hold Amount", "Tax (Deducted)", "Net Expected", "Status"]],
+                body: bankCards.map((r: any) => [
+                    format(new Date(r.sale_date), "dd MMM yyyy"),
+                    r.bank_cards?.card_name || "Bank Card",
+                    r.bank_cards?.bank_accounts?.bank_name || "N/A",
+                    `Rs. ${Number(r.hold_amount || 0).toLocaleString()}`,
+                    `- Rs. ${Number(r.tax_amount || 0).toLocaleString()}`,
+                    `Rs. ${Number(r.net_amount || 0).toLocaleString()}`,
+                    (r.status || "").toUpperCase()
+                ]),
+                foot: [[
+                    { content: `TOTALS — ${bankCards.length} record(s)`, colSpan: 3, styles: { halign: "left", fontStyle: "bold", fillColor: [44, 62, 80], textColor: 255 } },
+                    { content: `Rs. ${totalHold.toLocaleString()}`, styles: { halign: "right", fontStyle: "bold", fillColor: [44, 62, 80], textColor: 255 } },
+                    { content: `- Rs. ${totalTax.toLocaleString()}`, styles: { halign: "right", fontStyle: "bold", fillColor: [220, 38, 38], textColor: 255 } },
+                    { content: `Rs. ${totalNet.toLocaleString()}`, styles: { halign: "right", fontStyle: "bold", fillColor: [22, 163, 74], textColor: 255 } },
+                    { content: "", styles: { fillColor: [44, 62, 80] } }
+                ]],
+                theme: "grid",
+                headStyles: { fillColor: [22, 163, 74], textColor: 255 },
+                footStyles: { fontStyle: "bold" },
+                alternateRowStyles: { fillColor: [248, 252, 248] },
+                styles: { fontSize: 7, cellPadding: 2 },
+                columnStyles: { 3: { halign: "right" }, 4: { halign: "right", textColor: [180, 0, 0] }, 5: { halign: "right", fontStyle: "bold" }, 6: { halign: "center" } },
+                margin: { left: 14, right: 14 }
+            })
+            nextY = (doc as any).lastAutoTable.finalY + 15
+        } else if (showCards) {
+             doc.setFontSize(10)
+             doc.setTextColor(150)
+             doc.text("No bank card transaction data found for the selected range.", 14, nextY)
+        }
+
     } else if (activeTab === "bank-card-report" && Array.isArray(reportData)) {
         doc.setFontSize(11)
         doc.setFont("helvetica", "bold")
@@ -875,18 +1057,112 @@ function exportToPDF(activeTab: string, reportData: any, dateRangeStr: string, s
             startY: nextY + 3,
             head: [["Date", "Card", "Bank", "Hold", "Tax", "Net", "Status"]],
             body: reportData.map((r: any) => [
-                format(new Date(r.sale_date), "dd MMM"),
+                format(new Date(r.sale_date), "dd MMM yyyy"),
                 r.bank_cards?.card_name || "Card",
                 r.bank_cards?.bank_accounts?.bank_name || "N/A",
-                r.hold_amount.toLocaleString(),
-                r.tax_amount.toLocaleString(),
-                r.net_amount.toLocaleString(),
+                `Rs. ${Number(r.hold_amount || 0).toLocaleString()}`,
+                `Rs. ${Number(r.tax_amount || 0).toLocaleString()}`,
+                `Rs. ${Number(r.net_amount || 0).toLocaleString()}`,
                 r.status
             ]),
             theme: "grid",
             headStyles: { fillColor: [41, 128, 185], textColor: 255 },
             styles: { fontSize: 8, cellPadding: 2 },
             columnStyles: { 3: { halign: "right" }, 4: { halign: "right" }, 5: { halign: "right" } },
+            margin: { left: 14, right: 14 }
+        })
+    } else if (activeTab === "stock" && Array.isArray(reportData)) {
+        doc.setFontSize(11)
+        doc.setFont("helvetica", "bold")
+        doc.text("Stock Movement & Dip History", 14, nextY)
+        
+        autoTable(doc, {
+            startY: nextY + 4,
+            head: [["Date", "Product", "Type", "Prev", "Sale", "Purch", "Dip", "G/L", "Net", "Note"]],
+            body: reportData.map((s: any) => {
+                const isNegative = s.quantity && s.quantity < 0
+                const isPositive = s.quantity && s.quantity > 0
+                const isDip = s.row_type === "dip_reading"
+                const rawQty = s.quantity ? Math.abs(s.quantity) : 0
+
+                return [
+                    format(new Date(s.movement_date), "dd MMM yyyy HH:mm"),
+                    s.product_name,
+                    s.movement_type.toUpperCase(),
+                    (s.previous_stock || 0).toLocaleString(),
+                    isNegative ? `-${rawQty.toLocaleString()}` : "—",
+                    isPositive ? `+${rawQty.toLocaleString()}` : "—",
+                    isDip ? (s.dip_quantity || 0).toLocaleString() : "—",
+                    isDip ? (Number(s.gain_amount || 0) > 0 ? `+${s.gain_amount}` : Number(s.loss_amount || 0) > 0 ? `-${s.loss_amount}` : "0") : "—",
+                    (s.balance_after || 0).toLocaleString(),
+                    (s.notes || "").substring(0, 30)
+                ]
+            }),
+            theme: "grid",
+            headStyles: { fillColor: [52, 73, 94], textColor: 255 },
+            alternateRowStyles: { fillColor: [248, 249, 250] },
+            styles: { fontSize: 7, cellPadding: 2 },
+            columnStyles: { 
+                3: { halign: "right" }, 
+                4: { halign: "right", textColor: [192, 57, 43] }, 
+                5: { halign: "right", textColor: [39, 174, 96] }, 
+                6: { halign: "right", textColor: [31, 97, 141] }, 
+                7: { halign: "right", textColor: [31, 97, 141], fontStyle: "bold" },
+                8: { halign: "right", fontStyle: "bold" } 
+            },
+            margin: { left: 14, right: 14 }
+        })
+    } else if (activeTab === "gain-loss" && reportData.records) {
+        doc.setFontSize(11)
+        doc.setFont("helvetica", "bold")
+        doc.text("Stock Gain / Loss Summary", 14, nextY)
+        
+        addKPIGrid(
+            "Volumetric Variance Highlights",
+            ["TOTAL GAIN (L)", "TOTAL LOSS (L)", "NET VARIANCE (L)"],
+            [
+                `+${reportData.totalGain.toLocaleString(undefined, { minimumFractionDigits: 1 })}`,
+                `-${reportData.totalLoss.toLocaleString(undefined, { minimumFractionDigits: 1 })}`,
+                `${reportData.netVariance >= 0 ? '+' : ''}${reportData.netVariance.toLocaleString(undefined, { minimumFractionDigits: 1 })}`
+            ],
+            [41, 128, 185]
+        )
+
+        doc.setFontSize(11)
+        doc.setFont("helvetica", "bold")
+        doc.text("Detailed Discrepancy Log", 14, nextY)
+        
+        autoTable(doc, {
+            startY: nextY + 4,
+            head: [["Date", "Tank", "Product", "System", "Dip", "Variance", "New Stk", "Var %"]],
+            body: reportData.records.map((r: any) => [
+                format(new Date(r.reading_date), "dd MMM yyyy"),
+                r.tank_name,
+                r.product_name,
+                r.system_stock.toLocaleString(),
+                r.dip_stock.toLocaleString(),
+                `${r.variance >= 0 ? '+' : ''}${r.variance.toLocaleString(undefined, { minimumFractionDigits: 1 })}`,
+                r.dip_stock.toLocaleString(),
+                `${r.variance_percentage.toFixed(2)}%`
+            ]),
+            theme: "grid",
+            headStyles: { fillColor: [52, 73, 94], textColor: 255 },
+            alternateRowStyles: { fillColor: [248, 249, 250] },
+            styles: { fontSize: 8, cellPadding: 2 },
+            columnStyles: { 
+                3: { halign: "right" }, 
+                4: { halign: "right" }, 
+                5: { halign: "right", fontStyle: "bold" },
+                6: { halign: "right", fontStyle: "bold", textColor: [31, 97, 141] },
+                7: { halign: "right" }
+            },
+            didParseCell: (data) => {
+                if (data.column.index === 5 && data.section === 'body') {
+                    const row = reportData.records[data.row.index];
+                    if (row.variance < 0) data.cell.styles.textColor = [220, 38, 38];
+                    else if (row.variance > 0) data.cell.styles.textColor = [22, 163, 74];
+                }
+            },
             margin: { left: 14, right: 14 }
         })
     }

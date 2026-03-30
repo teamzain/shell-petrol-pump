@@ -11,7 +11,9 @@ import {
     X,
     CheckCircle2,
     Receipt,
-    CreditCard
+    CreditCard,
+    Percent,
+    Tag
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
@@ -48,7 +50,9 @@ export default function ManualSalesPage() {
         payment_method: "cash",
         customer_name: "",
         notes: "",
-        paid_amount: ""
+        paid_amount: "",
+        discount_type: "" as "" | "percentage" | "amount" | "none",
+        discount_value: ""
     })
 
     const supabase = createClient()
@@ -96,7 +100,9 @@ export default function ManualSalesPage() {
                 payment_method: "cash",
                 customer_name: formData.customer_name || "Walk-in",
                 notes: formData.notes,
-                paid_amount: parseFloat(formData.paid_amount || total.toString())
+                paid_amount: parseFloat(formData.paid_amount || finalTotal.toString()),
+                discount_type: (formData.discount_type && formData.discount_type !== 'none') ? formData.discount_type as 'percentage' | 'amount' : null,
+                discount_value: formData.discount_value ? parseFloat(formData.discount_value) : 0
             })
 
             toast.success("Manual sale recorded successfully!")
@@ -107,7 +113,9 @@ export default function ManualSalesPage() {
                 payment_method: "cash",
                 customer_name: "",
                 notes: "",
-                paid_amount: ""
+                paid_amount: "",
+                discount_type: "",
+                discount_value: ""
             })
             fetchData()
         } catch (error: any) {
@@ -118,7 +126,17 @@ export default function ManualSalesPage() {
     }
 
     const selectedProduct = products.find(p => p.id === formData.product_id)
-    const total = parseFloat(formData.quantity || "0") * parseFloat(formData.unit_price || "0")
+    const subtotal = parseFloat(formData.quantity || "0") * parseFloat(formData.unit_price || "0")
+
+    // Calculate discount
+    let discountAmount = 0
+    if (formData.discount_type === 'percentage' && formData.discount_value) {
+        discountAmount = Math.round((subtotal * parseFloat(formData.discount_value) / 100) * 100) / 100
+    } else if (formData.discount_type === 'amount' && formData.discount_value) {
+        discountAmount = parseFloat(formData.discount_value)
+    }
+    discountAmount = Math.min(discountAmount, subtotal)
+    const finalTotal = subtotal - discountAmount
 
     return (
         <div className="max-w-4xl mx-auto space-y-6">
@@ -198,7 +216,7 @@ export default function ManualSalesPage() {
                                             id="paid_amount"
                                             type="number"
                                             step="0.01"
-                                            placeholder={total.toString()}
+                                            placeholder={finalTotal.toString()}
                                             value={formData.paid_amount}
                                             onChange={(e) => setFormData({ ...formData, paid_amount: e.target.value })}
                                         />
@@ -224,10 +242,76 @@ export default function ManualSalesPage() {
                                         onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                                     />
                                 </div>
+
+                                {/* Discount Section */}
+                                <div className="border rounded-lg p-4 bg-muted/30 space-y-3">
+                                    <div className="flex items-center gap-2 text-sm font-medium">
+                                        <Tag className="w-4 h-4 text-orange-500" />
+                                        Discount (Optional)
+                                    </div>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                        <div className="space-y-2">
+                                            <Label htmlFor="discount_type">Discount Type</Label>
+                                            <Select
+                                                value={formData.discount_type}
+                                                onValueChange={(val) => setFormData({ ...formData, discount_type: val as "" | "percentage" | "amount" | "none", discount_value: "" })}
+                                            >
+                                                <SelectTrigger>
+                                                    <SelectValue placeholder="No discount" />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value="none">No Discount</SelectItem>
+                                                    <SelectItem value="percentage">
+                                                        <span className="flex items-center gap-1"><Percent className="w-3 h-3" /> Percentage (%)</span>
+                                                    </SelectItem>
+                                                    <SelectItem value="amount">
+                                                        <span className="flex items-center gap-1">Rs. Fixed Amount</span>
+                                                    </SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+                                        <div className="space-y-2">
+                                            <Label htmlFor="discount_value">
+                                                {formData.discount_type === 'percentage' ? 'Discount (%)' : formData.discount_type === 'amount' ? 'Discount (Rs.)' : 'Discount Value'}
+                                            </Label>
+                                            <Input
+                                                id="discount_value"
+                                                type="number"
+                                                step="0.01"
+                                                min="0"
+                                                max={formData.discount_type === 'percentage' ? '100' : undefined}
+                                                placeholder={formData.discount_type === 'percentage' ? 'e.g. 10' : formData.discount_type === 'amount' ? 'e.g. 50' : '0'}
+                                                disabled={!formData.discount_type || formData.discount_type === 'none'}
+                                                value={formData.discount_value}
+                                                onChange={(e) => setFormData({ ...formData, discount_value: e.target.value })}
+                                            />
+                                        </div>
+                                    </div>
+                                    {discountAmount > 0 && (
+                                        <div className="text-sm text-orange-600 font-medium flex items-center gap-1">
+                                            <Tag className="w-3 h-3" />
+                                            Discount: Rs. {discountAmount.toLocaleString()}
+                                            {formData.discount_type === 'percentage' && ` (${formData.discount_value}%)`}
+                                        </div>
+                                    )}
+                                </div>
                             </CardContent>
                             <CardFooter className="justify-between border-t p-6">
-                                <div className="text-lg font-bold text-primary">
-                                    Total: Rs. {(total || 0).toLocaleString()}
+                                <div>
+                                    {discountAmount > 0 ? (
+                                        <div className="space-y-0.5">
+                                            <div className="text-sm text-muted-foreground line-through">
+                                                Subtotal: Rs. {(subtotal || 0).toLocaleString()}
+                                            </div>
+                                            <div className="text-lg font-bold text-primary">
+                                                Total: Rs. {(finalTotal || 0).toLocaleString()}
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="text-lg font-bold text-primary">
+                                            Total: Rs. {(subtotal || 0).toLocaleString()}
+                                        </div>
+                                    )}
                                 </div>
                                 <Button type="submit" disabled={isSaving || isLoading}>
                                     {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}

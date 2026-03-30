@@ -68,11 +68,20 @@ export function DailyRecapReport({ date, onDataLoaded }: DailyRecapProps) {
                             <p className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-400 mb-1">Total Business Balance</p>
                             <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">Cash + Bank Combined Closing</p>
                             <p className="text-4xl font-black text-white mt-2">{formatCurrency(totalClosingBalance)}</p>
-                            <div className="flex items-center gap-2 mt-2">
-                                <span className={`text-sm font-black ${totalNetChange >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                                    {totalNetChange >= 0 ? '▲' : '▼'} {formatCurrency(Math.abs(totalNetChange))}
-                                </span>
-                                <span className="text-[10px] text-slate-500 uppercase tracking-widest">vs Opening</span>
+                            <div className="flex items-center gap-4 mt-2">
+                                <div className="flex items-center gap-1">
+                                    <span className={`text-sm font-black ${totalNetChange >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                                        {totalNetChange >= 0 ? '▲' : '▼'} {formatCurrency(Math.abs(totalNetChange))}
+                                    </span>
+                                    <span className="text-[10px] text-slate-500 uppercase tracking-widest">vs Opening</span>
+                                </div>
+                                {data.financials.totalDiscounts > 0 && (
+                                    <div className="flex items-center gap-1 border-l border-white/20 pl-4">
+                                        <Badge variant="outline" className="bg-orange-500/20 text-orange-400 border-orange-500/50 text-[10px] font-black tracking-widest uppercase">
+                                            Discounts: {formatCurrency(data.financials.totalDiscounts)}
+                                        </Badge>
+                                    </div>
+                                )}
                             </div>
                         </div>
                         <div className="grid grid-cols-3 gap-4 w-full md:w-auto">
