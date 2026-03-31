@@ -13,7 +13,19 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { AlertCircle, Clock, CheckCircle2, Eye, Search } from "lucide-react"
+import {
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
+    DialogFooter,
+    DialogDescription,
+} from "@/components/ui/dialog"
+import { Calendar } from "@/components/ui/calendar"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Label } from "@/components/ui/label"
+import { cn } from "@/lib/utils"
+import { CalendarIcon, AlertCircle, Clock, CheckCircle2, Eye, Search } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { getAllHolds, markHoldAsReceived } from "@/app/actions/purchase-orders"
 import { toast } from "sonner"
@@ -29,6 +41,9 @@ export function ActiveHoldsTab({ dateFilters }: { dateFilters?: { from: string; 
     const [searchQuery, setSearchQuery] = useState("")
     const [selectedPO, setSelectedPO] = useState<string | null>(null)
     const [selectedDelivery, setSelectedDelivery] = useState<string | null>(null)
+    const [isDateModalOpen, setIsDateModalOpen] = useState(false)
+    const [holdToMark, setHoldToMark] = useState<any | null>(null)
+    const [receivedDate, setReceivedDate] = useState<Date>(new Date())
 
     useEffect(() => {
         loadHolds()
@@ -49,12 +64,14 @@ export function ActiveHoldsTab({ dateFilters }: { dateFilters?: { from: string; 
         }
     }
 
-    const handleMarkReceived = async (holdId: string) => {
+    const handleMarkReceived = async (holdId: string, date: Date) => {
         setProcessingId(holdId)
         try {
-            await markHoldAsReceived(holdId)
+            const dateStr = format(date, 'yyyy-MM-dd')
+            await markHoldAsReceived(holdId, dateStr)
             toast.success("Hold marked as received and account credited.")
             loadHolds()
+            setIsDateModalOpen(false)
         } catch (error: any) {
             toast.error(error.message || "Failed to process hold return")
         } finally {
@@ -221,7 +238,11 @@ export function ActiveHoldsTab({ dateFilters }: { dateFilters?: { from: string; 
                                                     ) : (
                                                         <Button
                                                             size="sm"
-                                                            onClick={() => handleMarkReceived(hold.id)}
+                                                            onClick={() => {
+                                                                setHoldToMark(hold)
+                                                                setReceivedDate(new Date())
+                                                                setIsDateModalOpen(true)
+                                                            }}
                                                             disabled={processingId === hold.id}
                                                             className="bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-200 hover:border-emerald-300 shadow-sm h-8"
                                                         >
@@ -231,7 +252,7 @@ export function ActiveHoldsTab({ dateFilters }: { dateFilters?: { from: string; 
                                                                 <>
                                                                     <CheckCircle2 className="h-3 w-3 mr-1.5" />
                                                                     Mark As Read
-                                                                </>
+                                                                 </>
                                                             )}
                                                         </Button>
                                                     )}
@@ -257,6 +278,94 @@ export function ActiveHoldsTab({ dateFilters }: { dateFilters?: { from: string; 
                 poId={selectedPO}
                 deliveryId={selectedDelivery || undefined}
             />
+
+            <Dialog open={isDateModalOpen} onOpenChange={setIsDateModalOpen}>
+                <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2 text-emerald-700">
+                            <CheckCircle2 className="h-5 w-5" />
+                            Mark Hold as Received
+                        </DialogTitle>
+                        <DialogDescription>
+                            Please select the actual date when this hold discrepancy was resolved/received from the supplier.
+                        </DialogDescription>
+                    </DialogHeader>
+                    
+                    <div className="py-4 space-y-4">
+                        {holdToMark && (
+                            <div className="bg-slate-50 p-3 rounded-lg border text-sm space-y-1">
+                                <div className="flex justify-between">
+                                    <span className="text-slate-500 font-medium">PO Number:</span>
+                                    <span className="font-mono font-bold text-slate-700">{holdToMark.purchase_orders?.po_number}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-slate-500 font-medium">Supplier:</span>
+                                    <span className="font-bold text-slate-700">{holdToMark.purchase_orders?.suppliers?.name}</span>
+                                </div>
+                                <div className="flex justify-between border-t pt-1 mt-1">
+                                    <span className="text-slate-500 font-medium">Hold Amount:</span>
+                                    <span className="font-black text-amber-700 font-mono">{formatCurrency(holdToMark.hold_amount)}</span>
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="grid gap-2">
+                            <Label htmlFor="receive-date" className="font-bold text-xs uppercase tracking-wider text-slate-500">
+                                Date of Receipt
+                            </Label>
+                            <Popover>
+                                <PopoverTrigger asChild>
+                                    <Button
+                                        variant={"outline"}
+                                        className={cn(
+                                            "w-full justify-start text-left font-normal h-11 rounded-xl border-slate-200",
+                                            !receivedDate && "text-muted-foreground"
+                                        )}
+                                    >
+                                        <CalendarIcon className="mr-2 h-4 w-4 text-emerald-600" />
+                                        {receivedDate ? format(receivedDate, "PPP") : <span>Pick a date</span>}
+                                    </Button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-auto p-0" align="start">
+                                    <Calendar
+                                        mode="single"
+                                        selected={receivedDate}
+                                        onSelect={(date) => date && setReceivedDate(date)}
+                                        initialFocus
+                                        disabled={(date) => date > new Date()}
+                                    />
+                                </PopoverContent>
+                            </Popover>
+                            <p className="text-[10px] text-muted-foreground italic">
+                                * This date will be used for financial accounting and transaction records.
+                            </p>
+                        </div>
+                    </div>
+
+                    <DialogFooter className="sm:justify-end gap-2">
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            onClick={() => setIsDateModalOpen(false)}
+                            className="font-bold"
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            type="button"
+                            onClick={() => holdToMark && handleMarkReceived(holdToMark.id, receivedDate)}
+                            disabled={!receivedDate || processingId === holdToMark?.id}
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-6"
+                        >
+                            {processingId === holdToMark?.id ? (
+                                <BrandLoader size="sm" />
+                            ) : (
+                                "Record Receipt"
+                            )}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     )
 }

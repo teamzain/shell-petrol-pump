@@ -679,7 +679,7 @@ export async function getPendingHolds() {
     return data
 }
 
-export async function markHoldAsReceived(holdId: string) {
+export async function markHoldAsReceived(holdId: string, receivedDate?: string) {
     const supabase = await createClient()
 
     const { data: { user } } = await supabase.auth.getUser()
@@ -687,7 +687,8 @@ export async function markHoldAsReceived(holdId: string) {
 
     const { error } = await supabase.rpc('release_po_hold', {
         p_hold_id: holdId,
-        p_user_id: user.id
+        p_user_id: user.id,
+        p_actual_date: receivedDate
     })
 
     if (error) throw error
