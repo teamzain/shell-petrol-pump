@@ -2,7 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
-import { getTodayPKT } from "@/lib/utils"
+import { getTodayPKT, getNowTimePKT } from "@/lib/utils"
 import { validateTransactionDate } from "./balance"
 import { calculateFifoCost } from "./fifo-cost"
 
@@ -202,9 +202,9 @@ export async function recordNozzleReadings(readings: NozzleReadingUpdate[], date
                     const prevStock = currentProduct?.current_stock ? currentProduct.current_stock + qtyToSubtract : product.current_stock
                     const balanceAfter = currentProduct?.current_stock || (product.current_stock - qtyToSubtract)
 
-                    // Join targetDate with current time for chronologically meaningful records in local TZ
-                    const currentTime = new Date().toLocaleTimeString('en-GB', { hour12: false }); // HH:MM:SS
-                    const movementDate = `${targetDate}T${currentTime}`;
+                    // Join targetDate with current PKT time for chronologically accurate records
+                    const currentTime = getNowTimePKT(); // HH:MM:SS in Asia/Karachi
+                    const movementDate = `${targetDate}T${currentTime}+05:00`;
 
                     const { error: moveError } = await supabase.from('stock_movements').insert([{
                         product_id: product.id,

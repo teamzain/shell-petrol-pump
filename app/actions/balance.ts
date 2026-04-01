@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server"
 import { getTodayPKT, getTomorrowPKT, getNextDate, getPreviousDate } from "@/lib/utils"
 import { revalidatePath } from "next/cache"
+import { addLedgerTransaction } from "./suppliers"
 
 export async function getBalanceOverviewData(date?: string) {
     const supabase = await createClient()
@@ -440,7 +441,8 @@ export async function recordBalanceTransaction(data: {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) throw new Error("Unauthorized")
 
-    const targetDate = data.date || getTodayPKT()
+    const activeDate = await getSystemActiveDate()
+    const targetDate = data.date || activeDate
     
     // Sanitize UUIDs to avoid Postgres syntax errors for empty strings
     const bankAccountId = data.bank_account_id || undefined
@@ -657,7 +659,8 @@ export async function recordBalanceTransaction(data: {
     }
 
     // 5. Update supplier balance if applicable
-    if ((data.transaction_type === 'transfer_to_supplier' || data.transaction_type === 'supplier_to_bank') && effectiveSupplierId) {
+    // ONLY update the ledger if NOT a hold. Holds will be recorded when released.
+    if (!data.is_hold && (data.transaction_type === 'transfer_to_supplier' || data.transaction_type === 'supplier_to_bank') && effectiveSupplierId) {
         const { data: compAcc } = await supabase
             .from("company_accounts")
             .select("id")
@@ -666,7 +669,6 @@ export async function recordBalanceTransaction(data: {
 
         if (compAcc) {
             const txType = data.transaction_type === 'transfer_to_supplier' ? 'credit' : 'debit'
-            const { addLedgerTransaction } = await import("./suppliers")
             await addLedgerTransaction({
                 company_account_id: compAcc.id,
                 transaction_type: txType,
@@ -915,8 +917,9 @@ export async function releaseCardHold(holdId: string, targetId: string, releaseD
     const isBankTarget = targetId.startsWith('acc_')
     const actualTargetId = targetId.replace(/^(acc_|supp_)/, '')
 
-    const effectiveReleaseDate = releaseDate ? new Date(releaseDate).toISOString() : new Date().toISOString()
-    const effectiveTransactionDate = releaseDate || hold.sale_date
+    const activeDate = await getSystemActiveDate()
+    const effectiveReleaseDate = releaseDate ? new Date(releaseDate).toISOString() : new Date(activeDate).toISOString()
+    const effectiveTransactionDate = releaseDate || activeDate
 
     // 2. Update hold record status
     const { error: updateErr } = await supabase

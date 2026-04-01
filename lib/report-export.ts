@@ -103,14 +103,37 @@ function exportToCSV(activeTab: string, reportData: any, dateRangeStr: string, f
             })
         }
 
-    } else if (activeTab === "purchase-history" && Array.isArray(reportData)) {
+    } else if (activeTab === "purchase-history" && (Array.isArray(reportData) || (reportData && reportData.orders))) {
+        const orders = Array.isArray(reportData) ? reportData : reportData.orders
         csvContent += "PURCHASE HISTORY REPORT\n"
         csvContent += `Period,${dateRangeStr}\n`
         csvContent += `Generated,${format(new Date(), "PPpp")}\n\n`
-        const headers = ["Date", "Invoice", "Supplier", "Amount", "Status"]
+        
+        if (!Array.isArray(reportData)) {
+            csvContent += "SUMMARY\n"
+            csvContent += `Total Purchase Orders,${reportData.totalOrders || 0}\n`
+            csvContent += `Total Order Value,Rs. ${reportData.totalOrderValue || 0}\n`
+            csvContent += `Total Arrivals,Rs. ${reportData.totalArrivalValue || 0}\n`
+            csvContent += `Total On Hold,Rs. ${reportData.totalOnHold || 0}\n`
+            csvContent += `Total Released,Rs. ${reportData.totalReleased || 0}\n`
+            csvContent += `Net Paid,Rs. ${reportData.totalPaid || 0}\n\n`
+        }
+
+        const headers = ["Date", "Invoice", "Supplier", "Order Value", "Arrival Value", "Hold/Release", "Net Paid", "Status", "Payment Method"]
         csvContent += headers.join(",") + "\n"
-        reportData.forEach((o: any) => {
-            const row = [ o.purchase_date, o.invoice_number, o.suppliers?.name || "N/A", o.total_amount, o.status ]
+        orders.forEach((o: any) => {
+            const adj = (o.release_amount || 0) - (o.hold_amount || 0)
+            const row = [ 
+                format(new Date(o.display_date || o.created_at), "yyyy-MM-dd"), 
+                o.invoice_number, 
+                o.supplier_name || o.suppliers?.name || "N/A", 
+                o.order_value || o.total_amount,
+                o.total_amount,
+                adj,
+                o.net_paid || o.total_amount,
+                o.status,
+                o.payment_method || "N/A"
+            ]
             csvContent += row.join(",") + "\n"
         })
     } else if (activeTab === "expense-breakdown" && reportData.expenses) {
@@ -297,9 +320,11 @@ function exportToCSV(activeTab: string, reportData: any, dateRangeStr: string, f
 
         if (d.inventory && d.inventory.length > 0) {
             csvContent += "STOCK MOVEMENTS\n"
-            csvContent += "Item,Opening Stock,Received (In),Sold (Out),Closing Stock,Unit\n"
+            csvContent += "Item,Opening Stock,Received (In),Sold (Out),Without Dip,Dip Qty,Gain/Loss,Actual Stock,Unit\n"
             d.inventory.forEach((item: any) => {
-                csvContent += `"${item.name}",${item.opening},${item.in},${item.out},${item.closing},${item.unit}\n`
+                const dipStr = item.dipQty !== null ? item.dipQty : "-"
+                const gainStr = item.gainLoss !== null ? (item.gainLoss > 0 ? `+${item.gainLoss}` : item.gainLoss) : "-"
+                csvContent += `"${item.name}",${item.opening},${item.in},${item.out},${item.withoutDip},${dipStr},"${gainStr}",${item.closing},${item.unit}\n`
             })
         }
     } else if (activeTab === "stock" && Array.isArray(reportData)) {
@@ -509,19 +534,22 @@ function exportToPDF(activeTab: string, reportData: any, dateRangeStr: string, s
             doc.text("Stock Movements Summary", 14, nextY)
             autoTable(doc, {
                 startY: nextY + 3,
-                head: [["Item", "Opening Stock", "Received (In)", "Sold (Out)", "Closing Stock"]],
+                head: [["Item", "Opening Stock", "Received (In)", "Sold (Out)", "Without Dip", "Dip Qty", "Gain/Loss", "Actual Stock"]],
                 body: d.inventory.map((item: any) => [
                     item.name,
                     `${Number(item.opening).toFixed(1)} ${item.unit}`,
                     `+${Number(item.in).toFixed(1)}`,
                     `-${Math.abs(Number(item.out)).toFixed(1)}`,
+                    `${Number(item.withoutDip).toFixed(1)} ${item.unit}`,
+                    item.dipQty !== null ? `${Number(item.dipQty).toFixed(1)} ${item.unit}` : "-",
+                    item.gainLoss !== null ? (item.gainLoss > 0 ? `+${Number(item.gainLoss).toFixed(1)}` : `${Number(item.gainLoss).toFixed(1)}`) : "-",
                     `${Number(item.closing).toFixed(1)} ${item.unit}`,
                 ]),
                 theme: "grid",
                 headStyles: { fillColor: [52, 73, 94], textColor: 255 },
                 alternateRowStyles: { fillColor: [248, 249, 250] },
-                styles: { fontSize: 9, cellPadding: 3 },
-                columnStyles: { 0: { fontStyle: "bold" }, 1: { halign: "right" }, 2: { halign: "right", textColor: [39, 174, 96] }, 3: { halign: "right", textColor: [192, 57, 43] }, 4: { halign: "right" } },
+                styles: { fontSize: 8, cellPadding: 2 },
+                columnStyles: { 0: { fontStyle: "bold" }, 1: { halign: "right" }, 2: { halign: "right", textColor: [39, 174, 96] }, 3: { halign: "right", textColor: [192, 57, 43] }, 4: { halign: "right" }, 5: { halign: "right", textColor: [41, 128, 185] }, 6: { halign: "right", fontStyle: "bold" }, 7: { halign: "right" } },
                 margin: { left: 14, right: 14 }
             })
         }
@@ -620,37 +648,53 @@ function exportToPDF(activeTab: string, reportData: any, dateRangeStr: string, s
     } else if (activeTab === "purchase-history" && reportData.orders) {
         // Display all 6 KPIs in two rows
         addKPIGrid("Purchase Summary - Highlights", 
-            ["ORDERS CREATED", "DELIVERED VALUE", "TOTAL ON HOLD"], 
+            ["PURCHASE ORDERS", "TOTAL ORDER VALUE", "TOTAL ARRIVALS"], 
             [
                 (reportData.totalOrders || 0).toString(), 
-                `Rs. ${(reportData.totalValue || 0).toLocaleString()}`, 
-                `Rs. ${(reportData.totalOnHold || 0).toLocaleString()}`
+                `Rs. ${(reportData.totalOrderValue || 0).toLocaleString()}`, 
+                `Rs. ${(reportData.totalArrivalValue || 0).toLocaleString()}`
             ],
             [41, 128, 185]
         )
         addKPIGrid("Financial Reconciliation", 
-            ["TOTAL RELEASED", "PAID (NET)", "OUTSTANDING DUES"], 
+            ["TOTAL ON HOLD", "TOTAL RELEASED", "NET PAID"], 
             [
+                `Rs. ${(reportData.totalOnHold || 0).toLocaleString()}`, 
                 `Rs. ${(reportData.totalReleased || 0).toLocaleString()}`, 
-                `Rs. ${(reportData.totalPaid || 0).toLocaleString()}`, 
-                `Rs. ${(reportData.totalDues || 0).toLocaleString()}`
+                `Rs. ${(reportData.totalPaid || 0).toLocaleString()}`
             ],
             [52, 73, 94]
         )
         autoTable(doc, {
             startY: nextY,
-            head: [["Date", "Invoice", "Supplier", "Amount", "Status"]],
-            body: reportData.orders.map((o: any) => [
-                o.display_date ? format(new Date(o.display_date), "dd MMM yyyy") : o.purchase_date, 
-                o.invoice_number || o.po_number, 
-                o.supplier_name || o.suppliers?.name || "N/A", 
-                (o.total_amount || 0).toLocaleString(), 
-                (o.status || "").replace(/_/g, " ").toUpperCase()
-            ]),
+            head: [["Date", "Invoice #", "Supplier", "Order Value", "Arrival Value", "Hold/Rel", "Net Paid", "Status", "Payment"]],
+            body: (reportData.orders || []).map((o: any) => {
+                let dateStr = "N/A"
+                try {
+                    dateStr = o.display_date ? format(new Date(o.display_date), "dd MMM yyyy") : "N/A"
+                } catch (e) {
+                    dateStr = String(o.display_date || "N/A")
+                }
+
+                const adj = (o.release_amount || 0) > 0 ? `+Rs. ${o.release_amount.toLocaleString()}` : 
+                            (o.hold_amount || 0) > 0 ? `-Rs. ${o.hold_amount.toLocaleString()}` : "None"
+
+                return [
+                    dateStr,
+                    o.invoice_number || o.po_number || "N/A", 
+                    o.supplier_name || o.suppliers?.name || "N/A", 
+                    `Rs. ${Number(o.order_value || 0).toLocaleString()}`,
+                    `Rs. ${Number(o.total_amount || 0).toLocaleString()}`,
+                    adj,
+                    `Rs. ${Number(o.net_paid || 0).toLocaleString()}`,
+                    (o.status || "").replace(/_/g, " ").toUpperCase(),
+                    o.payment_method || "N/A"
+                ]
+            }),
             theme: "grid",
-            headStyles: { fillColor: [41, 128, 185], textColor: 255 },
+            headStyles: { fillColor: [41, 128, 185], textColor: 255, fontSize: 6.5 },
             alternateRowStyles: { fillColor: [242, 247, 252] },
-            styles: { fontSize: 8, cellPadding: 2.5 },
+            styles: { fontSize: 6.5, cellPadding: 1.5 },
             margin: { left: 14, right: 14 }
         })
     } else if (activeTab === "expense-breakdown" && reportData.expenses) {

@@ -193,18 +193,12 @@ export function DailyRecapReport({ date, onDataLoaded }: DailyRecapProps) {
                     <Building2 className="h-8 w-8 text-primary opacity-20" />
                 </CardHeader>
                 <CardContent className="p-0">
-                    <div className="grid grid-cols-2 lg:grid-cols-4 divide-x divide-y lg:divide-y-0 text-center">
+                    <div className="grid grid-cols-1 md:grid-cols-3 divide-x divide-y md:divide-y-0 text-center">
                         <div className="p-6 space-y-1">
                             <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground flex items-center justify-center gap-2">
                                 <Clock className="h-3 w-3" /> Initial Balance
                             </p>
                             <p className="text-xl font-black text-slate-600">{formatCurrency(data.suppliers.opening)}</p>
-                        </div>
-                        <div className="p-6 space-y-1">
-                            <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground flex items-center justify-center gap-2">
-                                <ArrowUpRight className="h-3 w-3 text-red-500" /> Purchases Added
-                            </p>
-                            <p className="text-xl font-black text-red-600">+{formatCurrency(data.suppliers.additions)}</p>
                         </div>
                         <div className="p-6 space-y-1">
                             <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground flex items-center justify-center gap-2">
@@ -279,7 +273,10 @@ export function DailyRecapReport({ date, onDataLoaded }: DailyRecapProps) {
                                 <TableHead className="font-black uppercase text-[10px] text-center border-l">Opening Stock</TableHead>
                                 <TableHead className="font-black uppercase text-[10px] text-center border-l bg-blue-50/30">Stock Received (In)</TableHead>
                                 <TableHead className="font-black uppercase text-[10px] text-center border-l bg-red-50/30">Sale (Out)</TableHead>
-                                <TableHead className="font-black uppercase text-[10px] text-center border-l bg-green-50/30">Closing Stock</TableHead>
+                                <TableHead className="font-black uppercase text-[10px] text-center border-l bg-slate-100">Without Dip</TableHead>
+                                <TableHead className="font-black uppercase text-[10px] text-center border-l bg-indigo-50/50">Dip Qty</TableHead>
+                                <TableHead className="font-black uppercase text-[10px] text-center border-l bg-amber-50/50">Gain / Loss</TableHead>
+                                <TableHead className="font-black uppercase text-[10px] text-center border-l bg-green-50/30">Actual Stock</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -296,6 +293,19 @@ export function DailyRecapReport({ date, onDataLoaded }: DailyRecapProps) {
                                     </TableCell>
                                     <TableCell className="text-center font-black text-red-600 border-l bg-red-50/10">
                                         -{item.out.toLocaleString()}
+                                    </TableCell>
+                                    <TableCell className="text-center font-bold text-slate-600 border-l bg-slate-50/50">
+                                        {item.withoutDip.toLocaleString()} {item.unit}
+                                    </TableCell>
+                                    <TableCell className="text-center font-bold text-indigo-700 border-l bg-indigo-50/30">
+                                        {item.dipQty !== null ? `${item.dipQty.toLocaleString()} ${item.unit}` : <span className="text-slate-300 font-medium">—</span>}
+                                    </TableCell>
+                                    <TableCell className={`text-center font-bold border-l bg-amber-50/30 ${item.gainLoss && item.gainLoss > 0 ? "text-green-600" : item.gainLoss && item.gainLoss < 0 ? "text-red-600" : "text-slate-400"}`}>
+                                        {item.gainLoss !== null ? (
+                                            item.gainLoss > 0 ? `+${item.gainLoss.toLocaleString()}` : item.gainLoss.toLocaleString()
+                                        ) : (
+                                            <span className="text-slate-300 font-medium">—</span>
+                                        )}
                                     </TableCell>
                                     <TableCell className="text-center font-black text-green-700 border-l bg-green-50/10">
                                         {item.closing.toLocaleString()} {item.unit}

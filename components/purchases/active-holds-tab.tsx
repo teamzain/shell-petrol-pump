@@ -193,9 +193,9 @@ export function ActiveHoldsTab({ dateFilters }: { dateFilters?: { from: string; 
                                             <TableCell className="text-center font-bold text-xs">
                                                 <Badge variant="secondary" className={`${isResolved ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-700'} hover:opacity-80 border-none whitespace-nowrap`}>
                                                     {isResolved && hold.actual_return_date ? (
-                                                        `Received in ${differenceInDays(new Date(hold.actual_return_date), new Date(hold.created_at))} Days`
+                                                        `Received in ${Math.abs(differenceInDays(new Date(hold.actual_return_date), new Date(po.created_at || hold.created_at)))} Days`
                                                     ) : (
-                                                        `${differenceInDays(new Date(), new Date(hold.created_at))} Days`
+                                                        `${Math.abs(differenceInDays(new Date(), new Date(po.created_at || hold.created_at)))} Days`
                                                     )}
                                                 </Badge>
                                             </TableCell>

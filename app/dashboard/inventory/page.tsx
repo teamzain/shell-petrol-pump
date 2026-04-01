@@ -29,6 +29,9 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { createClient } from "@/lib/supabase/client"
+import { getStockReportData, StockReportRow } from "@/app/actions/stock-report-actions"
+import { Droplets } from "lucide-react"
+import { cn } from "@/lib/utils"
 
 interface Product {
   id: string
@@ -89,23 +92,20 @@ export default function InventoryPage() {
         }))
         setProducts(mappedProducts)
 
-        // Fetch recent movements
-        const { data: moveData, error: moveError } = await supabase
-          .from("stock_movements")
-          .select("*, products(name)")
-          .order("movement_date", { ascending: false })
-          .limit(20)
-
-        if (moveError) throw moveError
-
-        // Map movements to ensure product_name is available
-        const mappedMovements = (moveData || []).map(m => ({
-          ...m,
-          products: {
-            product_name: (m.products as any)?.name || 'Unknown'
-          }
-        }))
-        setMovements(mappedMovements)
+        // Fetch recent movements (including dip readings)
+        try {
+          const moveData = await getStockReportData({
+            startDate: "", // No filter = all time
+            endDate: "",
+            productId: "all",
+            movementType: "all"
+          })
+          
+          // Take only the most recent 20
+          setMovements(moveData.slice(0, 20) as any[])
+        } catch (err) {
+          console.error("Error fetching recent movements:", err)
+        }
 
         // Fetch tanks
         const { data: tankData, error: tankError } = await supabase
@@ -187,8 +187,21 @@ export default function InventoryPage() {
         return <ArrowDownRight className="h-4 w-4 text-accent" />
       case "adjustment":
         return <TrendingUp className="h-4 w-4 text-muted-foreground" />
+      case "dip_reading":
+        return <Droplets className="h-4 w-4 text-blue-500" />
       default:
         return <Clock className="h-4 w-4 text-muted-foreground" />
+    }
+  }
+
+  const getTypeLabel = (type: string) => {
+    switch (type) {
+      case "purchase": return "Purchase"
+      case "sale": return "Sale"
+      case "initial": return "Opening"
+      case "adjustment": return "Adjustment"
+      case "dip_reading": return "Dip Reading"
+      default: return type
     }
   }
 
@@ -562,61 +575,78 @@ export default function InventoryPage() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Date</TableHead>
+                        <TableHead>Date & Time</TableHead>
                         <TableHead>Product</TableHead>
                         <TableHead>Type</TableHead>
                         <TableHead className="text-right">Prev. Stock</TableHead>
                         <TableHead className="text-right">Sale Qty</TableHead>
                         <TableHead className="text-right">Purchase</TableHead>
+                        <TableHead className="text-right">Dip Qty</TableHead>
+                        <TableHead className="text-right">Gain / Loss</TableHead>
                         <TableHead className="text-right">Net Stock</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {movements.map((movement) => {
-                        const rawQty = Number(movement.quantity)
-                        const isNegative = rawQty < 0
-                        const isPositive = rawQty > 0
-
-                        const quantityLabel = isNegative ? Math.abs(rawQty).toLocaleString() : "-"
-                        const receivedLabel = isPositive ? rawQty.toLocaleString() : "-"
-
-                        const typeLabel = movement.movement_type === "purchase" ? "Purchase"
-                          : movement.movement_type === "sale" ? "Sale"
-                            : movement.movement_type === "initial" ? "Opening"
-                              : movement.movement_type === "adjustment" ? "Adj."
-                                : movement.movement_type
+                      {movements.map((movement: any) => {
+                        const rawQty = Math.abs(Number(movement.quantity || 0))
+                        const isNegative = Number(movement.quantity || 0) < 0
+                        const isPositive = Number(movement.quantity || 0) > 0
+                        const isDip = movement.row_type === "dip_reading"
 
                         return (
-                          <TableRow key={movement.id}>
+                          <TableRow key={movement.id} className={isDip ? "bg-blue-50/20" : ""}>
                             <TableCell className="font-medium whitespace-nowrap">
-                              {new Date(movement.movement_date).toLocaleDateString("en-PK", {
-                                day: "numeric", month: "short"
-                              })}
+                              {new Intl.DateTimeFormat('en-PK', {
+                                day: 'numeric',
+                                month: 'short',
+                                timeZone: 'Asia/Karachi'
+                              }).format(new Date(movement.movement_date))}
                               <span className="ml-2 text-xs text-muted-foreground">
-                                {new Date(movement.movement_date).toLocaleTimeString("en-PK", {
-                                  hour: "2-digit", minute: "2-digit"
-                                })}
+                                {new Intl.DateTimeFormat('en-PK', {
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                  hour12: true,
+                                  timeZone: 'Asia/Karachi'
+                                }).format(new Date(movement.movement_date))}
                               </span>
                             </TableCell>
                             <TableCell>
-                              <div className="font-medium">{movement.products?.product_name}</div>
+                              <div className="font-medium">{movement.product_name}</div>
                             </TableCell>
                             <TableCell>
-                              <Badge variant="outline" className="text-xs font-normal">
-                                {typeLabel}
+                              <Badge variant="outline" className={cn(
+                                "text-xs font-normal gap-1",
+                                isPositive ? "bg-green-50 text-green-700" :
+                                  isNegative ? "bg-red-50 text-red-700" :
+                                    isDip ? "bg-blue-50 text-blue-700 border-blue-200" : ""
+                              )}>
+                                {getMovementIcon(movement.movement_type)}
+                                {getTypeLabel(movement.movement_type)}
                               </Badge>
                             </TableCell>
                             <TableCell className="text-right text-xs font-mono">
                               {Number(movement.previous_stock || 0).toLocaleString()}
                             </TableCell>
                             <TableCell className="text-right font-bold text-destructive">
-                              {isNegative ? `-${quantityLabel}` : "-"}
+                              {isNegative ? `-${rawQty.toLocaleString()}` : "-"}
                             </TableCell>
                             <TableCell className="text-right font-bold text-green-600">
-                              {isPositive ? `+${receivedLabel}` : "-"}
+                              {isPositive ? `+${rawQty.toLocaleString()}` : "-"}
+                            </TableCell>
+                            <TableCell className="text-right font-bold text-blue-700">
+                              {isDip ? Number(movement.dip_quantity || 0).toLocaleString() : "—"}
+                            </TableCell>
+                            <TableCell className={cn(
+                              "text-right font-bold",
+                              (movement.gain_amount || 0) > 0 ? "text-green-600" : (movement.loss_amount || 0) > 0 ? "text-red-600" : "text-slate-400"
+                            )}>
+                              {isDip ? (
+                                (movement.gain_amount || 0) > 0 ? `+${movement.gain_amount}` :
+                                  (movement.loss_amount || 0) > 0 ? `-${movement.loss_amount}` : "0"
+                              ) : "—"}
                             </TableCell>
                             <TableCell className="text-right font-mono text-xs font-bold">
-                              {Number(movement.balance_after).toLocaleString()}
+                              {Number(movement.balance_after || 0).toLocaleString()}
                             </TableCell>
                           </TableRow>
                         )

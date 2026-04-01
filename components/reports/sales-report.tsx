@@ -37,7 +37,7 @@ export function SalesReport({ filters, onDetailClick, onDataLoaded }: SalesRepor
     const [loading, setLoading] = useState(true)
     const [sales, setSales] = useState<any[]>([])
     const [searchTerm, setSearchTerm] = useState("")
-    const [bankCardTotal, setBankCardTotal] = useState(0)
+    const [totalCardHolds, setTotalCardHolds] = useState(0)
     const supabase = createClient()
 
     useEffect(() => {
@@ -92,58 +92,87 @@ export function SalesReport({ filters, onDetailClick, onDataLoaded }: SalesRepor
                     manualQuery = manualQuery.eq("product_id", filters.productId)
                 }
 
-                // 3. Fetch Bank Card Amount for the period
-                let bankCardQuery = supabase
+                // 3. Fetch ALL Card Amount for the period (Bank + Shell)
+                let cardHoldQuery = supabase
                     .from("card_hold_records")
                     .select("hold_amount")
-                    .eq("card_type", "bank_card")
                     .gte("sale_date", fromDate)
                     .lte("sale_date", toDate)
 
-                const [fuelRes, manualRes, bankCardRes] = await Promise.all([fuelQuery, manualQuery, bankCardQuery])
+                // 4. Fetch Stock Movements for manual sales time matching
+                let smQuery = supabase
+                    .from("stock_movements")
+                    .select("product_id, quantity, movement_date, movement_type, reference_number")
+                    .eq("movement_type", "sale")
+                    .gte("movement_date", fromDate)
+                    .lte("movement_date", `${toDate}T23:59:59`)
 
-                const fetchedBankCardTotal = (bankCardRes.data || []).reduce((sum, r) => sum + (Number(r.hold_amount) || 0), 0)
-                setBankCardTotal(fetchedBankCardTotal)
+                const [fuelRes, manualRes, cardHoldRes, smRes] = await Promise.all([fuelQuery, manualQuery, cardHoldQuery, smQuery])
+
+                const fetchedCardTotal = (cardHoldRes.data || []).reduce((sum, r) => sum + (Number(r.hold_amount) || 0), 0)
+                setTotalCardHolds(fetchedCardTotal)
+
+                const stockMovements = smRes.data || []
 
                 // Normalize Fuel Sales
-                const normalizedFuel = (fuelRes.data || []).map(f => ({
-                    ...f,
-                    id: f.id,
-                    date: f.sale_date,
-                    type: "Fuel",
-                    category: "fuel",
-                    description: `Nozzle ${f.nozzles?.nozzle_number}`,
-                    item_name: f.nozzles?.products?.name,
-                    quantity: f.quantity,
-                    unit: "L",
-                    rate: f.unit_price || f.rate_per_liter,
-                    total: f.revenue || f.total_amount,
-                    discount: 0,
-                    profit: f.gross_profit,
-                    paid: f.revenue || f.total_amount, // Fuel sales are assumed mostly paid for this view
-                    payment: f.payment_method || 'cash',
-                    raw: f
-                }))
+                const normalizedFuel = (fuelRes.data || []).map(f => {
+                    // Try to find matching movement for this fuel sale
+                    const match = stockMovements.find(sm => 
+                        sm.product_id === f.product_id && 
+                        sm.reference_number === `Nozzle ${f.nozzles?.nozzle_number}` &&
+                        sm.movement_date.startsWith(f.sale_date)
+                    )
 
-                // Normalize Manual Sales
-                const normalizedManual = (manualRes.data || []).map(m => ({
-                    ...m,
-                    id: m.id,
-                    date: m.sale_date,
-                    type: m.products?.type === 'oil' ? 'Lubricant' : (m.products?.type || 'Product'),
-                    category: m.products?.type === 'fuel' ? 'fuel' : 'oil_lubricant', // For filtering compatibility
-                    description: m.products?.name,
-                    item_name: m.products?.name,
-                    quantity: m.quantity,
-                    unit: "Unit",
-                    rate: m.unit_price,
-                    total: m.total_amount,
-                    discount: m.discount_amount || 0,
-                    profit: m.profit,
-                    paid: m.cash_payment_amount !== undefined ? (Number(m.cash_payment_amount || 0) + Number(m.card_payment_amount || 0)) : m.total_amount,
-                    payment: m.payment_method,
-                    raw: m
-                }))
+                    return {
+                        ...f,
+                        id: f.id,
+                        date: f.sale_date,
+                        timestamp: f.created_at || match?.movement_date || null,
+                        type: "Fuel",
+                        category: "fuel",
+                        description: `Nozzle ${f.nozzles?.nozzle_number}`,
+                        item_name: f.nozzles?.products?.name,
+                        quantity: f.quantity,
+                        unit: "L",
+                        rate: f.unit_price || f.rate_per_liter,
+                        total: f.revenue || f.total_amount,
+                        discount: 0,
+                        profit: f.gross_profit,
+                        paid: f.revenue || f.total_amount, // Fuel sales are assumed mostly paid for this view
+                        payment: f.payment_method || 'cash',
+                        raw: f
+                    }
+                })
+
+                // Normalize Manual Sales with matched time from stock_movements
+                const normalizedManual = (manualRes.data || []).map(m => {
+                    // Try to find the matching movement for this sale to get the time
+                    const match = stockMovements.find(sm => 
+                        sm.product_id === m.product_id && 
+                        Math.abs(Number(sm.quantity)) === Number(m.quantity) &&
+                        sm.movement_date.startsWith(m.sale_date)
+                    )
+
+                    return {
+                        ...m,
+                        id: m.id,
+                        date: m.sale_date,
+                        timestamp: m.created_at || match?.movement_date || null,
+                        type: m.products?.type === 'oil' ? 'Lubricant' : (m.products?.type || 'Product'),
+                        category: m.products?.type === 'fuel' ? 'fuel' : 'oil_lubricant', // For filtering compatibility
+                        description: m.products?.name,
+                        item_name: m.products?.name,
+                        quantity: m.quantity,
+                        unit: "Unit",
+                        rate: m.unit_price,
+                        total: m.total_amount,
+                        discount: m.discount_amount || 0,
+                        profit: m.profit,
+                        paid: m.cash_payment_amount !== undefined ? (Number(m.cash_payment_amount || 0) + Number(m.card_payment_amount || 0)) : m.total_amount,
+                        payment: m.payment_method,
+                        raw: m
+                    }
+                })
 
                 // Merge and filter by category if needed
                 let allSales = [...normalizedFuel, ...normalizedManual]
@@ -156,8 +185,8 @@ export function SalesReport({ filters, onDetailClick, onDataLoaded }: SalesRepor
                     allSales = allSales.filter(s => s.payment === filters.paymentMethod)
                 }
 
-                // Sort by date desc
-                allSales.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                // Sort by timestamp desc
+                allSales.sort((a, b) => new Date(b.timestamp || b.date).getTime() - new Date(a.timestamp || a.date).getTime())
 
                 setSales(allSales)
                 onDataLoaded(allSales)
@@ -193,7 +222,7 @@ export function SalesReport({ filters, onDetailClick, onDataLoaded }: SalesRepor
         }, { totalRevenue: 0, fuelRevenue: 0, productRevenue: 0, totalProfit: 0, totalDue: 0, totalDiscount: 0 })
     }, [filteredSales])
 
-    const netSaleCash = summary.totalRevenue - bankCardTotal
+    const netSaleCash = summary.totalRevenue - totalCardHolds
 
     if (loading) {
         return (
@@ -302,7 +331,7 @@ export function SalesReport({ filters, onDetailClick, onDataLoaded }: SalesRepor
                             <div>
                                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Net Sale Cash</p>
                                 <h3 className="text-2xl font-bold mt-1 text-cyan-600">Rs. {netSaleCash.toLocaleString()}</h3>
-                                <p className="text-[10px] text-muted-foreground mt-1">Sales minus Bank Card Rs. {bankCardTotal.toLocaleString()}</p>
+                                <p className="text-[10px] text-muted-foreground mt-1">Sales minus Card Holds Rs. {totalCardHolds.toLocaleString()}</p>
                             </div>
                             <div className="p-3 bg-cyan-500/10 rounded-full">
                                 <Banknote className="h-5 w-5 text-cyan-600" />
@@ -361,9 +390,16 @@ export function SalesReport({ filters, onDetailClick, onDataLoaded }: SalesRepor
                                     >
                                         <TableCell className="font-medium text-xs">
                                             {format(new Date(sale.date), "dd MMM yyyy")}
-                                            <div className="text-[10px] text-muted-foreground">
-                                                {format(new Date(sale.date), "HH:mm")}
-                                            </div>
+                                            {(sale.timestamp || (sale.category === 'fuel' && sale.created_at)) && (
+                                                <div className="text-[10px] text-muted-foreground">
+                                                    {new Intl.DateTimeFormat('en-GB', { 
+                                                        timeZone: 'Asia/Karachi', 
+                                                        hour: 'numeric', 
+                                                        minute: '2-digit', 
+                                                        hour12: true 
+                                                    }).format(new Date(sale.timestamp || sale.created_at))}
+                                                </div>
+                                            )}
                                         </TableCell>
                                         <TableCell>
                                             <Badge variant={sale.category === 'fuel' ? 'default' : 'secondary'} className="text-[10px] h-5 uppercase tracking-tighter">

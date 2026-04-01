@@ -2,7 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
-import { getTodayPKT } from "@/lib/utils"
+import { getTodayPKT, getNowTimePKT } from "@/lib/utils"
 import { validateTransactionDate, getSystemActiveDate } from "./balance"
 import { calculateFifoCost } from "./fifo-cost"
 
@@ -130,9 +130,9 @@ export async function recordManualSale(data: ManualSaleData) {
     const prevStock = currentProd?.current_stock ? currentProd.current_stock + data.quantity : product.current_stock
     const balanceAfter = currentProd?.current_stock || (product.current_stock - data.quantity)
 
-    // Join activeDate with current time for chronologically meaningful records in local TZ
-    const currentTime = new Date().toLocaleTimeString('en-GB', { hour12: false }); // HH:MM:SS
-    const movementDate = `${activeDate}T${currentTime}`;
+    // Join activeDate with current PKT time for chronologically accurate records
+    const currentTime = getNowTimePKT(); // HH:MM:SS in Asia/Karachi
+    const movementDate = `${activeDate}T${currentTime}+05:00`;
 
     await supabase.from('stock_movements').insert([{
         product_id: data.product_id,

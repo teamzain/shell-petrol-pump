@@ -45,27 +45,51 @@ export async function getDailyReportData(date: string) {
         .select("*")
         .eq("transaction_date", targetDate)
 
-    const bankPurchasesFromTxs = internalTxs?.filter(tx => tx.transaction_type === 'transfer_to_supplier')
-                            .reduce((acc, tx) => acc + Number(tx.amount), 0) || 0
+    // Filter out holds from actual expenses/transfers
+    const actualInternalTxs = internalTxs?.filter(tx => !tx.is_hold && !tx.card_hold_id) || []
     
-    const cashExpenses = (expenses?.filter(e => !e.bank_account_id).reduce((acc, e) => acc + Number(e.amount), 0) || 0)
-    const bankExpenses = (expenses?.filter(e => !!e.bank_account_id).reduce((acc, e) => acc + Number(e.amount), 0) || 0) + bankPurchasesFromTxs
+    const bankPurchasesOut = actualInternalTxs
+        .filter(tx => tx.transaction_type === 'transfer_to_supplier' && tx.bank_account_id)
+        .reduce((acc, tx) => acc + Number(tx.amount), 0)
+    
+    const cashPurchasesOut = actualInternalTxs
+        .filter(tx => tx.transaction_type === 'transfer_to_supplier' && !tx.bank_account_id)
+        .reduce((acc, tx) => acc + Number(tx.amount), 0)
+
+    const bankSupplierInflow = actualInternalTxs
+        .filter(tx => tx.transaction_type === 'supplier_to_bank')
+        .reduce((acc, tx) => acc + Number(tx.amount), 0)
+
+    const cashExpenses = (expenses?.filter(e => !e.bank_account_id).reduce((acc, e) => acc + Number(e.amount), 0) || 0) + cashPurchasesOut
+    const bankExpenses = Math.max(0, (expenses?.filter(e => !!e.bank_account_id).reduce((acc, e) => acc + Number(e.amount), 0) || 0) + bankPurchasesOut - bankSupplierInflow)
 
     const totalCashBankPurchase = cashExpenses + bankExpenses
 
-    // 4. Bank Hold/Released (SALES Card Holds)
-    const bankHold = internalTxs?.filter(tx => tx.is_hold).reduce((acc, tx) => acc + Number(tx.amount), 0) || 0
-    const bankReleased = internalTxs?.filter(tx => tx.card_hold_id && !tx.is_hold).reduce((acc, tx) => acc + Number(tx.amount), 0) || 0
+    // 4. Bank Hold/Released (SALES Card Holds - BANK CARDS ONLY)
+    const { data: bankCardRecords } = await supabase
+        .from("card_hold_records")
+        .select("hold_amount, net_amount, status, released_at, sale_date")
+        .not("bank_card_id", "is", null)
+        .or(`sale_date.eq.${targetDate},released_at.gte.${targetDate}T00:00:00,released_at.lte.${targetDate}T23:59:59`)
+
+    const bankHold = bankCardRecords?.filter(r => r.sale_date === targetDate)
+        .reduce((acc, r) => acc + Number(r.hold_amount), 0) || 0
+    
+    // Released today: Check if the string date matches the target date
+    const bankReleased = bankCardRecords?.filter(r => r.status === 'released' && r.released_at?.startsWith(targetDate))
+        .reduce((acc, r) => acc + Number(r.net_amount), 0) || 0
 
     // 5. Purchase Shortage Holds & Releases
     // Join with deliveries to filter by actual delivery date
     const { data: poHolds } = await supabase
         .from("po_hold_records")
         .select("hold_amount, status, deliveries!inner(delivery_date)")
-        .eq("deliveries.delivery_date", targetDate)
+        .or(`deliveries.delivery_date.eq.${targetDate},actual_return_date.eq.${targetDate}`)
 
-    const purchaseHoldOnHold = poHolds?.filter(h => h.status === 'on_hold').reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
-    const purchaseHoldReleased = poHolds?.filter(h => h.status === 'released').reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
+    const purchaseHoldOnHold = poHolds?.filter(h => h.status === 'on_hold')
+        .reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
+    const purchaseHoldReleased = poHolds?.filter(h => h.status === 'released')
+        .reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
 
     // 6. Supplier Section
     const { data: companyAccounts } = await supabase.from("company_accounts").select("current_balance, id").order("id")
@@ -84,24 +108,30 @@ export async function getDailyReportData(date: string) {
     
     const { data: dayTxs } = await supabase
         .from("company_account_transactions")
-        .select("amount, transaction_type")
+        .select("amount, transaction_type, transaction_source, note")
         .eq("transaction_date", targetDate)
 
-    const supplierPurchases = dayTxs?.filter(tx => tx.transaction_type === 'credit').reduce((acc, tx) => acc + Number(tx.amount), 0) || 0
+    const supplierPurchases = dayTxs?.filter(tx => 
+        tx.transaction_type === 'credit' && 
+        tx.transaction_source !== 'opening_balance' &&
+        !tx.note?.toLowerCase().includes('initial') &&
+        !tx.note?.toLowerCase().includes('opening balance')
+    ).reduce((acc, tx) => acc + Number(tx.amount), 0) || 0
     const supplierPayments = dayTxs?.filter(tx => tx.transaction_type === 'debit').reduce((acc, tx) => acc + Number(tx.amount), 0) || 0
     const supplierOpening = supplierClosing - (supplierPurchases - supplierPayments)
 
     // 7. Supplier Card Holds & Releases
-    const { data: supplierCardHolds } = await supabase
+    const { data: supplierCardRecords } = await supabase
         .from("card_hold_records")
-        .select("hold_amount, status")
+        .select("hold_amount, net_amount, status, released_at, sale_date")
         .not("supplier_card_id", "is", null)
-        .eq("sale_date", targetDate)
+        .or(`sale_date.eq.${targetDate},released_at.gte.${targetDate}T00:00:00,released_at.lte.${targetDate}T23:59:59`)
 
-    const supplierCardOnHold = supplierCardHolds?.filter(h => h.status !== "released")
-        .reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
-    const supplierCardReleased = supplierCardHolds?.filter(h => h.status === "released")
-        .reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
+    const supplierCardOnHold = supplierCardRecords?.filter(r => r.sale_date === targetDate)
+        .reduce((acc, r) => acc + Number(r.hold_amount), 0) || 0
+    
+    const supplierCardReleased = supplierCardRecords?.filter(r => r.status === "released" && r.released_at?.startsWith(targetDate))
+        .reduce((acc, r) => acc + Number(r.net_amount), 0) || 0
 
     // 8. Stock Summary
     const { data: products } = await supabase.from("products").select("id, name, current_stock, unit").order("name")
@@ -116,25 +146,72 @@ export async function getDailyReportData(date: string) {
     const todayManualSales = manualSales || []
     const futureFuelSales = (futureFuelSalesRaw || []).map((s: any) => ({ ...s, product_id: s.nozzles?.product_id }))
 
+    // Fetch today's dip readings
+    const { data: todayDips } = await supabase
+        .from("tank_reconciliation_records")
+        .select("gain_amount, loss_amount, actual_stock, current_stock, dip_volume, tanks!inner(product_id)")
+        .eq("reading_date", targetDate)
+
+    const dipSummaryByProduct = (todayDips || []).reduce((acc: any, dip: any) => {
+        const pid = dip.tanks?.product_id
+        if (!acc[pid]) {
+            acc[pid] = { gain: 0, loss: 0, actual: 0, current: 0, dipsFound: false }
+        }
+        acc[pid].gain += Number(dip.gain_amount || 0)
+        acc[pid].loss += Number(dip.loss_amount || 0)
+        acc[pid].actual += Number(dip.actual_stock || 0) // New Physical Stock Input
+        acc[pid].current += Number(dip.current_stock || 0) // Before dip calculation
+        acc[pid].dipsFound = true
+        return acc
+    }, {})
+
+    // Fetch ALL past dip readings before targetDate to correct the system stock
+    const { data: pastDips } = await supabase
+        .from("tank_reconciliation_records")
+        .select("gain_amount, loss_amount, tanks!inner(product_id)")
+        .lt("reading_date", targetDate)
+
+    const pastDipNetByProduct = (pastDips || []).reduce((acc: any, dip: any) => {
+        const pid = dip.tanks?.product_id
+        if (!acc[pid]) acc[pid] = 0
+        acc[pid] += Number(dip.gain_amount || 0) - Number(dip.loss_amount || 0)
+        return acc
+    }, {})
+
     const stockSummary = (products || []).map(p => {
-        const afterIn = futureDeliveries?.filter(d => d.product_id === p.id).reduce((acc, d) => acc + Number(d.delivered_quantity), 0) || 0
-        const afterOut = (futureFuelSales?.filter(s => s.product_id === p.id).reduce((acc, s) => acc + Number(s.quantity), 0) || 0) +
-                         (futureManualSales?.filter(s => s.product_id === p.id).reduce((acc, s) => acc + Number(s.quantity), 0) || 0)
+        const pid = p.id
+        const dipInfo = dipSummaryByProduct[pid] || { gain: 0, loss: 0, actual: 0, dipsFound: false }
+        const gainLoss = dipInfo.gain - dipInfo.loss
         
-        const closingStock = Number(p.current_stock) - afterIn + afterOut
+        // Net gain/loss from all dips prior to today
+        const historicalDipNet = pastDipNetByProduct[pid] || 0
+
+        // The current_stock in products table doesn't track dips automatically in real-time,
+        // so computing backward calculates the System Stock (without dip).
+        const afterIn = futureDeliveries?.filter(d => d.product_id === pid).reduce((acc, d) => acc + Number(d.delivered_quantity), 0) || 0
+        const afterOut = (futureFuelSales?.filter(s => s.product_id === pid).reduce((acc, s) => acc + Number(s.quantity), 0) || 0) +
+                         (futureManualSales?.filter(s => s.product_id === pid).reduce((acc, s) => acc + Number(s.quantity), 0) || 0)
         
-        const todayIn = todayDeliveries?.filter(d => d.product_id === p.id).reduce((acc, d) => acc + Number(d.delivered_quantity), 0) || 0
-        const todayOut = (todayFuelSales?.filter(s => s.product_id === p.id).reduce((acc, s) => acc + Number(s.quantity), 0) || 0) +
-                          (todayManualSales?.filter(s => s.product_id === p.id).reduce((acc, s) => acc + Number(s.quantity), 0) || 0)
+        // Base system stock + All historical dip adjustments up to yesterday
+        const systemClosingStock = Number(p.current_stock) - afterIn + afterOut + historicalDipNet
         
-        const openingStock = closingStock - todayIn + todayOut
+        const todayIn = todayDeliveries?.filter(d => d.product_id === pid).reduce((acc, d) => acc + Number(d.delivered_quantity), 0) || 0
+        const todayOut = (todayFuelSales?.filter(s => s.product_id === pid).reduce((acc, s) => acc + Number(s.quantity), 0) || 0) +
+                          (todayManualSales?.filter(s => s.product_id === pid).reduce((acc, s) => acc + Number(s.quantity), 0) || 0)
+        
+        const openingStock = systemClosingStock - todayIn + todayOut
+        
+        const actualClosingStock = systemClosingStock + gainLoss
 
         return {
             name: p.name,
             opening: openingStock,
             in: todayIn,
             out: todayOut,
-            closing: closingStock,
+            withoutDip: systemClosingStock,
+            dipQty: dipInfo.dipsFound ? dipInfo.actual : null,
+            gainLoss: dipInfo.dipsFound ? gainLoss : null,
+            closing: actualClosingStock,
             unit: p.unit
         }
     })

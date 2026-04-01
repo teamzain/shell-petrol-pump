@@ -1,0 +1,33 @@
+{
+  "daily": [
+    "id",
+    "sale_date",
+    "meter_reading_id",
+    "nozzle_id",
+    "dispenser_id",
+    "product_id",
+    "liters_sold",
+    "rate_per_liter",
+    "total_amount",
+    "payment_method_id",
+    "payment_type",
+    "cash_amount",
+    "card_amount",
+    "hold_amount",
+    "hold_status",
+    "created_by",
+    "created_at",
+    "updated_at",
+    "bank_card_id",
+    "supplier_card_id",
+    "cogs",
+    "gross_profit",
+    "unit_price",
+    "is_overnight",
+    "quantity",
+    "revenue",
+    "payment_method",
+    "opening_reading",
+    "closing_reading"
+  ]
+}

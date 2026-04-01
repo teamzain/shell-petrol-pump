@@ -54,9 +54,12 @@ export function BankCardReport({ filters, onDetailClick, onDataLoaded }: BankCar
                         bank_cards (
                             card_name,
                             bank_accounts ( bank_name )
+                        ),
+                        supplier_cards (
+                            card_name,
+                            suppliers ( name )
                         )
                     `)
-                    .eq("card_type", "bank_card")
                     .gte("sale_date", fromDate)
                     .lte("sale_date", toDate)
                     .order("sale_date", { ascending: false })
@@ -82,8 +85,10 @@ export function BankCardReport({ filters, onDetailClick, onDataLoaded }: BankCar
         if (searchTerm) {
             const lower = searchTerm.toLowerCase()
             filtered = filtered.filter(r => 
-                r.bank_cards?.card_name?.toLowerCase().includes(lower) || 
-                r.bank_cards?.bank_accounts?.bank_name?.toLowerCase().includes(lower) ||
+                (r.bank_cards?.card_name?.toLowerCase().includes(lower) || 
+                r.bank_cards?.bank_accounts?.bank_name?.toLowerCase().includes(lower)) ||
+                (r.supplier_cards?.card_name?.toLowerCase().includes(lower) || 
+                r.supplier_cards?.suppliers?.name?.toLowerCase().includes(lower)) ||
                 r.status?.toLowerCase().includes(lower)
             )
         }
@@ -165,7 +170,7 @@ export function BankCardReport({ filters, onDetailClick, onDataLoaded }: BankCar
                     <CardContent className="p-6">
                         <div className="flex items-center justify-between">
                             <div>
-                                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Released to Bank</p>
+                                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Released / Settled</p>
                                 <h3 className="text-2xl font-bold mt-1 text-emerald-600">Rs. {summary.totalReleased.toLocaleString()}</h3>
                             </div>
                             <div className="p-3 bg-emerald-500/10 rounded-full">
@@ -194,8 +199,8 @@ export function BankCardReport({ filters, onDetailClick, onDataLoaded }: BankCar
             <Card className="overflow-hidden border-none shadow-md">
                 <CardHeader className="bg-muted/30 pb-4 flex flex-row items-center justify-between flex-wrap gap-3">
                     <div>
-                        <CardTitle className="text-lg">Bank Card Transactions</CardTitle>
-                        <CardDescription>Detailed log of customer card payments and settlements.</CardDescription>
+                        <CardTitle className="text-lg">Card Transactions Report</CardTitle>
+                        <CardDescription>Detailed log of bank and supplier card payments.</CardDescription>
                     </div>
                     <div className="flex items-center gap-3">
                         <div className="flex items-center gap-1 border rounded-lg p-0.5 bg-slate-100">
@@ -233,7 +238,7 @@ export function BankCardReport({ filters, onDetailClick, onDataLoaded }: BankCar
                         <div className="relative w-64">
                             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                             <Input
-                                placeholder="Search cards..."
+                                placeholder="Search cards or banks..."
                                 className="pl-9 h-9 bg-background"
                                 value={searchTerm}
                                 onChange={(e) => setSearchTerm(e.target.value)}
@@ -247,7 +252,7 @@ export function BankCardReport({ filters, onDetailClick, onDataLoaded }: BankCar
                             <TableRow className="bg-muted/10">
                                 <TableHead>Date</TableHead>
                                 <TableHead>Card Name</TableHead>
-                                <TableHead>Bank</TableHead>
+                                <TableHead>Institution / Bank</TableHead>
                                 <TableHead className="text-right">Hold Amount</TableHead>
                                 <TableHead className="text-right">Tax</TableHead>
                                 <TableHead className="text-right">Net Amount</TableHead>
@@ -272,11 +277,17 @@ export function BankCardReport({ filters, onDetailClick, onDataLoaded }: BankCar
                                             {format(new Date(record.sale_date), "dd MMM yyyy")}
                                         </TableCell>
                                         <TableCell>
-                                            <div className="font-semibold text-sm">{record.bank_cards?.card_name || 'Generic Bank Card'}</div>
-                                            <div className="text-[10px] text-muted-foreground uppercase tracking-tighter">BANK CARD</div>
+                                            <div className="font-semibold text-sm">
+                                                {record.bank_cards?.card_name || record.supplier_cards?.card_name || 'Generic Card'}
+                                            </div>
+                                            <div className="text-[10px] text-muted-foreground uppercase tracking-tighter">
+                                                {record.card_type === 'bank_card' ? 'BANK CARD' : 'SUPPLIER CARD'}
+                                            </div>
                                         </TableCell>
                                         <TableCell>
-                                            <div className="text-xs">{record.bank_cards?.bank_accounts?.bank_name || 'N/A'}</div>
+                                            <div className="text-xs">
+                                                {record.bank_cards?.bank_accounts?.bank_name || record.supplier_cards?.suppliers?.name || 'N/A'}
+                                            </div>
                                         </TableCell>
                                         <TableCell className="text-right font-mono font-bold text-sm">
                                             Rs. {record.hold_amount?.toLocaleString()}

@@ -1,0 +1,19 @@
+{
+  "sm": [
+    "id",
+    "product_id",
+    "movement_type",
+    "movement_date",
+    "quantity",
+    "previous_stock",
+    "balance_after",
+    "unit_price",
+    "weighted_avg_after",
+    "notes",
+    "reference_number",
+    "supplier_id",
+    "created_at",
+    "ordered_quantity",
+    "reference"
+  ]
+}

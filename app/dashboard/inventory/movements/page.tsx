@@ -21,36 +21,21 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { createClient } from "@/lib/supabase/client"
-import {
-  ArrowUpRight,
-  ArrowDownRight,
-  TrendingUp,
-  Clock,
+import { BrandLoader } from "@/components/ui/brand-loader"
+import { getStockReportData, StockReportRow } from "@/app/actions/stock-report-actions"
+import { 
+  ArrowUpRight, 
+  ArrowDownRight, 
+  TrendingUp, 
+  Clock, 
   ArrowLeft,
+  Droplets 
 } from "lucide-react"
 import Link from "next/link"
-import { BrandLoader } from "@/components/ui/brand-loader"
+import { createClient } from "@/lib/supabase/client"
+import { cn } from "@/lib/utils"
 
-interface StockMovement {
-  id: string
-  product_id: string
-  movement_date: string
-  movement_type: string
-  quantity: number
-  ordered_quantity: number | null
-  previous_stock: number
-  balance_after: number
-  notes: string | null
-  reference_number: string | null
-  products: {
-    product_name: string
-    product_type: string
-  }
-  suppliers: {
-    name: string
-  } | null
-}
+type StockMovement = StockReportRow
 
 export default function StockMovementsPage() {
   /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -64,105 +49,70 @@ export default function StockMovementsPage() {
   const [customEnd, setCustomEnd] = useState<string>("")
   const [products, setProducts] = useState<{ id: string, product_name: string }[]>([])
 
-  const supabase = createClient()
-
   const fetchMovements = useCallback(async () => {
     setLoading(true)
+    
     // Fetch products for filter
+    const supabase = createClient()
     const { data: prodData } = await supabase.from("products").select("id, name").order("name")
     if (prodData) {
-      setProducts(prodData.map(p => ({
+      setProducts(prodData.map((p: any) => ({
         id: p.id,
         product_name: p.name
       })))
     }
 
-    let query = supabase
-      .from("stock_movements")
-      .select("*, products(name, type), suppliers(name)")
-      .order("movement_date", { ascending: false })
-      .limit(200)
-
-    if (filter !== "all") {
-      query = query.eq("movement_type", filter)
-    }
-
-    if (productFilter !== "all") {
-      query = query.eq("product_id", productFilter)
-    }
+    let startStr = ""
+    let endStr = ""
 
     if (dateRange !== "all") {
-      const today = new Date()
-      let startStr = ""
-      let endStr = ""
-
       if (dateRange === "today") {
-        const start = new Date()
-        start.setHours(0, 0, 0, 0)
-        const end = new Date()
-        end.setHours(23, 59, 59, 999)
-        startStr = start.toISOString()
-        endStr = end.toISOString()
+        const d = new Date()
+        startStr = d.toISOString().split('T')[0]
+        endStr = startStr
       } else if (dateRange === "week") {
-        const end = new Date()
-        end.setHours(23, 59, 59, 999)
-        const start = new Date()
-        start.setDate(start.getDate() - 7)
-        start.setHours(0, 0, 0, 0)
-        startStr = start.toISOString()
-        endStr = end.toISOString()
+        const d = new Date()
+        endStr = d.toISOString().split('T')[0]
+        d.setDate(d.getDate() - 7)
+        startStr = d.toISOString().split('T')[0]
       } else if (dateRange === "month") {
-        const end = new Date()
-        end.setHours(23, 59, 59, 999)
-        const start = new Date()
-        start.setMonth(start.getMonth() - 1)
-        start.setHours(0, 0, 0, 0)
-        startStr = start.toISOString()
-        endStr = end.toISOString()
+        const d = new Date()
+        endStr = d.toISOString().split('T')[0]
+        d.setMonth(d.getMonth() - 1)
+        startStr = d.toISOString().split('T')[0]
       } else if (dateRange === "custom" && customStart && customEnd) {
-        const startParts = customStart.split('-').map(Number)
-        const endParts = customEnd.split('-').map(Number)
-
-        const start = new Date(startParts[0], startParts[1] - 1, startParts[2], 0, 0, 0, 0)
-        const end = new Date(endParts[0], endParts[1] - 1, endParts[2], 23, 59, 59, 999)
-
-        startStr = start.toISOString()
-        endStr = end.toISOString()
-      }
-
-      if (startStr && endStr) {
-        query = query.gte("movement_date", startStr).lte("movement_date", endStr)
+        startStr = customStart
+        endStr = customEnd
       }
     }
 
-    const { data } = await query
+    try {
+      const result = await getStockReportData({
+        startDate: startStr,
+        endDate: endStr,
+        productId: productFilter,
+        movementType: filter
+      })
+      
+      // Client-side search filtering
+      let filtered = result
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase()
+        filtered = filtered.filter(m =>
+          m.product_name.toLowerCase().includes(q) ||
+          m.notes?.toLowerCase().includes(q) ||
+          m.reference_number?.toLowerCase().includes(q) ||
+          m.supplier_name?.toLowerCase().includes(q)
+        )
+      }
 
-    // Map result to match interface
-    let result = (data || []).map((m: any) => ({
-      ...m,
-      products: {
-        product_name: m.products?.name || 'Unknown',
-        product_type: m.products?.type || 'other'
-      },
-      suppliers: m.suppliers ? {
-        name: m.suppliers.name
-      } : null
-    })) as StockMovement[]
-
-    // Client-side search filtering
-    if (searchQuery.trim() && result) {
-      const q = searchQuery.toLowerCase()
-      result = result.filter(m =>
-        m.products?.product_name?.toLowerCase().includes(q) ||
-        m.notes?.toLowerCase().includes(q) ||
-        m.reference_number?.toLowerCase().includes(q) ||
-        m.suppliers?.name?.toLowerCase().includes(q)
-      )
+      setMovements(filtered)
+    } catch (error) {
+      console.error("Error fetching movements:", error)
+    } finally {
+      setLoading(false)
     }
-
-    setMovements(result)
-    setLoading(false)
-  }, [supabase, filter, productFilter, dateRange, customStart, customEnd, searchQuery])
+  }, [filter, productFilter, dateRange, customStart, customEnd, searchQuery])
 
   useEffect(() => {
     fetchMovements()
@@ -173,16 +123,18 @@ export default function StockMovementsPage() {
       case "purchase": return <ArrowUpRight className="h-4 w-4 text-primary" />
       case "sale": return <ArrowDownRight className="h-4 w-4 text-destructive" />
       case "adjustment": return <TrendingUp className="h-4 w-4 text-muted-foreground" />
+      case "dip_reading": return <Droplets className="h-4 w-4 text-blue-500" />
       default: return <Clock className="h-4 w-4 text-muted-foreground" />
     }
   }
 
   const getTypeLabel = (type: string) => {
     switch (type) {
-      case "purchase": return "Stock Added (Purchase)"
-      case "sale": return "Stock Sold"
-      case "initial": return "Opening Stock"
-      case "adjustment": return "Stock Adjusted"
+      case "purchase": return "Purchase"
+      case "sale": return "Sale"
+      case "initial": return "Opening"
+      case "adjustment": return "Adjustment"
+      case "dip_reading": return "Dip Reading"
       default: return type
     }
   }
@@ -295,6 +247,8 @@ export default function StockMovementsPage() {
                   <TableHead className="text-right">Prev. Stock</TableHead>
                   <TableHead className="text-right">Sale Qty</TableHead>
                   <TableHead className="text-right">Purchase</TableHead>
+                  <TableHead className="text-right">Dip Qty</TableHead>
+                  <TableHead className="text-right">Gain / Loss</TableHead>
                   <TableHead className="text-right">Net Stock</TableHead>
                   <TableHead>Reference / Note</TableHead>
                 </TableRow>
@@ -302,43 +256,57 @@ export default function StockMovementsPage() {
               <TableBody>
                 {movements.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+                    <TableCell colSpan={10} className="h-24 text-center text-muted-foreground">
                       No movements found
                     </TableCell>
                   </TableRow>
                 ) : (
                   movements.map((m) => {
-                    const rawQty = Math.abs(Number(m.quantity))
-                    const isPositive = Number(m.quantity) > 0
-                    const isNegative = Number(m.quantity) < 0
+                    const rawQty = Math.abs(Number(m.quantity || 0))
+                    const isPositive = Number(m.quantity || 0) > 0
+                    const isNegative = Number(m.quantity || 0) < 0
+                    const isDip = m.row_type === "dip_reading"
 
-                    const saleLabel = isNegative ? `-${rawQty.toLocaleString(undefined, { minimumFractionDigits: 2 })}` : "-"
-                    const purchaseLabel = isPositive ? `+${rawQty.toLocaleString(undefined, { minimumFractionDigits: 2 })}` : "-"
+                    const saleLabel = isNegative ? `-${rawQty.toLocaleString(undefined, { minimumFractionDigits: 1 })}` : "-"
+                    const purchaseLabel = isPositive ? `+${rawQty.toLocaleString(undefined, { minimumFractionDigits: 1 })}` : "-"
 
                     return (
-                      <TableRow key={m.id}>
+                      <TableRow key={m.id} className={isDip ? "bg-blue-50/20" : ""}>
                         <TableCell className="font-medium whitespace-nowrap">
-                          {new Date(m.movement_date).toLocaleDateString("en-PK", {
-                            day: "numeric", month: "short", year: "numeric"
-                          })}
+                          {new Intl.DateTimeFormat('en-PK', {
+                            day: 'numeric',
+                            month: 'short',
+                            year: 'numeric',
+                            timeZone: 'Asia/Karachi'
+                          }).format(new Date(m.movement_date))}
                           <span className="block text-xs text-muted-foreground">
-                            {new Date(m.movement_date).toLocaleTimeString("en-PK", {
-                              hour: "2-digit", minute: "2-digit"
-                            })}
+                            {new Intl.DateTimeFormat('en-PK', {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                              hour12: true,
+                              timeZone: 'Asia/Karachi'
+                            }).format(new Date(m.movement_date))}
                           </span>
                         </TableCell>
                         <TableCell>
-                          <div className="font-semibold">{m.products?.product_name || "Unknown"}</div>
-                          <div className="text-xs text-muted-foreground">{m.products?.product_type?.replace('_', ' ')}</div>
+                          <div className="font-semibold">{m.product_name}</div>
+                          <div className="text-xs text-muted-foreground">{m.product_type?.replace('_', ' ')}</div>
                         </TableCell>
                         <TableCell>
-                          <Badge variant={isPositive ? "secondary" : isNegative ? "outline" : "outline"}
-                            className={isPositive ? "bg-green-100 text-green-800 hover:bg-green-100" : isNegative ? "bg-red-50 text-red-700 hover:bg-red-50" : ""}>
-                            {m.movement_type}
+                          <Badge variant={isPositive ? "secondary" : isNegative ? "outline" : isDip ? "outline" : "outline"}
+                            className={cn(
+                              isPositive ? "bg-green-100 text-green-800 hover:bg-green-100" :
+                                isNegative ? "bg-red-50 text-red-700 hover:bg-red-50" :
+                                  isDip ? "bg-blue-50 text-blue-700 hover:bg-blue-50 border-blue-200" : ""
+                            )}>
+                            <div className="flex items-center gap-1">
+                              {getMovementIcon(m.movement_type)}
+                              {getTypeLabel(m.movement_type)}
+                            </div>
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right font-mono">
-                          {Number(m.previous_stock || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          {Number(m.previous_stock || 0).toLocaleString(undefined, { minimumFractionDigits: 1 })}
                         </TableCell>
                         <TableCell className="text-right font-bold text-destructive">
                           {isNegative ? saleLabel : "-"}
@@ -346,8 +314,20 @@ export default function StockMovementsPage() {
                         <TableCell className="text-right font-bold text-green-600">
                           {isPositive ? purchaseLabel : "-"}
                         </TableCell>
+                        <TableCell className="text-right font-black text-blue-700">
+                          {isDip ? Number(m.dip_quantity || 0).toLocaleString() : "—"}
+                        </TableCell>
+                        <TableCell className={cn(
+                          "text-right font-black",
+                          (m.gain_amount || 0) > 0 ? "text-green-600" : (m.loss_amount || 0) > 0 ? "text-red-600" : "text-slate-400"
+                        )}>
+                          {isDip ? (
+                            (m.gain_amount || 0) > 0 ? `+${m.gain_amount}` :
+                              (m.loss_amount || 0) > 0 ? `-${m.loss_amount}` : "0"
+                          ) : "—"}
+                        </TableCell>
                         <TableCell className="text-right font-mono font-bold">
-                          {Number(m.balance_after).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          {Number(m.balance_after || 0).toLocaleString(undefined, { minimumFractionDigits: 1 })}
                         </TableCell>
                         <TableCell className="max-w-[200px]">
                           <div className="truncate text-sm" title={m.notes || ""}>

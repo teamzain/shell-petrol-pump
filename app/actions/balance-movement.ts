@@ -192,12 +192,13 @@ export async function getBalanceMovement(filters?: {
 
     // Fuel Sales
     salesTx.forEach(tx => {
-        const date = tx.sale_date
+        const date = tx.sale_date?.split('T')[0]?.trim(); // Normalize date key
+        if (!date) return;
         if (!dailySummary[date]) {
             dailySummary[date] = {
                 id: `summary-sale-${date}`,
                 transaction_date: date,
-                created_at: `${date}T23:59:59Z`,
+                created_at: `${date}T18:30:00Z`, // 18:30 UTC = 11:30 PM PKT (UTC+5)
                 source_table: 'daily_sales_summary',
                 entity_name: 'Daily Sales Summary',
                 transaction_type: 'credit',
@@ -219,7 +220,8 @@ export async function getBalanceMovement(filters?: {
 
     // Manual Sales
     manualSalesTx.forEach(tx => {
-        const date = tx.sale_date
+        const date = tx.sale_date?.split('T')[0]?.trim(); // Normalize date key
+        if (!date) return;
         if (!dailySummary[date]) {
             dailySummary[date] = {
                 id: `summary-sale-${date}`,
@@ -246,7 +248,8 @@ export async function getBalanceMovement(filters?: {
     // Card Holds
     const holds = balanceTx.filter(tx => tx.is_hold)
     holds.forEach(tx => {
-        const date = tx.transaction_date || tx.created_at?.split('T')[0]
+        const date = (tx.transaction_date || tx.created_at?.split('T')[0])?.trim(); // Normalize date key
+        if (!date) return;
         if (!dailySummary[date]) {
             dailySummary[date] = {
                 id: `summary-sale-${date}`,
@@ -429,7 +432,21 @@ export async function getBalanceMovement(filters?: {
                 } else if (type === 'supplier_to_bank') {
                     bankImpact = amount;
                 } else if (tx.card_hold_id) {
-                    bankImpact = tx.is_hold ? -amount : amount;
+                    // Settlement of a card hold into a bank or supplier account
+                    if (!tx.is_hold) {
+                        if (tx.bank_account_id) bankImpact = amount;
+                        else if (tx.supplier_id) {
+                            // Supplier settlement doesn't affect physical cash/bank in Sale Tab
+                            cashImpact = 0;
+                            bankImpact = 0;
+                        } else {
+                            cashImpact = amount;
+                        }
+                    } else {
+                        // Pending holds don't affect physical balance yet
+                        cashImpact = 0;
+                        bankImpact = 0;
+                    }
                 }
             } else if (tx.source_table === 'daily_sales' || tx.source_table === 'manual_sales') {
                 cashImpact = amount; 
@@ -452,8 +469,9 @@ export async function getBalanceMovement(filters?: {
                 tx.account_type = "—";
             }
 
-            const cashBefore = runningCash - cashImpact;
-            const bankBefore = runningBank - bankImpact;
+
+            const cashBefore = (isInternal && tx.is_opening) ? 0 : runningCash - cashImpact;
+            const bankBefore = (isInternal && tx.is_opening) ? 0 : runningBank - bankImpact;
             
             tx.cash_before = cashBefore;
             tx.bank_before = bankBefore;

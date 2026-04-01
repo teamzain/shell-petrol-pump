@@ -195,10 +195,20 @@ export function StockReport({ filters, onDataLoaded }: StockReportProps) {
                                             <TableRow key={row.id} className={cn("hover:bg-slate-50/50 transition-colors", isDip && "bg-blue-50/20")}>
                                                 <TableCell className="font-medium whitespace-nowrap">
                                                     <span className="text-xs font-black">
-                                                        {format(new Date(row.movement_date), "dd MMM yyyy")}
+                                                        {new Intl.DateTimeFormat('en-PK', {
+                                                            day: '2-digit',
+                                                            month: 'short',
+                                                            year: 'numeric',
+                                                            timeZone: 'Asia/Karachi'
+                                                        }).format(new Date(row.movement_date))}
                                                     </span>
                                                     <span className="block text-[10px] text-muted-foreground font-bold">
-                                                        {format(new Date(row.movement_date), "hh:mm aa")}
+                                                        {new Intl.DateTimeFormat('en-PK', {
+                                                            hour: '2-digit',
+                                                            minute: '2-digit',
+                                                            hour12: true,
+                                                            timeZone: 'Asia/Karachi'
+                                                        }).format(new Date(row.movement_date))}
                                                     </span>
                                                 </TableCell>
                                                 <TableCell>

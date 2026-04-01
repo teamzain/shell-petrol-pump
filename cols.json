@@ -1,0 +1,20 @@
+{
+  "manual": [
+    "id",
+    "sale_date",
+    "product_id",
+    "quantity",
+    "unit_price",
+    "total_amount",
+    "payment_method",
+    "customer_name",
+    "profit",
+    "notes",
+    "created_by",
+    "cash_payment_amount",
+    "card_payment_amount",
+    "discount_type",
+    "discount_value",
+    "discount_amount"
+  ]
+}

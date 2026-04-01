@@ -63,7 +63,6 @@ export async function getStockReportData(filters: StockReportFilters): Promise<S
         .from("stock_movements")
         .select("id, product_id, movement_date, movement_type, quantity, previous_stock, balance_after, notes, reference_number, products(name, type), suppliers(name)")
         .order("movement_date", { ascending: false })
-        .limit(500)
 
     if (startDate) movQuery = movQuery.gte("movement_date", `${startDate}T00:00:00`)
     if (endDate)   movQuery = movQuery.lte("movement_date", `${endDate}T23:59:59`)
@@ -72,7 +71,7 @@ export async function getStockReportData(filters: StockReportFilters): Promise<S
         movQuery = movQuery.eq("movement_type", movementType)
     }
 
-    const { data: movData, error: movError } = await movQuery
+    const { data: movData, error: movError } = await movQuery.limit(5000)
     if (movError) throw new Error(`Stock movements fetch failed: ${movError.message}`)
 
     // ─── 2. Fetch tank_reconciliation_records ──────────────────────────────
@@ -86,6 +85,7 @@ export async function getStockReportData(filters: StockReportFilters): Promise<S
                 id,
                 tank_id,
                 reading_date,
+                created_at,
                 dip_mm,
                 dip_volume,
                 current_stock,
@@ -99,12 +99,11 @@ export async function getStockReportData(filters: StockReportFilters): Promise<S
                 )
             `)
             .order("reading_date", { ascending: false })
-            .limit(500)
 
         if (startDate) dipQuery = dipQuery.gte("reading_date", startDate)
         if (endDate)   dipQuery = dipQuery.lte("reading_date", endDate)
 
-        const { data: dipData, error: dipError } = await dipQuery
+        const { data: dipData, error: dipError } = await dipQuery.limit(5000)
         if (dipError) throw new Error(`Dip records fetch failed: ${dipError.message}`)
 
         dipRows = ((dipData || []) as any[])
@@ -112,26 +111,32 @@ export async function getStockReportData(filters: StockReportFilters): Promise<S
                 if (!productId || productId === "all") return true
                 return r.tanks?.product_id === productId
             })
-            .map((r: any): StockReportRow => ({
-                id: `dip-${r.id}`,
-                row_type: "dip_reading",
-                movement_date: `${r.reading_date}T12:00:00`, // Date only — use noon as placeholder time
-                product_id: r.tanks?.product_id || "",
-                product_name: r.tanks?.products?.name || "Unknown",
-                product_type: r.tanks?.products?.type || "other",
-                movement_type: "dip_reading",
-                quantity: null,
-                previous_stock: Number(r.current_stock ?? 0),
-                balance_after: Number(r.actual_stock ?? 0),
-                dip_mm: Number(r.dip_mm ?? 0),
-                dip_quantity: Number(r.dip_volume ?? 0),
-                notes: `Tank dip reading — ${r.tanks?.name || "Tank"}`,
-                reference_number: null,
-                supplier_name: null,
-                current_stock_before_dip: Number(r.current_stock ?? 0),
-                gain_amount: Number(r.gain_amount ?? 0),
-                loss_amount: Number(r.loss_amount ?? 0),
-            }))
+            .map((r: any): StockReportRow => {
+                // Combine the financial reading_date with the actual creation time
+                const timePart = r.created_at ? r.created_at.split('T')[1] : '00:00:00';
+                const movementDate = `${r.reading_date}T${timePart}`;
+                
+                return {
+                    id: `dip-${r.id}`,
+                    row_type: "dip_reading",
+                    movement_date: movementDate,
+                    product_id: r.tanks?.product_id || "",
+                    product_name: r.tanks?.products?.name || "Unknown",
+                    product_type: r.tanks?.products?.type || "other",
+                    movement_type: "dip_reading",
+                    quantity: null,
+                    previous_stock: Number(r.current_stock ?? 0),
+                    balance_after: Number(r.actual_stock ?? 0),
+                    dip_mm: Number(r.dip_mm ?? 0),
+                    dip_quantity: Number(r.dip_volume ?? 0),
+                    notes: `Tank dip reading — ${r.tanks?.name || "Tank"}`,
+                    reference_number: null,
+                    supplier_name: null,
+                    current_stock_before_dip: Number(r.current_stock ?? 0),
+                    gain_amount: Number(r.gain_amount ?? 0),
+                    loss_amount: Number(r.loss_amount ?? 0),
+                }
+            })
     }
 
     // ─── 3. Map movement rows ──────────────────────────────────────────────
