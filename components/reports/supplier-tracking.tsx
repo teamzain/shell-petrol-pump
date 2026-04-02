@@ -130,7 +130,7 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
     const [transactions, setTransactions] = useState<any[]>([])
     const [holds, setHolds] = useState<any[]>([])
     const [accountBalance, setAccountBalance] = useState<number | null>(null)
-    const [holdFilter, setHoldFilter] = useState<"all" | "pending" | "released">("all")
+    const [holdFilter, setHoldFilter] = useState<"all" | "pending" | "released" | "cancelled">("all")
     const [selectedPOId, setSelectedPOId] = useState<string | null>(null)
     const [isModalOpen, setIsModalOpen] = useState(false)
 
@@ -263,7 +263,7 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
             let cardHolds = (holdsData || []).map((h: any) => ({
                 ...h,
                 _source: "card" as const,
-                _normalized_status: h.status === "released" ? "released" : "pending"
+                _normalized_status: h.status === "released" ? "released" : h.status === "cancelled" ? "cancelled" : "pending"
             }))
             if (supplier) {
                 cardHolds = cardHolds.filter((h: any) => h.supplier_cards?.supplier_id === supplier.id)
@@ -291,7 +291,7 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
             let poHolds = (poHoldsData || []).map((h: any) => ({
                 ...h,
                 _source: "po" as const,
-                _normalized_status: h.status === "released" ? "released" : "pending",
+                _normalized_status: h.status === "released" ? "released" : h.status === "cancelled" ? "cancelled" : "pending",
                 // Map PO hold fields to match card hold display fields
                 sale_date: h.created_at,
                 supplier_cards: {
@@ -324,11 +324,14 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
     const netPeriodBalance = totalPaid - totalDeducted
 
     // Card + PO hold summaries - use _normalized_status for unified filtering
-    const pendingHolds = holds.filter(h => h._normalized_status !== "released")
+    const pendingHolds = holds.filter(h => h._normalized_status === "pending")
     const releasedHolds = holds.filter(h => h._normalized_status === "released")
+    const cancelledHolds = holds.filter(h => h._normalized_status === "cancelled")
+    
     const totalOnHold = pendingHolds.reduce((s, h) => s + Number(h.hold_amount || 0), 0)
     const totalReleased = releasedHolds.reduce((s, h) => s + Number(h.hold_amount || 0), 0)
     const totalReleasedNet = releasedHolds.reduce((s, h) => s + Number(h.net_amount || h.hold_amount || 0), 0)
+    const totalCancelled = cancelledHolds.reduce((s, h) => s + Number(h.hold_amount || 0), 0)
 
     useEffect(() => {
         if (!loading) {
@@ -339,13 +342,14 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
                 totalOnHold,
                 totalReleased,
                 totalReleasedNet,
+                totalCancelled,
                 totalPurchased,
                 totalPaid,
                 totalDeducted,
                 netPeriodBalance
             })
         }
-    }, [loading, purchases, transactions, holds, totalOnHold, totalReleased, totalReleasedNet, totalPurchased, totalPaid, totalDeducted, netPeriodBalance, onLedgerDataLoaded])
+    }, [loading, purchases, transactions, holds, totalOnHold, totalReleased, totalReleasedNet, totalCancelled, totalPurchased, totalPaid, totalDeducted, netPeriodBalance, onLedgerDataLoaded])
 
     if (loading) {
         return (
@@ -388,6 +392,11 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
                     <div className={`text-[9px] font-black uppercase tracking-widest mb-1 ${netPeriodBalance >= 0 ? "text-emerald-600/80" : "text-rose-600/80"}`}>Net Period Movement</div>
                     <div className={`text-lg font-black ${netPeriodBalance >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{netPeriodBalance >= 0 ? "+" : ""}Rs. {netPeriodBalance.toLocaleString()}</div>
                     <div className="text-[10px] text-muted-foreground mt-0.5">Payments − Deductions</div>
+                </div>
+                <div className="bg-white rounded-xl border border-rose-200 p-3 shadow-sm">
+                    <div className="text-[9px] font-black uppercase text-rose-600 tracking-widest mb-1">Hold Cancelled</div>
+                    <div className="text-lg font-black text-rose-700">Rs. {totalCancelled.toLocaleString()}</div>
+                    <div className="text-[10px] text-muted-foreground mt-0.5">Discrepancy write-off</div>
                 </div>
             </div>
 
@@ -678,6 +687,16 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
                         >
                             Released ({releasedHolds.length})
                         </button>
+                        <button
+                            onClick={() => setHoldFilter("cancelled")}
+                            className={`text-[10px] font-bold px-3 py-1 rounded-md transition-all ${
+                                holdFilter === "cancelled"
+                                    ? "bg-rose-500 text-white shadow-sm"
+                                    : "text-slate-500 hover:text-slate-700"
+                            }`}
+                        >
+                            Cancelled ({cancelledHolds.length})
+                        </button>
                     </div>
                 </div>
 
@@ -704,8 +723,9 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {(holdFilter === "all" ? holds : holdFilter === "released" ? releasedHolds : pendingHolds).map((hold) => {
+                                    {(holdFilter === "all" ? holds : holdFilter === "released" ? releasedHolds : holdFilter === "cancelled" ? cancelledHolds : pendingHolds).map((hold) => {
                                         const isReleased = hold._normalized_status === "released"
+                                        const isCancelled = hold._normalized_status === "cancelled"
                                         const saleDate = hold.sale_date || hold.created_at
                                         const now = new Date()
                                         const holdStart = new Date(hold.created_at)
@@ -721,7 +741,7 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
                                         // Urgency color for pending holds
                                         let urgencyClass = "bg-blue-100 text-blue-700 border-blue-200"
                                         let urgencyText = `${daysPending}d pending`
-                                        if (!isReleased) {
+                                        if (!isReleased && !isCancelled) {
                                             if (daysPending >= 14) {
                                                 urgencyClass = "bg-red-100 text-red-700 border-red-200"
                                                 urgencyText = `${daysPending}d — LONG HOLD`
@@ -734,7 +754,7 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
                                         const cardName = hold.supplier_cards?.card_name || "—"
 
                                         return (
-                                            <TableRow key={hold.id} className={`transition-colors ${isReleased ? "bg-emerald-50/30" : "hover:bg-amber-50/30"}`}>
+                                            <TableRow key={hold.id} className={`transition-colors ${isReleased ? "bg-emerald-50/30" : isCancelled ? "bg-rose-50/30" : "hover:bg-amber-50/30"}`}>
                                                 <TableCell className="text-xs font-bold text-primary whitespace-nowrap">
                                                     <div className="flex items-center gap-1.5">
                                                         <CreditCard className="h-3.5 w-3.5 text-slate-400" />
@@ -762,15 +782,20 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
                                                     Rs. {Number(hold.net_amount || hold.hold_amount || 0).toLocaleString()}
                                                 </TableCell>
                                                 <TableCell className="text-center whitespace-nowrap">
-                                                    {!isReleased ? (
-                                                        <Badge variant="outline" className={`text-[10px] font-bold px-2 py-0 h-5 flex items-center gap-1 justify-center ${urgencyClass}`}>
-                                                            <Clock className="h-3 w-3" />
-                                                            {urgencyText}
-                                                        </Badge>
-                                                    ) : (
+                                                    {isReleased ? (
                                                         <Badge variant="outline" className="text-[10px] font-bold px-2 py-0 h-5 flex items-center gap-1 justify-center bg-slate-100 text-slate-600">
                                                             <CheckCircle2 className="h-3 w-3" />
                                                             {daysPending}d held
+                                                        </Badge>
+                                                    ) : isCancelled ? (
+                                                        <Badge variant="outline" className="text-[10px] font-bold px-2 py-0 h-5 flex items-center gap-1 justify-center bg-rose-50 text-rose-600 border-rose-200">
+                                                            <XCircle className="h-3 w-3" />
+                                                            Cancelled
+                                                        </Badge>
+                                                    ) : (
+                                                        <Badge variant="outline" className={`text-[10px] font-bold px-2 py-0 h-5 flex items-center gap-1 justify-center ${urgencyClass}`}>
+                                                            <Clock className="h-3 w-3" />
+                                                            {urgencyText}
                                                         </Badge>
                                                     )}
                                                 </TableCell>
@@ -778,6 +803,10 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
                                                     {isReleased ? (
                                                         <Badge className="bg-emerald-100 text-emerald-700 border border-emerald-200 text-[10px] font-bold h-5 px-2">
                                                             <ShieldCheck className="h-3 w-3 mr-1" /> Released
+                                                        </Badge>
+                                                    ) : isCancelled ? (
+                                                        <Badge className="bg-rose-100 text-rose-700 border border-rose-200 text-[10px] font-bold h-5 px-2">
+                                                            <XCircle className="h-3 w-3 mr-1" /> Cancelled
                                                         </Badge>
                                                     ) : (
                                                         <Badge className="bg-amber-100 text-amber-700 border border-amber-200 text-[10px] font-bold h-5 px-2">
@@ -790,8 +819,12 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
                                                         <span className="text-emerald-600 font-medium">
                                                             {format(new Date(hold.released_at || hold.actual_return_date), "dd MMM yyyy")}
                                                         </span>
+                                                    ) : isCancelled && hold.cancel_reason ? (
+                                                        <span className="text-rose-600 font-medium truncate max-w-[120px] inline-block" title={hold.cancel_reason}>
+                                                            {hold.cancel_reason}
+                                                        </span>
                                                     ) : (
-                                                        <span className="text-muted-foreground italic">Pending</span>
+                                                        <span className="text-muted-foreground italic">{isCancelled ? "No reason" : "Pending"}</span>
                                                     )}
                                                 </TableCell>
                                             </TableRow>
@@ -868,6 +901,7 @@ export function SupplierPerformanceReport({ filters, onDetailClick, onDataLoaded
     const [totalOnHold, setTotalOnHold] = useState(0)
     const [totalReleased, setTotalReleased] = useState(0)
     const [totalReleasedNet, setTotalReleasedNet] = useState(0)
+    const [totalCancelled, setTotalCancelled] = useState(0)
     
     const reportDataRef = useRef<any>({})
 
@@ -883,7 +917,7 @@ export function SupplierPerformanceReport({ filters, onDetailClick, onDataLoaded
                 const fromDate = format(filters.dateRange.from, "yyyy-MM-dd")
                 const toDate = format(filters.dateRange.to, "yyyy-MM-dd")
 
-                // Fetch suppliers with company_accounts only (no nested purchase_orders to avoid 400 errors)
+                // Fetch suppliers with company_accounts
                 let query = supabase
                     .from("suppliers")
                     .select(`
@@ -913,7 +947,7 @@ export function SupplierPerformanceReport({ filters, onDetailClick, onDataLoaded
                 }
 
                 if (suppliersData) {
-                    // Fetch purchase order counts for the period for each supplier in a single query
+                    // Fetch purchase order counts for the period
                     const { data: periodOrders } = await supabase
                         .from("purchase_orders")
                         .select("supplier_id, estimated_total, due_amount, created_at, purchase_date")
@@ -931,7 +965,6 @@ export function SupplierPerformanceReport({ filters, onDetailClick, onDataLoaded
                         const totalPurchasedPeriod = ordersInPeriod.reduce((sum: number, o: any) =>
                             sum + Number(o.estimated_total || 0), 0)
 
-                        // Use actual company account balance for outstanding dues
                         const accountData = s.company_accounts
                         const account = Array.isArray(accountData) ? accountData[0] : accountData
                         const accountBalance = account ? Number(account.current_balance || 0) : 0
@@ -946,7 +979,7 @@ export function SupplierPerformanceReport({ filters, onDetailClick, onDataLoaded
 
                     setSuppliers(processed)
 
-                    // Fetch card hold records across all suppliers via supplier_cards join
+                    // Fetch card hold records across all suppliers
                     const supplierIds = suppliersData.map((s: any) => s.id)
                     const { data: holdsData } = await supabase
                         .from("card_hold_records")
@@ -956,7 +989,7 @@ export function SupplierPerformanceReport({ filters, onDetailClick, onDataLoaded
                         .gte("sale_date", fromDate)
                         .lte("sale_date", toDate)
 
-                    // Also fetch PO hold records
+                    // Fetch PO hold records
                     const { data: poHoldsData } = await supabase
                         .from("po_hold_records")
                         .select("hold_amount, status, purchase_orders!inner(supplier_id)")
@@ -965,28 +998,37 @@ export function SupplierPerformanceReport({ filters, onDetailClick, onDataLoaded
                     let holdTotal = 0
                     let releasedTotal = 0
                     let releasedNetTotal = 0
-                    // Card holds
+                    let cancelledTotal = 0
+
+                    // Card holds summary
                     for (const h of (holdsData || [])) {
                         const amt = Number(h.hold_amount || 0)
                         const netAmt = Number(h.net_amount || h.hold_amount || 0)
-                        if (h.status !== "released") holdTotal += amt
                         if (h.status === "released") {
                             releasedTotal += amt
                             releasedNetTotal += netAmt
+                        } else if (h.status === "cancelled") {
+                            cancelledTotal += amt
+                        } else {
+                            holdTotal += amt
                         }
                     }
-                    // PO holds
+                    // PO holds summary
                     for (const h of (poHoldsData || [])) {
                         const amt = Number(h.hold_amount || 0)
                         if (h.status === "on_hold") holdTotal += amt
-                        if (h.status === "released") {
+                        else if (h.status === "released") {
                             releasedTotal += amt
-                            releasedNetTotal += amt // PO holds don't have separate net_amount currently
+                            releasedNetTotal += amt
+                        } else if (h.status === "cancelled") {
+                            cancelledTotal += amt
                         }
                     }
+
                     setTotalOnHold(holdTotal)
                     setTotalReleased(releasedTotal)
                     setTotalReleasedNet(releasedNetTotal)
+                    setTotalCancelled(cancelledTotal)
 
                     const summaryData = {
                         suppliers: processed,
@@ -994,6 +1036,7 @@ export function SupplierPerformanceReport({ filters, onDetailClick, onDataLoaded
                         totalOnHold: holdTotal,
                         totalReleased: releasedTotal,
                         totalReleasedNet: releasedNetTotal,
+                        totalCancelled: cancelledTotal,
                         totalOrders: processed.reduce((sum, s) => sum + s.orderCount, 0),
                         totalOutstanding: processed.reduce((sum, s) => sum + s.outstandingDues, 0),
                     }
@@ -1008,7 +1051,7 @@ export function SupplierPerformanceReport({ filters, onDetailClick, onDataLoaded
         }
 
         fetchData()
-    }, [filters])
+    }, [filters, supabase])
 
     const toggleExpand = (id: string) => {
         setExpandedId(prev => prev === id ? null : id)
@@ -1044,7 +1087,7 @@ export function SupplierPerformanceReport({ filters, onDetailClick, onDataLoaded
     return (
         <div className="space-y-6">
             {/* ── Overview Cards ── */}
-            <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
+            <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
                 <Card className="bg-primary/5 border-primary/10">
                     <CardHeader className="pb-2">
                         <CardTitle className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest px-0">Total Suppliers</CardTitle>
@@ -1090,6 +1133,15 @@ export function SupplierPerformanceReport({ filters, onDetailClick, onDataLoaded
                     <CardContent className="px-5">
                         <div className="text-xl font-black text-emerald-800">Rs. {totalReleasedNet.toLocaleString()}</div>
                         <div className="text-[10px] text-emerald-700/70 mt-1 font-black">Actual Received</div>
+                    </CardContent>
+                </Card>
+                <Card className="bg-rose-50 border-rose-100">
+                    <CardHeader className="pb-2">
+                        <CardTitle className="text-[10px] font-bold text-rose-600 uppercase tracking-widest px-0">Cancelled Amount</CardTitle>
+                    </CardHeader>
+                    <CardContent className="px-5">
+                        <div className="text-xl font-black text-rose-700">Rs. {totalCancelled.toLocaleString()}</div>
+                        <div className="text-[10px] text-rose-500/70 mt-1 font-medium">Forfeited holds</div>
                     </CardContent>
                 </Card>
             </div>

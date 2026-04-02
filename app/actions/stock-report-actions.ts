@@ -50,25 +50,34 @@ export interface StockReportFilters {
     startDate?: string
     endDate?: string
     productId?: string
+    productType?: string // 'all' | 'fuel' | 'oil'
     movementType?: string // 'all' | 'purchase' | 'sale' | 'adjustment' | 'dip_reading'
 }
 
 export async function getStockReportData(filters: StockReportFilters): Promise<StockReportRow[]> {
     const supabase = await createClient()
 
-    const { startDate, endDate, productId, movementType } = filters
+    const { startDate, endDate, productId, productType, movementType } = filters
 
     // ─── 1. Fetch stock_movements ───────────────────────────────────────────
     let movQuery = supabase
         .from("stock_movements")
-        .select("id, product_id, movement_date, movement_type, quantity, previous_stock, balance_after, notes, reference_number, products(name, type), suppliers(name)")
+        .select("id, product_id, movement_date, movement_type, quantity, previous_stock, balance_after, notes, reference_number, products!inner(name, type), suppliers(name)")
         .order("movement_date", { ascending: false })
 
-    if (startDate) movQuery = movQuery.gte("movement_date", `${startDate}T00:00:00`)
-    if (endDate)   movQuery = movQuery.lte("movement_date", `${endDate}T23:59:59`)
+    if (startDate) movQuery = movQuery.gte("movement_date", `${startDate}T00:00:00+05:00`)
+    if (endDate)   movQuery = movQuery.lte("movement_date", `${endDate}T23:59:59+05:00`)
     if (productId && productId !== "all") movQuery = movQuery.eq("product_id", productId)
+    if (productType && productType !== "all") {
+        const type = (productType === 'fuel' || productType === 'fuel_products') ? 'fuel' : 'oil'
+        movQuery = movQuery.eq("products.type", type)
+    }
     if (movementType && movementType !== "all" && movementType !== "dip_reading") {
         movQuery = movQuery.eq("movement_type", movementType)
+    }
+    // If movementType is ONLY dip_reading, we should return NO movements from this table
+    if (movementType === "dip_reading") {
+        movQuery = movQuery.eq("id", "00000000-0000-0000-0000-000000000000") // Hack to return empty
     }
 
     const { data: movData, error: movError } = await movQuery.limit(5000)
@@ -112,9 +121,12 @@ export async function getStockReportData(filters: StockReportFilters): Promise<S
                 return r.tanks?.product_id === productId
             })
             .map((r: any): StockReportRow => {
-                // Combine the financial reading_date with the actual creation time
-                const timePart = r.created_at ? r.created_at.split('T')[1] : '00:00:00';
-                const movementDate = `${r.reading_date}T${timePart}`;
+                // Combine the logical reading date with the actual wall clock time (including TZ offset)
+                let movementDate = `${r.reading_date}T00:00:00+05:00`;
+                if (r.created_at && r.created_at.includes('T')) {
+                    const timePart = r.created_at.split('T')[1];
+                    movementDate = `${r.reading_date}T${timePart}`;
+                }
                 
                 return {
                     id: `dip-${r.id}`,
@@ -236,4 +248,35 @@ export async function getGainLossReportData(filters: StockReportFilters): Promis
         netVariance: totalGain - totalLoss,
         records
     }
+}
+
+/**
+ * Fetch a summary of current stock levels for all active products
+ */
+export async function getCurrentStockSummary(productType?: string) {
+    const supabase = await createClient()
+    
+    let query = supabase
+        .from("products")
+        .select("id, name, type, current_stock, unit, tank_capacity, purchase_price")
+        .eq("status", "active")
+        .order("name")
+
+    if (productType && productType !== "all") {
+        const type = (productType === 'fuel' || productType === 'fuel_products') ? 'fuel' : 'oil'
+        query = query.eq("type", type)
+    }
+
+    const { data, error } = await query
+    if (error) throw new Error(`Stock summary fetch failed: ${error.message}`)
+
+    return (data || []).map(p => ({
+        id: p.id,
+        name: p.name,
+        type: p.type,
+        stock: Number(p.current_stock || 0),
+        unit: p.unit,
+        capacity: p.tank_capacity ? Number(p.tank_capacity) : null,
+        value: Number(p.current_stock || 0) * Number(p.purchase_price || 0)
+    }))
 }

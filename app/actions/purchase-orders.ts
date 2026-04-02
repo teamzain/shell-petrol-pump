@@ -470,6 +470,7 @@ export async function getPurchaseSummary(filters?: { date_from?: string; date_to
 
     const totalOnHold = holdData?.filter(h => h.status === 'on_hold').reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
     const totalReleased = holdData?.filter(h => h.status === 'released').reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
+    const totalCancelled = holdData?.filter(h => h.status === 'cancelled').reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
 
     return {
         totalOrders: pendingCount || 0,
@@ -477,7 +478,8 @@ export async function getPurchaseSummary(filters?: { date_from?: string; date_to
         totalPaid: totalSettled,
         totalDue: committedValue, // Outstanding is now exactly the committed pending value
         totalOnHold,
-        totalReleased
+        totalReleased,
+        totalCancelled
     }
 }
 
@@ -696,5 +698,32 @@ export async function markHoldAsReceived(holdId: string, receivedDate?: string) 
     revalidatePath("/dashboard")
     revalidatePath("/dashboard/purchases")
     revalidatePath("/dashboard/balance")
+    return { success: true }
+}
+
+export async function cancelPOHold(holdId: string, reason: string) {
+    const supabase = await createClient()
+
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) throw new Error("Unauthorized")
+
+    // Update hold status and reason
+    const { error } = await supabase
+        .from("po_hold_records")
+        .update({
+            status: 'cancelled',
+            cancel_reason: reason,
+            updated_at: new Date().toISOString()
+        })
+        .eq("id", holdId)
+
+    if (error) throw error
+
+    // Sync notification if exists
+    await supabase.from("po_notifications")
+        .update({ status: 'completed', updated_at: new Date().toISOString() })
+        .eq("related_hold_id", holdId)
+
+    revalidatePath("/dashboard/purchases")
     return { success: true }
 }

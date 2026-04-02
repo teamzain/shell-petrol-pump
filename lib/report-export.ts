@@ -116,13 +116,14 @@ function exportToCSV(activeTab: string, reportData: any, dateRangeStr: string, f
             csvContent += `Total Arrivals,Rs. ${reportData.totalArrivalValue || 0}\n`
             csvContent += `Total On Hold,Rs. ${reportData.totalOnHold || 0}\n`
             csvContent += `Total Released,Rs. ${reportData.totalReleased || 0}\n`
+            csvContent += `Total Cancelled,Rs. ${reportData.totalCancelled || 0}\n`
             csvContent += `Net Paid,Rs. ${reportData.totalPaid || 0}\n\n`
         }
 
-        const headers = ["Date", "Invoice", "Supplier", "Order Value", "Arrival Value", "Hold/Release", "Net Paid", "Status", "Payment Method"]
+        const headers = ["Date", "Invoice", "Supplier", "Order Value", "Arrival Value", "Hold/Rel", "Cancelled", "Net Paid", "Status", "Payment Method"]
         csvContent += headers.join(",") + "\n"
         orders.forEach((o: any) => {
-            const adj = (o.release_amount || 0) - (o.hold_amount || 0)
+            const adj = (o.release_amount || 0) > 0 ? `+${o.release_amount}` : (o.hold_amount || 0) > 0 ? `-${o.hold_amount}` : "0"
             const row = [ 
                 format(new Date(o.display_date || o.created_at), "yyyy-MM-dd"), 
                 o.invoice_number, 
@@ -130,6 +131,7 @@ function exportToCSV(activeTab: string, reportData: any, dateRangeStr: string, f
                 o.order_value || o.total_amount,
                 o.total_amount,
                 adj,
+                o.cancel_amount || 0,
                 o.net_paid || o.total_amount,
                 o.status,
                 o.payment_method || "N/A"
@@ -158,6 +160,7 @@ function exportToCSV(activeTab: string, reportData: any, dateRangeStr: string, f
         csvContent += `Total Orders,${reportData.totalOrders}\n`
         csvContent += `Total Amount On Hold,Rs. ${reportData.totalOnHold?.toLocaleString() || 0}\n`
         csvContent += `Total Released,Rs. ${reportData.totalReleased?.toLocaleString() || 0}\n`
+        csvContent += `Total Cancelled,Rs. ${reportData.totalCancelled?.toLocaleString() || 0}\n`
         csvContent += `Total Outstanding Dues,Rs. ${reportData.totalOutstanding?.toLocaleString() || 0}\n`
         csvContent += "\n"
 
@@ -657,17 +660,18 @@ function exportToPDF(activeTab: string, reportData: any, dateRangeStr: string, s
             [41, 128, 185]
         )
         addKPIGrid("Financial Reconciliation", 
-            ["TOTAL ON HOLD", "TOTAL RELEASED", "NET PAID"], 
+            ["TOTAL ON HOLD", "TOTAL RELEASED", "TOTAL CANCELLED", "NET PAID"], 
             [
                 `Rs. ${(reportData.totalOnHold || 0).toLocaleString()}`, 
                 `Rs. ${(reportData.totalReleased || 0).toLocaleString()}`, 
+                `Rs. ${(reportData.totalCancelled || 0).toLocaleString()}`, 
                 `Rs. ${(reportData.totalPaid || 0).toLocaleString()}`
             ],
             [52, 73, 94]
         )
         autoTable(doc, {
             startY: nextY,
-            head: [["Date", "Invoice #", "Supplier", "Order Value", "Arrival Value", "Hold/Rel", "Net Paid", "Status", "Payment"]],
+            head: [["Date", "Invoice #", "Supplier", "Order Value", "Arrival Value", "Hold/Rel", "Cancelled", "Net Paid", "Status", "Payment"]],
             body: (reportData.orders || []).map((o: any) => {
                 let dateStr = "N/A"
                 try {
@@ -686,6 +690,7 @@ function exportToPDF(activeTab: string, reportData: any, dateRangeStr: string, s
                     `Rs. ${Number(o.order_value || 0).toLocaleString()}`,
                     `Rs. ${Number(o.total_amount || 0).toLocaleString()}`,
                     adj,
+                    o.cancel_amount > 0 ? `Rs. ${o.cancel_amount.toLocaleString()}` : "None",
                     `Rs. ${Number(o.net_paid || 0).toLocaleString()}`,
                     (o.status || "").replace(/_/g, " ").toUpperCase(),
                     o.payment_method || "N/A"
@@ -777,12 +782,13 @@ function exportToPDF(activeTab: string, reportData: any, dateRangeStr: string, s
             // ALL 10 CARDS in two rows
             // Row 1: Overview
             addKPIGrid("Business Overview", 
-                ["TOTAL SUPPLIERS", "TOTAL BALANCE", "AMOUNT ON HOLD", "GROSS RELEASED", "NET RECEIVED"], 
+                ["TOTAL SUPPLIERS", "TOTAL BALANCE", "AMOUNT ON HOLD", "GROSS RELEASED", "CANCELLED", "NET RECEIVED"], 
                 [
                     totalSuppliers.toString(), 
                     `Rs. ${totalBalance.toLocaleString()}`, 
                     `Rs. ${onHold.toLocaleString()}`, 
                     `Rs. ${grossReleased.toLocaleString()}`,
+                    `Rs. ${reportData.totalCancelled?.toLocaleString() || 0}`,
                     `Rs. ${netReceived.toLocaleString()}`
                 ],
                 [41, 128, 185] // Blue

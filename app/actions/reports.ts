@@ -90,6 +90,8 @@ export async function getDailyReportData(date: string) {
         .reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
     const purchaseHoldReleased = poHolds?.filter(h => h.status === 'released')
         .reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
+    const purchaseHoldCancelled = poHolds?.filter(h => h.status === 'cancelled')
+        .reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
 
     // 6. Supplier Section
     const { data: companyAccounts } = await supabase.from("company_accounts").select("current_balance, id").order("id")
@@ -132,6 +134,9 @@ export async function getDailyReportData(date: string) {
     
     const supplierCardReleased = supplierCardRecords?.filter(r => r.status === "released" && r.released_at?.startsWith(targetDate))
         .reduce((acc, r) => acc + Number(r.net_amount), 0) || 0
+    
+    const supplierCardCancelled = supplierCardRecords?.filter(r => r.status === "cancelled")
+        .reduce((acc, r) => acc + Number(r.hold_amount), 0) || 0
 
     // 8. Stock Summary
     const { data: products } = await supabase.from("products").select("id, name, current_stock, unit").order("name")
@@ -243,8 +248,10 @@ export async function getDailyReportData(date: string) {
             closing: supplierClosing,
             cardOnHold: supplierCardOnHold,
             cardReleased: supplierCardReleased,
+            cardCancelled: supplierCardCancelled,
             purchaseHoldOnHold,
-            purchaseHoldReleased
+            purchaseHoldReleased,
+            purchaseHoldCancelled
         },
         inventory: stockSummary
     }

@@ -14,7 +14,8 @@ import {
     Truck,
     RefreshCw,
     Banknote,
-    ShieldCheck
+    ShieldCheck,
+    XCircle
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -36,6 +37,7 @@ export function PurchaseHistoryReport({ filters, onDetailClick, onDataLoaded }: 
         totalOrders: 0,
         totalOnHold: 0,
         totalReleased: 0,
+        totalCancelled: 0,
         totalPaid: 0,
         totalDues: 0
     })
@@ -143,6 +145,9 @@ export function PurchaseHistoryReport({ filters, onDetailClick, onDataLoaded }: 
                         rate_per_liter: po.rate_per_liter,
                         due_amount: Number(po.estimated_total || 0),
                         paid_amount: 0,
+                        hold_amount: 0,
+                        release_amount: 0,
+                        cancel_amount: 0,
                         raw_data: po
                     })
                 }
@@ -167,6 +172,7 @@ export function PurchaseHistoryReport({ filters, onDetailClick, onDataLoaded }: 
                                 order_value: Number(poData?.estimated_total || 0),
                                 hold_amount: 0,
                                 release_amount: 0,
+                                cancel_amount: 0,
                                 net_paid: 0,
                                 status: 'STOCK ARRIVAL',
                                 type: 'delivery',
@@ -199,6 +205,8 @@ export function PurchaseHistoryReport({ filters, onDetailClick, onDataLoaded }: 
                                     acc[key].hold_amount += Number(h.hold_amount || 0);
                                 } else if (h.status === 'released') {
                                     acc[key].release_amount += Number(h.hold_amount || 0);
+                                } else if (h.status === 'cancelled') {
+                                    acc[key].cancel_amount += Number(h.hold_amount || 0);
                                 }
                                 acc[key].hold_quantity += Number(h.hold_quantity || 0);
                                 if (!acc[key].po_hold_records) acc[key].po_hold_records = [];
@@ -245,16 +253,24 @@ export function PurchaseHistoryReport({ filters, onDetailClick, onDataLoaded }: 
                     const holdAmount = (d.po_hold_records || []).filter((h: any) => h.status === 'on_hold').reduce((s: number, h: any) => s + Number(h.hold_amount || 0), 0)
                     return sum + holdAmount
                 }, 0)
-                const cardOnHold = (cardHoldRes.data || []).filter((h: any) => h.status !== 'released').reduce((sum: number, h: any) => sum + Number(h.hold_amount || 0), 0)
+                const cardOnHold = (cardHoldRes.data || []).filter((h: any) => h.status === 'pending').reduce((sum: number, h: any) => sum + Number(h.hold_amount || 0), 0)
                 const totalOnHold = poOnHold + cardOnHold
 
-                // 4. Total Released (Resolved PO shortages + Released Card holds) - This is money back
+                // 4. Total Released (Resolved PO shortages + Released Card holds)
                 const poReleased = (delRes.data || []).reduce((sum: number, d: any) => {
                     const releasedAmount = (d.po_hold_records || []).filter((h: any) => h.status === 'released').reduce((s: number, h: any) => s + Number(h.hold_amount || 0), 0)
                     return sum + releasedAmount
                 }, 0)
                 const cardReleased = (cardHoldRes.data || []).filter((h: any) => h.status === 'released').reduce((sum: number, h: any) => sum + Number(h.hold_amount || 0), 0)
                 const totalReleased = poReleased + cardReleased
+
+                // 5. Total Cancelled (Forfeited PO shortages + Cancelled Card holds)
+                const poCancelled = (delRes.data || []).reduce((sum: number, d: any) => {
+                    const cancelledAmt = (d.po_hold_records || []).filter((h: any) => h.status === 'cancelled').reduce((s: number, h: any) => s + Number(h.hold_amount || 0), 0)
+                    return sum + cancelledAmt
+                }, 0)
+                const cardCancelled = (cardHoldRes.data || []).filter((h: any) => h.status === 'cancelled').reduce((sum: number, h: any) => sum + Number(h.hold_amount || 0), 0)
+                const totalCancelled = poCancelled + cardCancelled
 
                 // 5. Net Paid (Order Value - Released refunds/adjustments)
                 // Since user pays upfront, Net Paid is the original cost minus what was returned.
@@ -266,6 +282,7 @@ export function PurchaseHistoryReport({ filters, onDetailClick, onDataLoaded }: 
                     totalOrders: totalOrdersCount,
                     totalOnHold,
                     totalReleased,
+                    totalCancelled,
                     totalPaid,
                     totalDues: 0
                 }
@@ -295,7 +312,7 @@ export function PurchaseHistoryReport({ filters, onDetailClick, onDataLoaded }: 
 
     return (
         <div className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8 gap-4">
                 <Card className="border-l-4 border-l-slate-700 shadow-sm overflow-hidden">
                     <CardHeader className="p-3 pb-1">
                         <CardTitle className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5 truncate">
@@ -388,6 +405,19 @@ export function PurchaseHistoryReport({ filters, onDetailClick, onDataLoaded }: 
                         <p className="text-[9px] text-rose-600/70 font-bold uppercase mt-0.5 truncate">Balance Dues</p>
                     </CardContent>
                 </Card>
+
+                <Card className="border-l-4 border-l-rose-600 shadow-sm bg-rose-600/5 overflow-hidden">
+                    <CardHeader className="p-3 pb-1">
+                        <CardTitle className="text-[10px] font-bold text-rose-700 uppercase tracking-wider flex items-center gap-1.5 truncate">
+                            <XCircle className="h-3.5 w-3.5 text-rose-600" />
+                            Cancelled Amount
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-3 pt-0">
+                        <div className="text-xl font-black text-rose-800 tracking-tight">Rs. {summaryStats.totalCancelled.toLocaleString()}</div>
+                        <p className="text-[9px] text-rose-600/70 font-bold uppercase mt-0.5 truncate">Write-offs</p>
+                    </CardContent>
+                </Card>
             </div>
 
             <Card>
@@ -406,6 +436,7 @@ export function PurchaseHistoryReport({ filters, onDetailClick, onDataLoaded }: 
                                     <TableHead className="text-right whitespace-nowrap">Order Value</TableHead>
                                     <TableHead className="text-right whitespace-nowrap">Arrival Value</TableHead>
                                     <TableHead className="text-right whitespace-nowrap">Hold/Release</TableHead>
+                                    <TableHead className="text-right whitespace-nowrap">Cancelled</TableHead>
                                     <TableHead className="text-right whitespace-nowrap text-emerald-600">Net Paid</TableHead>
                                     <TableHead className="text-center whitespace-nowrap">Status</TableHead>
                                     <TableHead className="text-center whitespace-nowrap">Payment</TableHead>
@@ -462,6 +493,17 @@ export function PurchaseHistoryReport({ filters, onDetailClick, onDataLoaded }: 
                                                                 </span>
                                                             )}
                                                             {!(order.hold_amount > 0 || order.release_amount > 0) && (
+                                                                <span className="text-[10px] text-muted-foreground opacity-40 italic">None</span>
+                                                            )}
+                                                        </div>
+                                                    </TableCell>
+                                                    <TableCell className="text-right whitespace-nowrap">
+                                                        <div className="flex flex-col items-end gap-0.5">
+                                                            {order.cancel_amount > 0 ? (
+                                                                <span className="text-[10px] font-bold text-rose-600 px-1 py-0.5 bg-rose-50 rounded border border-rose-100">
+                                                                    Rs. {order.cancel_amount.toLocaleString()}
+                                                                </span>
+                                                            ) : (
                                                                 <span className="text-[10px] text-muted-foreground opacity-40 italic">None</span>
                                                             )}
                                                         </div>

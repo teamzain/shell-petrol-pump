@@ -12,7 +12,8 @@ import {
   AlertCircle,
   ClipboardList,
   Truck,
-  History
+  History,
+  XCircle
 } from "lucide-react"
 import { POListTab } from "@/components/purchases/po-list-tab"
 import { RecordDeliveryTab } from "@/components/purchases/record-delivery-tab"
@@ -31,14 +32,15 @@ import { Calendar as CalendarIcon, Filter as FilterIcon } from "lucide-react"
 export default function PurchasesPage() {
   const [activeTab, setActiveTab] = useState("po")
   const [selectedPOForDelivery, setSelectedPOForDelivery] = useState<any>(null)
-  const [stats, setStats] = useState({
-    totalOrders: 0,
-    totalValue: 0,
-    totalPaid: 0,
-    totalDue: 0,
-    totalOnHold: 0,
-    totalReleased: 0
-  })
+    const [stats, setStats] = useState({
+      totalOrders: 0,
+      totalValue: 0,
+      totalPaid: 0,
+      totalDue: 0,
+      totalOnHold: 0,
+      totalReleased: 0,
+      totalCancelled: 0
+    })
 
   const [dateRange, setDateRange] = useState({
     from: "2024-01-01",
@@ -185,6 +187,17 @@ export default function PurchasesPage() {
             <CardContent>
               <div className="text-2xl font-black text-emerald-600">Rs. {stats.totalReleased.toLocaleString()}</div>
               <p className="text-[10px] text-emerald-700/70 uppercase font-bold mt-1">Returned by supplier</p>
+            </CardContent>
+          </Card>
+
+          <Card className="border-l-4 border-l-slate-400 bg-slate-50/10">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-[10px] font-black uppercase tracking-widest text-slate-600">Hold Cancelled Amount</CardTitle>
+              <XCircle className="h-4 w-4 text-slate-400" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-black text-slate-500">Rs. {stats.totalCancelled.toLocaleString()}</div>
+              <p className="text-[10px] text-slate-500 uppercase font-bold mt-1">Forfeited / Written off</p>
             </CardContent>
           </Card>
         </div>
