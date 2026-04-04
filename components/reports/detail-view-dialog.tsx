@@ -154,8 +154,8 @@ export function DetailViewDialog({ isOpen, onOpenChange, item }: any) {
     const isFuelSale = item.opening_reading !== undefined || (item.revenue !== undefined && item.nozzle_id)
     const isProductSale = (item.unit_price !== undefined || item.total_amount !== undefined) && item.product_id && !isFuelSale && !item.invoice_number
     const isCardRecord = item.hold_amount !== undefined || item.card_type !== undefined
-    const isPurchase = item.total_amount !== undefined && !isProductSale
-    const isExpense = item.amount !== undefined && !isPurchase && !isCardRecord
+    const isPurchase = item.total_amount !== undefined && !isProductSale && !isFuelSale && !isCardRecord
+    const isExpense = item.amount !== undefined && !isPurchase && !isCardRecord && !isFuelSale && !isProductSale
 
     const type = isFuelSale ? "Fuel Sale" : isProductSale ? "Product Sale" : isPurchase ? "Purchase" : "Expense"
 
@@ -352,7 +352,17 @@ export function DetailViewDialog({ isOpen, onOpenChange, item }: any) {
                                                         <tr>
                                                             <td className="py-2 text-sm font-bold font-mono">{item.quantity} <span className="text-[10px] font-sans text-muted-foreground">Unit</span></td>
                                                             <td className="py-2 text-sm font-bold font-mono">Rs.{Number(item.selling_price || item.unit_price || 0).toLocaleString()}</td>
-                                                            <td className="py-2 text-base font-black text-primary font-mono text-right">Rs.{Number(item.sale_amount || item.revenue || item.total_amount || 0).toLocaleString()}</td>
+                                                            <td className="py-2 text-base font-black text-slate-900 font-mono text-right">
+                                                                {item.discount_amount > 0 ? (
+                                                                    <div className="flex flex-col items-end">
+                                                                        <span className="text-[10px] text-muted-foreground line-through decoration-red-400/50">Rs.{(Number(item.sale_amount || item.total_amount || 0) + Number(item.discount_amount || 0)).toLocaleString()}</span>
+                                                                        <span className="text-primary">Rs.{Number(item.sale_amount || item.revenue || item.total_amount || 0).toLocaleString()}</span>
+                                                                        <Badge className="bg-orange-500/10 text-orange-600 border-none text-[8px] h-3.5 mt-0.5 px-1 font-black">-{Number(item.discount_amount).toLocaleString()} OFF</Badge>
+                                                                    </div>
+                                                                ) : (
+                                                                    <span>Rs.{Number(item.sale_amount || item.revenue || item.total_amount || 0).toLocaleString()}</span>
+                                                                )}
+                                                            </td>
                                                         </tr>
                                                     </tbody>
                                                 </table>
@@ -567,7 +577,7 @@ export function DetailViewDialog({ isOpen, onOpenChange, item }: any) {
 
                                         <div className="space-y-2.5 pt-1">
                                             <div className="flex justify-between items-center">
-                                                <span className="font-bold uppercase text-muted-foreground text-[9px]">Paid</span>
+                                                <span className="font-bold uppercase text-muted-foreground text-[9px]">Actual Paid</span>
                                                 <div className="flex items-center gap-2">
                                                     {isEditing ? (
                                                         <div className="flex items-center gap-1">
@@ -587,9 +597,14 @@ export function DetailViewDialog({ isOpen, onOpenChange, item }: any) {
                                                         </div>
                                                     ) : (
                                                         <>
-                                                            <span className="font-mono font-black text-emerald-600 text-sm">
-                                                                Rs.{Number(item.paid_amount || item.cash_payment_amount || item.delivered_amount || item.amount || item.sale_amount || 0).toLocaleString()}
-                                                            </span>
+                                                            <div className="text-right">
+                                                                <span className="font-mono font-black text-emerald-600 text-sm block leading-none">
+                                                                    Rs.{Number(item.paid_amount || item.cash_payment_amount || item.delivered_amount || item.amount || item.sale_amount || 0).toLocaleString()}
+                                                                </span>
+                                                                {(item.discount_amount > 0) && (
+                                                                    <span className="text-[8px] font-bold text-muted-foreground uppercase tracking-tighter">Settled after discount</span>
+                                                                )}
+                                                            </div>
                                                             {isProductSale && (
                                                                 <Button 
                                                                     variant="ghost" 

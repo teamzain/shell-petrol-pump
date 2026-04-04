@@ -252,7 +252,11 @@ export default function SupplierDetailPage() {
                                                     )}
                                                     <div>
                                                         <div className="text-xs font-bold text-slate-900">
-                                                            {tx.transaction_source === 'opening_balance' ? "Opening Balance" :
+                                                            {tx.card_hold_id ? (
+                                                                <span className="flex items-center gap-1.5 italic text-primary">
+                                                                    Card Hold Release: {tx.card_hold_records?.supplier_cards?.card_name || tx.card_hold_records?.card_type || 'Supplier Card'}
+                                                                </span>
+                                                            ) : tx.transaction_source === 'opening_balance' ? "Opening Balance" :
                                                                 (tx.note || (tx.transaction_type === 'credit' ? 'Account Deposit' : 'Supply Payment'))}
                                                         </div>
                                                         <div className="text-[10px] text-muted-foreground font-medium">

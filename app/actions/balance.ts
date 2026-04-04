@@ -435,6 +435,7 @@ export async function recordBalanceTransaction(data: {
     isOpeningBalance?: boolean;
     is_hold?: boolean;
     card_hold_id?: string;
+    hold_gross_amount?: number;
     date?: string;
 }) {
     const supabase = await createClient()
@@ -542,30 +543,43 @@ export async function recordBalanceTransaction(data: {
     // 3. Determine adjustments
     let cashAdj = 0
     let bankAdj = 0
+    let holdAdj = 0
 
-    if (data.transaction_type === 'cash_to_bank') {
-        cashAdj = -data.amount
-        bankAdj = data.amount
-    } else if (data.transaction_type === 'bank_to_cash') {
-        cashAdj = data.amount
-        bankAdj = -data.amount
-    } else if (data.transaction_type === 'add_cash') {
-        cashAdj = data.amount
-    } else if (data.transaction_type === 'add_bank') {
-        bankAdj = data.amount
-    } else if (data.transaction_type === 'transfer_to_supplier') {
-        // If an account or card is provided, deduct from bank, else deduct from cash
-        if (effectiveBankId) {
-            bankAdj = -data.amount
-        } else {
-            cashAdj = -data.amount
+    // Only set adjustments if not a hold.
+    // Holds will be recorded as a transaction record (ledger) but won't affect physical balances until settlement.
+    if (!data.is_hold) {
+        if (data.card_hold_id) {
+            // This is a settlement (releasing a hold)
+            // We reduce the "Hold" balance that was increased when the hold was created
+            holdAdj = -(data.hold_gross_amount || data.amount)
         }
-    } else if (data.transaction_type === 'supplier_to_bank') {
-        bankAdj = data.amount
-    } else if (data.transaction_type === 'bank_to_bank') {
-        // Internal bank transfer
-        // Note: we update two different bank accounts below
-        bankAdj = 0 // The net change to "Total Bank" as tracked in daily_accounts_status is zero
+
+        if (data.transaction_type === 'cash_to_bank') {
+            cashAdj = -data.amount
+            bankAdj = data.amount
+        } else if (data.transaction_type === 'bank_to_cash') {
+            cashAdj = data.amount
+            bankAdj = -data.amount
+        } else if (data.transaction_type === 'add_cash') {
+            cashAdj = data.amount
+        } else if (data.transaction_type === 'add_bank') {
+            bankAdj = data.amount
+        } else if (data.transaction_type === 'transfer_to_supplier') {
+            // If an account or card is provided, deduct from bank, else deduct from cash
+            if (effectiveBankId) {
+                bankAdj = -data.amount
+            } else {
+                // IMPORTANT: If it's a hold settlement to a supplier, do NOT deduct from cash again.
+                // The money was already deducted from cash and moved to "Total Card Hold" at creation.
+                cashAdj = data.card_hold_id ? 0 : -data.amount
+            }
+        } else if (data.transaction_type === 'supplier_to_bank') {
+            bankAdj = data.amount
+        } else if (data.transaction_type === 'bank_to_bank') {
+            // Internal bank transfer
+            // Note: we update two different bank accounts below
+            bankAdj = 0 
+        }
     }
 
     // 4. Update individual bank account balance if applicable
@@ -615,17 +629,19 @@ export async function recordBalanceTransaction(data: {
     // 4. Update Daily Accounts Status
     const { data: currentStatus } = await supabase
         .from("daily_accounts_status")
-        .select("opening_cash, closing_cash, opening_bank, closing_bank")
+        .select("opening_cash, closing_cash, opening_bank, closing_bank, total_card_hold")
         .eq("status_date", targetDate)
         .single()
 
     if (currentStatus) {
         const newClosingCash = (currentStatus.closing_cash ?? currentStatus.opening_cash ?? 0) + cashAdj
         const newClosingBank = (currentStatus.closing_bank ?? currentStatus.opening_bank ?? 0) + bankAdj
+        const newTotalHold = (currentStatus.total_card_hold ?? 0) + holdAdj
 
         const updatePayload: any = {
             closing_cash: newClosingCash,
             closing_bank: newClosingBank,
+            total_card_hold: newTotalHold,
             updated_at: new Date().toISOString()
         }
 
@@ -647,6 +663,7 @@ export async function recordBalanceTransaction(data: {
             closing_cash: cashAdj,
             opening_bank: 0,
             closing_bank: bankAdj,
+            total_card_hold: holdAdj,
             updated_at: new Date().toISOString()
         }
 
@@ -674,7 +691,8 @@ export async function recordBalanceTransaction(data: {
                 transaction_type: txType,
                 amount: data.amount,
                 transaction_date: targetDate,
-                bank_account_id: effectiveBankId, // Track which bank was used
+                bank_account_id: effectiveBankId,
+                card_hold_id: data.card_hold_id || undefined,
                 note: data.description || `Transfer ${data.transaction_type === 'transfer_to_supplier' ? 'to' : 'from'} supplier`
             })
         }
@@ -947,7 +965,8 @@ export async function releaseCardHold(holdId: string, targetId: string, releaseD
         description: settlementDescription,
         date: effectiveTransactionDate,
         is_hold: false,
-        card_hold_id: hold.id // Link it to the hold for audit trail
+        card_hold_id: hold.id, // Link it to the hold for audit trail
+        hold_gross_amount: Number(hold.hold_amount) // Pass gross to clear exactly what was held
     })
 
     revalidatePath('/dashboard/balance')

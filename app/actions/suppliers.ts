@@ -125,6 +125,7 @@ export async function addLedgerTransaction(payload: {
     amount: number,
     transaction_date: string,
     bank_account_id?: string, // Added to track source for payments
+    card_hold_id?: string, // Added to link to card hold releases
     reference_number?: string,
     note?: string
 }) {
@@ -181,6 +182,7 @@ export async function addLedgerTransaction(payload: {
             transaction_source: txSource,
             amount: payload.amount,
             bank_account_id: bankAccountId,
+            card_hold_id: payload.card_hold_id || undefined,
             balance_before: Number(account.current_balance),
             balance_after: newBalance,
             transaction_date: payload.transaction_date,
@@ -255,8 +257,15 @@ export async function getSupplierLedger(companyAccountId: string, filters?: { da
                 products (
                     name,
                     category,
-                    unit
+                    unit,
+                    unit_type
                 )
+            ),
+            card_hold_records (
+                amount,
+                net_amount,
+                card_type,
+                supplier_cards ( card_name )
             )
         `)
         .eq("company_account_id", companyAccountId)
