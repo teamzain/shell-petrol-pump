@@ -22,7 +22,7 @@ import {
     AlertCircle
 } from "lucide-react"
 import { BrandLoader } from "@/components/ui/brand-loader"
-import { getSupplierById, getSupplierLedger, createCompanyAccount, addLedgerTransaction } from "@/app/actions/suppliers"
+import { getSupplierById, getSupplierLedger, createCompanyAccount, addLedgerTransaction, setSupplierCreditLimit } from "@/app/actions/suppliers"
 import { toast } from "sonner"
 import {
     Dialog,
@@ -54,6 +54,8 @@ export default function SupplierDetailPage() {
         ref: "",
         note: ""
     })
+    const [creditLimitDialogOpen, setCreditLimitDialogOpen] = useState(false)
+    const [newCreditLimit, setNewCreditLimit] = useState("")
 
     const fetchData = async () => {
         setLoading(true)
@@ -129,6 +131,12 @@ export default function SupplierDetailPage() {
     const accountData = supplier.company_accounts
     const account = Array.isArray(accountData) ? accountData[0] : accountData
     const balance = account ? Number(account.current_balance) : 0
+    const creditLimit = account?.credit_limit ? Number(account.credit_limit) : null
+    const isCreditAccount = creditLimit !== null
+    // How much credit is still available (from current balance toward -creditLimit)
+    const creditUsed = isCreditAccount ? Math.abs(Math.min(0, balance)) : 0
+    const creditAvailable = isCreditAccount ? Math.max(0, creditLimit - creditUsed) : 0
+    const creditUsagePercent = isCreditAccount ? Math.min(100, (creditUsed / creditLimit) * 100) : 0
 
     return (
         <div className="flex flex-col gap-6 max-w-6xl mx-auto">
@@ -205,13 +213,37 @@ export default function SupplierDetailPage() {
                 <div className="md:col-span-2 space-y-6">
                     <Card className="overflow-hidden border-orange-200">
                         <div className="bg-orange-600 p-6 text-white flex flex-col md:flex-row md:items-center justify-between gap-4">
-                            <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-4">
                                 <div className="h-12 w-12 rounded-xl bg-white/20 backdrop-blur-md flex items-center justify-center shadow-inner">
                                     <Wallet className="h-6 w-6" />
                                 </div>
                                 <div>
                                     <h3 className="text-sm font-black uppercase tracking-widest opacity-80">Current Statement Balance</h3>
-                                    <div className="text-3xl font-black tracking-tighter">Rs. {balance.toLocaleString()}</div>
+                                    <div className={`text-3xl font-black tracking-tighter ${
+                                        balance < 0 ? "text-red-200" : "text-white"
+                                    }`}>
+                                        {balance < 0 ? "-" : ""}Rs. {Math.abs(balance).toLocaleString()}
+                                    </div>
+                                    {isCreditAccount && (
+                                        <div className="mt-2 space-y-1">
+                                            <div className="flex items-center justify-between text-[10px] opacity-75">
+                                                <span>Credit Used</span>
+                                                <span>{creditUsagePercent.toFixed(1)}% of Rs. {creditLimit!.toLocaleString()} limit</span>
+                                            </div>
+                                            <div className="h-1.5 rounded-full bg-white/20 overflow-hidden w-48">
+                                                <div
+                                                    className={`h-full rounded-full transition-all ${
+                                                        creditUsagePercent >= 100 ? "bg-red-400" :
+                                                        creditUsagePercent >= 75 ? "bg-orange-300" : "bg-green-300"
+                                                    }`}
+                                                    style={{ width: `${creditUsagePercent}%` }}
+                                                />
+                                            </div>
+                                            <div className="text-[10px] opacity-75">
+                                                Available credit: <strong>Rs. {creditAvailable.toLocaleString()}</strong>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                             {!account ? (
@@ -315,11 +347,26 @@ export default function SupplierDetailPage() {
                                     placeholder="0.00"
                                 />
                             </div>
-                            {txType === 'debit' && parseFloat(txData.amount) > balance && (
-                                <p className="text-[10px] text-red-500 font-bold uppercase tracking-tighter">
-                                    Error: Amount exceeds current balance (Rs. {balance.toLocaleString()})
-                                </p>
-                            )}
+                            {/* Debit warning: for credit accounts, check against credit limit */}
+                            {txType === 'debit' && parseFloat(txData.amount) > 0 && (() => {
+                                if (isCreditAccount) {
+                                    const newBal = balance - parseFloat(txData.amount)
+                                    if (newBal < -creditLimit!) {
+                                        return (
+                                            <p className="text-[10px] text-red-500 font-bold uppercase tracking-tighter">
+                                                Exceeds credit limit! Credit limit: Rs. {creditLimit!.toLocaleString()} — Available: Rs. {creditAvailable.toLocaleString()}
+                                            </p>
+                                        )
+                                    }
+                                } else if (parseFloat(txData.amount) > balance) {
+                                    return (
+                                        <p className="text-[10px] text-red-500 font-bold uppercase tracking-tighter">
+                                            Error: Amount exceeds current balance (Rs. {balance.toLocaleString()})
+                                        </p>
+                                    )
+                                }
+                                return null
+                            })()}
                         </div>
                         <div className="grid gap-2">
                             <Label htmlFor="date">Transaction Date</Label>
@@ -351,7 +398,19 @@ export default function SupplierDetailPage() {
                         </div>
                         <DialogFooter className="gap-2">
                             <Button type="button" variant="outline" onClick={() => setTxDialogOpen(false)}>Cancel</Button>
-                            <Button type="submit" disabled={actionLoading || (txType === 'debit' && parseFloat(txData.amount) > balance)}>
+                            <Button
+                                type="submit"
+                                disabled={actionLoading || (() => {
+                                    if (!parseFloat(txData.amount) || parseFloat(txData.amount) <= 0) return true
+                                    if (txType === 'debit') {
+                                        if (isCreditAccount) {
+                                            return (balance - parseFloat(txData.amount)) < -creditLimit!
+                                        }
+                                        return parseFloat(txData.amount) > balance
+                                    }
+                                    return false
+                                })()}
+                            >
                                 {actionLoading ? <BrandLoader size="xs" /> : "Save Transaction"}
                             </Button>
                         </DialogFooter>

@@ -34,6 +34,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
 import { upsertSupplier, createCompanyAccount, addLedgerTransaction } from "@/app/actions/suppliers"
 import { BrandLoader } from "@/components/ui/brand-loader"
+import { TrendingDown, TrendingUp, AlertCircle } from "lucide-react"
 
 const supplierSchema = z.object({
     name: z.string().min(1, "Company Name is required"),
@@ -47,7 +48,9 @@ const supplierSchema = z.object({
 })
 
 const balanceSchema = z.object({
-    amount: z.coerce.number().positive("Amount must be greater than 0"),
+    amount: z.coerce.number().min(1, "Amount must be greater than 0"),
+    balance_type: z.enum(["positive", "credit"]),
+    credit_limit: z.coerce.number().optional(),
     transaction_date: z.string().min(1, "Date is required"),
     reference_number: z.string().optional(),
     note: z.string().optional(),
@@ -85,11 +88,17 @@ export function SupplierWizard({ open, onOpenChange, onSuccess }: SupplierWizard
         resolver: zodResolver(balanceSchema),
         defaultValues: {
             amount: 0,
+            balance_type: "positive",
+            credit_limit: undefined,
             transaction_date: new Date().toISOString().split("T")[0],
             reference_number: "",
             note: "Opening Balance",
         },
     })
+
+    const watchBalanceType = balanceForm.watch("balance_type")
+    const watchAmount = balanceForm.watch("amount")
+    const watchCreditLimit = balanceForm.watch("credit_limit")
 
     const onSupplierSubmit = async (values: z.infer<typeof supplierSchema>) => {
         setLoading(true)
@@ -128,15 +137,39 @@ export function SupplierWizard({ open, onOpenChange, onSuccess }: SupplierWizard
         if (!accountId) return
         setLoading(true)
         try {
-            await addLedgerTransaction({
-                company_account_id: accountId,
-                transaction_type: "credit",
-                amount: values.amount,
-                transaction_date: values.transaction_date,
-                reference_number: values.reference_number,
-                note: values.note,
-            })
-            toast.success(`Company Account created with opening balance of Rs. ${values.amount}`)
+            const isCredit = values.balance_type === "credit"
+
+            if (isCredit) {
+                // For credit accounts:
+                // 1. Set the credit limit on the account
+                // 2. Record a DEBIT transaction (supplier gave us credit = we owe them)
+                //    We set the balance to -amount by doing a debit of that amount
+                //    But first we need to temporarily override the credit_limit so debit is allowed
+                await createCompanyAccount(supplierId!, { credit_limit: values.credit_limit || values.amount })
+
+                await addLedgerTransaction({
+                    company_account_id: accountId,
+                    transaction_type: 'debit',
+                    amount: values.amount,
+                    transaction_date: values.transaction_date,
+                    reference_number: values.reference_number,
+                    note: values.note || `Opening Credit Balance — Supplier extended Rs. ${values.amount.toLocaleString()} credit`,
+                    is_opening_balance: true,
+                })
+                toast.success(`Supplier credit account set up: -Rs. ${values.amount.toLocaleString()} opening balance`)
+            } else {
+                // Normal positive opening balance
+                await addLedgerTransaction({
+                    company_account_id: accountId,
+                    transaction_type: 'credit',
+                    amount: values.amount,
+                    transaction_date: values.transaction_date,
+                    reference_number: values.reference_number,
+                    note: values.note || `Opening Balance`,
+                    is_opening_balance: true,
+                })
+                toast.success(`Opening balance of Rs. ${values.amount.toLocaleString()} added`)
+            }
             finish()
         } catch (error) {
             toast.error(error instanceof Error ? error.message : "Failed to add opening balance")
@@ -308,24 +341,142 @@ export function SupplierWizard({ open, onOpenChange, onSuccess }: SupplierWizard
 
             {/* Step 4: Amount Entry */}
             <Dialog open={open && step === 4} onOpenChange={(val) => !val && finish()}>
-                <DialogContent>
+                <DialogContent className="max-w-lg">
                     <DialogHeader>
                         <DialogTitle>Enter Opening Balance</DialogTitle>
-                        <DialogDescription>Provide transaction details for the opening balance.</DialogDescription>
+                        <DialogDescription>Set the opening balance for this supplier account.</DialogDescription>
                     </DialogHeader>
                     <Form {...balanceForm}>
-                        <form onSubmit={balanceForm.handleSubmit(handleBalanceSubmit)} className="space-y-4">
+                        <form onSubmit={balanceForm.handleSubmit(handleBalanceSubmit)} className="space-y-5">
+
+                            {/* Balance Type Toggle */}
+                            <FormField
+                                control={balanceForm.control}
+                                name="balance_type"
+                                render={({ field }) => (
+                                    <FormItem>
+                                        <FormLabel>Balance Type</FormLabel>
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <button
+                                                type="button"
+                                                onClick={() => field.onChange("positive")}
+                                                className={`flex items-center gap-3 p-3 rounded-lg border-2 text-left transition-all ${
+                                                    field.value === "positive"
+                                                        ? "border-green-500 bg-green-50 text-green-800"
+                                                        : "border-slate-200 hover:border-slate-300"
+                                                }`}
+                                            >
+                                                <div className={`h-8 w-8 rounded-full flex items-center justify-center ${
+                                                    field.value === "positive" ? "bg-green-100" : "bg-slate-100"
+                                                }`}>
+                                                    <span className="text-lg font-black">+</span>
+                                                </div>
+                                                <div>
+                                                    <div className="text-xs font-black uppercase tracking-wide">Positive</div>
+                                                    <div className="text-[10px] text-muted-foreground">We paid supplier in advance</div>
+                                                </div>
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => field.onChange("credit")}
+                                                className={`flex items-center gap-3 p-3 rounded-lg border-2 text-left transition-all ${
+                                                    field.value === "credit"
+                                                        ? "border-red-500 bg-red-50 text-red-800"
+                                                        : "border-slate-200 hover:border-slate-300"
+                                                }`}
+                                            >
+                                                <div className={`h-8 w-8 rounded-full flex items-center justify-center ${
+                                                    field.value === "credit" ? "bg-red-100" : "bg-slate-100"
+                                                }`}>
+                                                    <span className="text-lg font-black">−</span>
+                                                </div>
+                                                <div>
+                                                    <div className="text-xs font-black uppercase tracking-wide">Credit (Negative)</div>
+                                                    <div className="text-[10px] text-muted-foreground">Supplier extended us credit</div>
+                                                </div>
+                                            </button>
+                                        </div>
+                                        <FormMessage />
+                                    </FormItem>
+                                )}
+                            />
+
+                            {/* Credit explanation banner */}
+                            {watchBalanceType === "credit" && (
+                                <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800">
+                                    <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                                    <p className="text-xs leading-relaxed">
+                                        <strong>Credit Balance:</strong> The balance will be set to <strong className="text-red-600">-Rs. {(watchAmount || 0).toLocaleString()}</strong>.
+                                        Orders will deduct from this credit until the limit is reached.
+                                    </p>
+                                </div>
+                            )}
+
+                            {/* Amount */}
                             <FormField
                                 control={balanceForm.control}
                                 name="amount"
                                 render={({ field }) => (
                                     <FormItem>
                                         <FormLabel>Amount (PKR)</FormLabel>
-                                        <FormControl><Input type="number" step="0.01" {...field} /></FormControl>
+                                        <div className="relative">
+                                            <span className={`absolute left-3 top-1/2 -translate-y-1/2 text-sm font-black ${
+                                                watchBalanceType === "credit" ? "text-red-500" : "text-green-600"
+                                            }`}>
+                                                {watchBalanceType === "credit" ? "−" : "+"} Rs.
+                                            </span>
+                                            <FormControl>
+                                                <Input
+                                                    type="number"
+                                                    step="0.01"
+                                                    min="0"
+                                                    className="pl-14 font-bold"
+                                                    {...field}
+                                                />
+                                            </FormControl>
+                                        </div>
                                         <FormMessage />
                                     </FormItem>
                                 )}
                             />
+
+                            {/* Credit Limit — only shown when balance type is credit */}
+                            {watchBalanceType === "credit" && (
+                                <FormField
+                                    control={balanceForm.control}
+                                    name="credit_limit"
+                                    render={({ field }) => (
+                                        <FormItem>
+                                            <FormLabel>
+                                                Credit Limit (PKR)
+                                                <span className="ml-2 text-[10px] font-normal text-muted-foreground">
+                                                    Max amount supplier will allow on credit
+                                                </span>
+                                            </FormLabel>
+                                            <div className="relative">
+                                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-black text-slate-500">Rs.</span>
+                                                <FormControl>
+                                                    <Input
+                                                        type="number"
+                                                        step="1"
+                                                        min="0"
+                                                        className="pl-10 font-bold"
+                                                        placeholder={`e.g. ${(watchAmount || 7500000).toLocaleString()}`}
+                                                        {...field}
+                                                    />
+                                                </FormControl>
+                                            </div>
+                                            {watchCreditLimit && watchCreditLimit > 0 && (
+                                                <p className="text-[10px] text-muted-foreground">
+                                                    Balance can go down to a maximum of <strong className="text-red-600">-Rs. {Number(watchCreditLimit).toLocaleString()}</strong>.
+                                                </p>
+                                            )}
+                                            <FormMessage />
+                                        </FormItem>
+                                    )}
+                                />
+                            )}
+
                             <FormField
                                 control={balanceForm.control}
                                 name="transaction_date"

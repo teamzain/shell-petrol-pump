@@ -30,6 +30,7 @@ export async function getSupplierById(id: string) {
       company_accounts (
         id,
         current_balance,
+        credit_limit,
         status
       )
     `)
@@ -88,7 +89,7 @@ export async function upsertSupplier(formData: any, supplierId?: string) {
     }
 }
 
-export async function createCompanyAccount(supplierId: string) {
+export async function createCompanyAccount(supplierId: string, options?: { credit_limit?: number }) {
     const supabase = await createClient()
 
     // Check if exists
@@ -99,6 +100,13 @@ export async function createCompanyAccount(supplierId: string) {
         .single()
 
     if (existing) {
+        // Update credit_limit if provided
+        if (options?.credit_limit !== undefined) {
+            await supabase
+                .from("company_accounts")
+                .update({ credit_limit: options.credit_limit > 0 ? options.credit_limit : null })
+                .eq("id", existing.id)
+        }
         return { success: true, id: existing.id }
     }
 
@@ -107,6 +115,7 @@ export async function createCompanyAccount(supplierId: string) {
         .insert({
             supplier_id: supplierId,
             current_balance: 0,
+            credit_limit: options?.credit_limit && options.credit_limit > 0 ? options.credit_limit : null,
             status: "active"
         })
         .select("id")
@@ -119,46 +128,94 @@ export async function createCompanyAccount(supplierId: string) {
     return { success: true, id: data.id }
 }
 
+export async function setSupplierCreditLimit(companyAccountId: string, creditLimit: number | null) {
+    const supabase = await createClient()
+
+    const { data: account, error: accError } = await supabase
+        .from("company_accounts")
+        .select("supplier_id")
+        .eq("id", companyAccountId)
+        .single()
+
+    if (accError) throw accError
+
+    const { error } = await supabase
+        .from("company_accounts")
+        .update({
+            credit_limit: creditLimit && creditLimit > 0 ? creditLimit : null,
+            updated_at: new Date().toISOString()
+        })
+        .eq("id", companyAccountId)
+
+    if (error) throw error
+
+    revalidatePath("/dashboard/suppliers")
+    revalidatePath(`/dashboard/suppliers/${account.supplier_id}`)
+    return { success: true }
+}
+
 export async function addLedgerTransaction(payload: {
     company_account_id: string,
     transaction_type: 'credit' | 'debit',
-    amount: number,
+    amount: number,           // Always positive — direction is set by transaction_type
     transaction_date: string,
-    bank_account_id?: string, // Added to track source for payments
-    card_hold_id?: string, // Added to link to card hold releases
+    bank_account_id?: string,
+    card_hold_id?: string,
     reference_number?: string,
-    note?: string
+    note?: string,
+    is_opening_balance?: boolean, // explicit flag for opening balance
+    skip_date_validation?: boolean, // skip future-date check when called internally
 }) {
     const supabase = await createClient()
 
-    if (new Date(payload.transaction_date) > new Date()) {
-        throw new Error("Transaction date cannot be in the future")
+    // Only run the future-date check when called directly from UI (not from internal balance actions)
+    if (!payload.skip_date_validation) {
+        // Compare as date-only strings to avoid UTC/PKT timezone mismatches
+        const todayPKT = new Date().toLocaleString('en-CA', { timeZone: 'Asia/Karachi' }).split(',')[0].trim()
+        if (payload.transaction_date > todayPKT) {
+            throw new Error("Transaction date cannot be in the future")
+        }
     }
 
     if (payload.amount <= 0) {
         throw new Error("Amount must be greater than 0")
     }
 
-    // Get current balance
+    // Get current balance AND credit_limit
     const { data: account, error: accError } = await supabase
         .from("company_accounts")
-        .select("current_balance, supplier_id")
+        .select("current_balance, credit_limit, supplier_id")
         .eq("id", payload.company_account_id)
         .single()
 
     if (accError) throw accError
 
     let newBalance = Number(account.current_balance)
+    const creditLimit = account.credit_limit !== null ? Number(account.credit_limit) : null
+
     if (payload.transaction_type === 'credit') {
+        // Credit = money coming into the account (increases balance / reduces debt)
         newBalance += payload.amount
     } else {
-        if (newBalance < payload.amount) {
+        // Debit = money going out / order placed (decreases balance, may go negative)
+        newBalance -= payload.amount
+
+        // Enforce credit limit: balance must NOT go below -creditLimit
+        if (creditLimit !== null && newBalance < -creditLimit) {
+            const available = Number(account.current_balance) + creditLimit
+            throw new Error(
+                `Credit limit exceeded. Credit limit is Rs. ${creditLimit.toLocaleString()}. ` +
+                `Available credit: Rs. ${Math.max(0, available).toLocaleString()}.`
+            )
+        }
+
+        // For non-credit accounts (no credit_limit), disallow going negative
+        if (creditLimit === null && newBalance < 0) {
             throw new Error("Insufficient balance for this debit transaction")
         }
-        newBalance -= payload.amount
     }
 
-    // Check if this is the very first transaction for this account
+    // Determine transaction source
     const { count, error: countError } = await supabase
         .from("company_account_transactions")
         .select('*', { count: 'exact', head: true })
@@ -167,11 +224,10 @@ export async function addLedgerTransaction(payload: {
     if (countError) throw countError
 
     const isFirstTransaction = count === 0
-    const txSource = isFirstTransaction && payload.transaction_type === 'credit'
+    const txSource = (payload.is_opening_balance || isFirstTransaction)
         ? 'opening_balance'
         : 'manual_transfer'
 
-    // Start Transaction
     const bankAccountId = payload.bank_account_id || undefined
 
     const { error: txError } = await supabase
@@ -187,7 +243,7 @@ export async function addLedgerTransaction(payload: {
             balance_after: newBalance,
             transaction_date: payload.transaction_date,
             reference_number: payload.reference_number,
-            note: payload.note || (txSource === 'opening_balance' ? "Initial Account Balance" : undefined)
+            note: payload.note || (txSource === 'opening_balance' ? "Opening Balance" : undefined)
         })
 
     if (txError) throw txError

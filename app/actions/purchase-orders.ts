@@ -78,18 +78,41 @@ export async function createPurchaseOrder(formData: {
     // 2. Deduct Balance from Supplier's Account
     const { data: account, error: accountError } = await supabase
         .from("company_accounts")
-        .select("id, current_balance")
+        .select("id, current_balance, credit_limit")
         .eq("supplier_id", formData.supplier_id)
         .single()
 
     if (accountError) {
         console.error("Account Fetch Error:", accountError)
     } else if (account) {
+        const currentBalance = Number(account.current_balance)
+        const newBalance = currentBalance - estimatedTotal
+        const creditLimit = account.credit_limit !== null ? Number(account.credit_limit) : null
+
+        // Enforce credit limit: new balance must NOT go below -creditLimit
+        if (creditLimit !== null && newBalance < -creditLimit) {
+            // We need to delete the PO we just inserted before throwing
+            await supabase.from("purchase_orders").delete().eq("id", po.id)
+            const available = currentBalance + creditLimit
+            throw new Error(
+                `Credit limit exceeded. Your credit limit with this supplier is Rs. ${creditLimit.toLocaleString()}. ` +
+                `Available credit remaining: Rs. ${Math.max(0, available).toLocaleString()}.`
+            )
+        }
+
+        // For non-credit accounts, disallow going negative
+        if (creditLimit === null && newBalance < 0) {
+            await supabase.from("purchase_orders").delete().eq("id", po.id)
+            throw new Error(
+                `Insufficient supplier balance. Current balance: Rs. ${currentBalance.toLocaleString()}, Order total: Rs. ${estimatedTotal.toLocaleString()}.`
+            )
+        }
+
         // Update balance
         const { error: balanceError } = await supabase
             .from("company_accounts")
             .update({
-                current_balance: Number(account.current_balance) - estimatedTotal,
+                current_balance: newBalance,
                 updated_at: new Date().toISOString()
             })
             .eq("id", account.id)
@@ -105,8 +128,8 @@ export async function createPurchaseOrder(formData: {
                     transaction_type: 'debit',
                     transaction_source: 'purchase_order',
                     amount: estimatedTotal,
-                    balance_before: Number(account.current_balance),
-                    balance_after: Number(account.current_balance) - estimatedTotal,
+                    balance_before: currentBalance,
+                    balance_after: newBalance,
                     transaction_date: formData.order_date,
                     reference_number: po.po_number,
                     purchase_order_id: po.id,

@@ -693,7 +693,8 @@ export async function recordBalanceTransaction(data: {
                 transaction_date: targetDate,
                 bank_account_id: effectiveBankId,
                 card_hold_id: data.card_hold_id || undefined,
-                note: data.description || `Transfer ${data.transaction_type === 'transfer_to_supplier' ? 'to' : 'from'} supplier`
+                note: data.description || `Transfer ${data.transaction_type === 'transfer_to_supplier' ? 'to' : 'from'} supplier`,
+                skip_date_validation: true, // date already validated by recordBalanceTransaction
             })
         }
     }
