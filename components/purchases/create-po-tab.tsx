@@ -149,8 +149,23 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
         : selectedSupplier?.company_accounts ? [selectedSupplier.company_accounts] : []
 
     const activeAccount = accounts.find((acc: any) => acc.status === 'active') || accounts[0]
-    const supplierBalance = activeAccount?.current_balance || 0
-    const balanceWarning = totalAmount > supplierBalance
+    const supplierBalance = Number(activeAccount?.current_balance || 0)
+    const creditLimit = activeAccount?.credit_limit ? Number(activeAccount.credit_limit) : null
+    const isCreditAccount = creditLimit !== null
+
+    // For credit accounts: available = how much more they can borrow (creditLimit - |negative balance|)
+    // For normal accounts: available = positive balance
+    const availableCredit = isCreditAccount
+        ? Math.max(0, creditLimit + supplierBalance) // supplierBalance is negative, so creditLimit + negBal = remaining
+        : supplierBalance
+
+    // Warning: for credit accounts, warn if order exceeds available credit
+    // For normal accounts, warn if order exceeds positive balance
+    const balanceWarning = selectedSupplier && (
+        isCreditAccount
+            ? totalAmount > availableCredit
+            : totalAmount > supplierBalance
+    )
 
     return (
         <div className="grid gap-6 md:grid-cols-3">
@@ -418,17 +433,30 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
                 {balanceWarning && selectedSupplier && (
                     <Alert variant="destructive" className="bg-red-50 text-red-800 border-red-200">
                         <AlertCircle className="h-4 w-4" />
-                        <AlertTitle className="font-bold text-xs uppercase tracking-wider">Low Account Balance</AlertTitle>
+                        <AlertTitle className="font-bold text-xs uppercase tracking-wider">
+                            {isCreditAccount ? "Credit Limit Reached" : "Low Account Balance"}
+                        </AlertTitle>
                         <AlertDescription className="text-xs mt-1">
-                            Supplier account balance is Rs. {supplierBalance.toLocaleString()}.
-                            This order requires Rs. {totalAmount.toLocaleString()}.
-                            <strong> Orders cannot be placed if the order total exceeds the account balance.</strong> Please recharge the supplier's account.
+                            {isCreditAccount ? (
+                                <>
+                                    Available credit: <strong>Rs. {availableCredit.toLocaleString()}</strong>.
+                                    This order requires <strong>Rs. {totalAmount.toLocaleString()}</strong>.
+                                    The credit limit of Rs. {creditLimit!.toLocaleString()} would be exceeded.
+                                    Please transfer money to the supplier first.
+                                </>
+                            ) : (
+                                <>
+                                    Supplier account balance is Rs. {supplierBalance.toLocaleString()}.
+                                    This order requires Rs. {totalAmount.toLocaleString()}.
+                                    <strong> Orders cannot exceed the account balance.</strong>
+                                </>
+                            )}
                         </AlertDescription>
                     </Alert>
                 )}
 
                 {selectedSupplier && (
-                    <Card className="bg-slate-50 border-slate-200">
+                    <Card className="bg-slate-50 border-slate-200 overflow-hidden">
                         <CardHeader className="pb-3 border-b border-slate-200">
                             <CardTitle className="text-xs font-black uppercase tracking-widest text-slate-500">Supplier Info</CardTitle>
                         </CardHeader>
@@ -445,10 +473,74 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
                                 <span className="text-muted-foreground">Contact:</span>
                                 <span className="font-medium text-right">{selectedSupplier.phone || "-"}</span>
                             </div>
-                            {accounts.length > 0 && (
-                                <div className="flex justify-between items-center text-sm border-t border-slate-200 pt-3">
-                                    <span className="text-muted-foreground">Linked Wallet:</span>
-                                    <span className="font-black text-blue-600">Active</span>
+
+                            {/* Balance Section */}
+                            {accounts.length > 0 && activeAccount ? (
+                                <div className="border-t border-slate-200 pt-3 space-y-2">
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-xs font-black uppercase text-slate-500">Account Balance</span>
+                                        <span className={`text-base font-black ${
+                                            supplierBalance < 0 ? "text-red-600" : "text-green-600"
+                                        }`}>
+                                            {supplierBalance < 0 ? "-" : "+"}Rs. {Math.abs(supplierBalance).toLocaleString()}
+                                        </span>
+                                    </div>
+
+                                    {isCreditAccount && (
+                                        <>
+                                            <div className="flex justify-between items-center text-xs text-slate-500">
+                                                <span>Credit Limit</span>
+                                                <span className="font-bold">Rs. {creditLimit!.toLocaleString()}</span>
+                                            </div>
+                                            <div className="space-y-1">
+                                                <div className="flex justify-between text-[10px] text-slate-500">
+                                                    <span>Available Credit</span>
+                                                    <span className={`font-black ${
+                                                        availableCredit <= 0 ? "text-red-600" :
+                                                        availableCredit < creditLimit! * 0.25 ? "text-orange-500" : "text-green-600"
+                                                    }`}>Rs. {availableCredit.toLocaleString()}</span>
+                                                </div>
+                                                <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
+                                                    <div
+                                                        className={`h-full rounded-full transition-all ${
+                                                            availableCredit <= 0 ? "bg-red-500" :
+                                                            availableCredit < creditLimit! * 0.25 ? "bg-orange-400" : "bg-green-500"
+                                                        }`}
+                                                        style={{
+                                                            width: `${Math.min(100, (availableCredit / creditLimit!) * 100)}%`
+                                                        }}
+                                                    />
+                                                </div>
+                                                {totalAmount > 0 && (
+                                                    <div className={`text-[10px] font-bold ${
+                                                        totalAmount > availableCredit ? "text-red-600" : "text-slate-500"
+                                                    }`}>
+                                                        This order: Rs. {totalAmount.toLocaleString()}
+                                                        {totalAmount > availableCredit
+                                                            ? " ⚠ Exceeds available credit!"
+                                                            : ` → After order: Rs. ${(availableCredit - totalAmount).toLocaleString()} left`
+                                                        }
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </>
+                                    )}
+
+                                    {!isCreditAccount && totalAmount > 0 && (
+                                        <div className={`text-[10px] font-bold ${
+                                            totalAmount > supplierBalance ? "text-red-600" : "text-slate-500"
+                                        }`}>
+                                            This order: Rs. {totalAmount.toLocaleString()}
+                                            {totalAmount > supplierBalance
+                                                ? " ⚠ Exceeds balance!"
+                                                : ` → Balance after: Rs. ${(supplierBalance - totalAmount).toLocaleString()}`
+                                            }
+                                        </div>
+                                    )}
+                                </div>
+                            ) : (
+                                <div className="border-t border-slate-200 pt-3">
+                                    <p className="text-xs text-slate-400 italic">No linked company account.</p>
                                 </div>
                             )}
                         </CardContent>

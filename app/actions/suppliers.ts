@@ -11,7 +11,9 @@ export async function getSuppliers() {
       *,
       company_accounts (
         id,
-        current_balance
+        current_balance,
+        credit_limit,
+        status
       )
     `)
         .eq("status", "active")
