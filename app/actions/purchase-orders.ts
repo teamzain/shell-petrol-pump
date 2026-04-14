@@ -10,6 +10,8 @@ export async function createPurchaseOrder(formData: {
     expected_delivery_date: string;
     po_number: string;
     notes?: string;
+    payment_mode?: 'upfront' | 'deferred';
+    is_prepaid?: boolean; // Keep for internal logic if needed, but we'll use payment_mode primary
     products: {
         product_id: string;
         product_type: "fuel" | "oil" | "other";
@@ -19,6 +21,10 @@ export async function createPurchaseOrder(formData: {
     }[];
 }) {
     const supabase = await createClient()
+
+    // 1. Get User
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) throw new Error("Unauthorized")
 
     // --- DATE VALIDATION ---
     await validateTransactionDate(formData.order_date)
@@ -61,6 +67,9 @@ export async function createPurchaseOrder(formData: {
             expected_delivery_date: formData.expected_delivery_date,
             created_at: new Date(formData.order_date).toISOString(),
             notes: formData.notes,
+            payment_mode: formData.payment_mode || 'upfront',
+            payment_status: (formData.payment_mode === 'deferred') ? 'unpaid' : 'paid',
+            paid_amount: (formData.payment_mode === 'deferred') ? 0 : estimatedTotal,
             status: 'pending',
             items: items
         })
@@ -75,70 +84,74 @@ export async function createPurchaseOrder(formData: {
         throw poError
     }
 
-    // 2. Deduct Balance from Supplier's Account
-    const { data: account, error: accountError } = await supabase
-        .from("company_accounts")
-        .select("id, current_balance, credit_limit")
-        .eq("supplier_id", formData.supplier_id)
-        .single()
+    // 2. Financial Impact Handling
+    const isUpfront = formData.payment_mode !== 'deferred'
+    
+    if (isUpfront) {
+        // Validate and Deduct Balance from Supplier's Account (Prepaid Workflow)
+        const { data: account, error: accountError } = await supabase
+            .from("company_accounts")
+            .select("id, current_balance, credit_limit")
+            .eq("supplier_id", formData.supplier_id)
+            .single()
 
-    if (accountError) {
-        console.error("Account Fetch Error:", accountError)
-    } else if (account) {
+        if (accountError || !account) {
+            await supabase.from("purchase_orders").delete().eq("id", po.id)
+            throw new Error("No active company account found for this supplier. Please create an account first.")
+        }
+
         const currentBalance = Number(account.current_balance)
-        const newBalance = currentBalance - estimatedTotal
+        const totalToDeduct = po.estimated_total
+        const newBalance = currentBalance - totalToDeduct
         const creditLimit = account.credit_limit !== null ? Number(account.credit_limit) : null
 
-        // Enforce credit limit: new balance must NOT go below -creditLimit
         if (creditLimit !== null && newBalance < -creditLimit) {
-            // We need to delete the PO we just inserted before throwing
             await supabase.from("purchase_orders").delete().eq("id", po.id)
             const available = currentBalance + creditLimit
             throw new Error(
-                `Credit limit exceeded. Your credit limit with this supplier is Rs. ${creditLimit.toLocaleString()}. ` +
-                `Available credit remaining: Rs. ${Math.max(0, available).toLocaleString()}.`
+                `Credit limit exceeded. The credit limit for this supplier is Rs. ${creditLimit.toLocaleString()}. ` +
+                `Available credit remaining: Rs. ${Math.max(0, available).toLocaleString()}. ` +
+                `This order requires Rs. ${totalToDeduct.toLocaleString()}.`
             )
         }
 
-        // For non-credit accounts, disallow going negative
         if (creditLimit === null && newBalance < 0) {
             await supabase.from("purchase_orders").delete().eq("id", po.id)
             throw new Error(
-                `Insufficient supplier balance. Current balance: Rs. ${currentBalance.toLocaleString()}, Order total: Rs. ${estimatedTotal.toLocaleString()}.`
+                `Insufficient balance. Current balance: Rs. ${currentBalance.toLocaleString()}, Order total: Rs. ${totalToDeduct.toLocaleString()}.`
             )
         }
 
-        // Update balance
         const { error: balanceError } = await supabase
             .from("company_accounts")
-            .update({
-                current_balance: newBalance,
-                updated_at: new Date().toISOString()
-            })
+            .update({ current_balance: newBalance, updated_at: new Date().toISOString() })
             .eq("id", account.id)
 
         if (balanceError) {
-            console.error("Balance Update Error:", balanceError)
-        } else {
-            // Record transaction
-            const { error: txError } = await supabase
-                .from("company_account_transactions")
-                .insert({
-                    company_account_id: account.id,
-                    transaction_type: 'debit',
-                    transaction_source: 'purchase_order',
-                    amount: estimatedTotal,
-                    balance_before: currentBalance,
-                    balance_after: newBalance,
-                    transaction_date: formData.order_date,
-                    reference_number: po.po_number,
-                    purchase_order_id: po.id,
-                    note: `Balance deducted for Purchase Order #${po.po_number}`,
-                    created_by: (await supabase.auth.getUser()).data.user?.id
-                })
-
-            if (txError) console.error("Transaction Record Error:", txError)
+            await supabase.from("purchase_orders").delete().eq("id", po.id)
+            throw new Error("Failed to update supplier account balance.")
         }
+
+        const { error: txError } = await supabase
+            .from("company_account_transactions")
+            .insert({
+                company_account_id: account.id,
+                transaction_type: 'debit',
+                transaction_source: 'purchase_order',
+                amount: totalToDeduct,
+                balance_before: currentBalance,
+                balance_after: newBalance,
+                transaction_date: formData.order_date,
+                reference_number: po.po_number,
+                purchase_order_id: po.id,
+                note: `Balance deducted upfront for Purchase Order #${po.po_number}`,
+                created_by: user.id
+            })
+
+        if (txError) console.error("Transaction Record Error:", txError)
+    } else {
+        // Deferred payment selected. No balance impact at order time.
+        // Liability will be recorded upon delivery via record_delivery_atomic_item.
     }
 
     // 3. Create Notification Reminder
@@ -446,47 +459,23 @@ export async function cancelPurchaseOrderItem(poId: string, itemId: string) {
 export async function getPurchaseSummary(filters?: { date_from?: string; date_to?: string }) {
     const supabase = await createClient()
 
-    // 1. Total Pending/Partial Orders
-    let poQuery = supabase
+    // 1. Fetch all relevant orders to calculate Paid vs Due
+    let query = supabase
         .from("purchase_orders")
-        .select("items, status, ordered_quantity, delivered_quantity, rate_per_liter", { count: 'exact' })
-        .in("status", ["pending", "partially_delivered"])
+        .select("estimated_total, paid_amount, status")
+        .neq("status", "cancelled")
 
-    if (filters?.date_from) poQuery = poQuery.gte("created_at", filters.date_from)
-    if (filters?.date_to) poQuery = poQuery.lte("created_at", filters.date_to)
+    if (filters?.date_from) query = query.gte("created_at", filters.date_from)
+    if (filters?.date_to) query = query.lte("created_at", filters.date_to)
 
-    const { data: committedData, count: pendingCount } = await poQuery
+    const { data: pos } = await query
 
-    // Calculate committed value as the sum of PENDING items only
-    const committedValue = committedData?.reduce((acc, po) => {
-        let poPending = 0
-        if (po.items && Array.isArray(po.items) && po.items.length > 0) {
-            po.items.forEach((item: any) => {
-                const isPending = !['delivered', 'received', 'cancelled'].includes(item.status)
-                if (isPending) {
-                    poPending += Number(item.total_amount || 0)
-                }
-            })
-        } else {
-            // Legacy PO handling
-            const remaining = Math.max(0, Number(po.ordered_quantity || 0) - Number(po.delivered_quantity || 0))
-            poPending = remaining * Number(po.rate_per_liter || 0)
-        }
-        return acc + poPending
-    }, 0) || 0
+    const totalOrders = pos?.filter(po => ['pending', 'partially_delivered'].includes(po.status)).length || 0
+    const totalValue = pos?.reduce((acc, po) => acc + Number(po.estimated_total), 0) || 0
+    const totalPaid = pos?.reduce((acc, po) => acc + Number(po.paid_amount || 0), 0) || 0
+    const totalDue = totalValue - totalPaid
 
-    // 2. Total Settled (Sum of all deliveries)
-    let delQuery = supabase
-        .from("deliveries")
-        .select("delivered_amount") // use capped amount
-
-    if (filters?.date_from) delQuery = delQuery.gte("delivery_date", filters.date_from)
-    if (filters?.date_to) delQuery = delQuery.lte("delivery_date", filters.date_to)
-
-    const { data: settledData } = await delQuery
-    const totalSettled = settledData?.reduce((acc, d) => acc + Number(d.delivered_amount || 0), 0) || 0
-
-    // 3. New Specific Hold Stats — show ALL holds regardless of date filter
+    // 2. Fetch Hold Stats (Independent of date filter)
     const { data: holdData } = await supabase
         .from("po_hold_records")
         .select("hold_amount, status")
@@ -496,10 +485,10 @@ export async function getPurchaseSummary(filters?: { date_from?: string; date_to
     const totalCancelled = holdData?.filter(h => h.status === 'cancelled').reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
 
     return {
-        totalOrders: pendingCount || 0,
-        totalValue: committedValue,
-        totalPaid: totalSettled,
-        totalDue: committedValue, // Outstanding is now exactly the committed pending value
+        totalOrders,
+        totalValue,
+        totalPaid,
+        totalDue,
         totalOnHold,
         totalReleased,
         totalCancelled
@@ -750,3 +739,5 @@ export async function cancelPOHold(holdId: string, reason: string) {
     revalidatePath("/dashboard/purchases")
     return { success: true }
 }
+
+

@@ -83,7 +83,10 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
                 unit_type: del.unit_type || poData?.unit_type
             }
         }
-        acc[key].debited_value += Number(del.delivered_amount || (Math.min(Number(del.delivered_quantity || 0), Number(del.quantity_ordered || 0)) * Number(poData?.rate_per_liter || 0)))
+        const itemValue = Number(del.delivered_amount || (Math.min(Number(del.delivered_quantity || 0), Number(del.quantity_ordered || 0)) * Number(poData?.rate_per_liter || 0)))
+        
+        acc[key].debited_value += itemValue
+        
         acc[key].hold_value += Number(del.hold_amount || 0)
 
         // Calculate short/extra for this specific delivery item
@@ -214,6 +217,7 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
                                     <TableCell className="text-right font-black text-blue-800 text-xs text-nowrap pl-4">
                                         Rs. {Number(del.debited_value).toLocaleString()}
                                     </TableCell>
+
                                     <TableCell className="text-right font-bold text-amber-700 text-xs text-nowrap pl-4">
                                         Rs. {Number(del.hold_value).toLocaleString()}
                                     </TableCell>

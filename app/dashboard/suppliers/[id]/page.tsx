@@ -22,7 +22,7 @@ import {
     AlertCircle
 } from "lucide-react"
 import { BrandLoader } from "@/components/ui/brand-loader"
-import { getSupplierById, getSupplierLedger, createCompanyAccount, addLedgerTransaction, setSupplierCreditLimit } from "@/app/actions/suppliers"
+import { getSupplierById, getSupplierLedger, createCompanyAccount, addLedgerTransaction } from "@/app/actions/suppliers"
 import { toast } from "sonner"
 import {
     Dialog,
@@ -54,8 +54,6 @@ export default function SupplierDetailPage() {
         ref: "",
         note: ""
     })
-    const [creditLimitDialogOpen, setCreditLimitDialogOpen] = useState(false)
-    const [newCreditLimit, setNewCreditLimit] = useState("")
 
     const fetchData = async () => {
         setLoading(true)
@@ -131,12 +129,7 @@ export default function SupplierDetailPage() {
     const accountData = supplier.company_accounts
     const account = Array.isArray(accountData) ? accountData[0] : accountData
     const balance = account ? Number(account.current_balance) : 0
-    const creditLimit = account?.credit_limit ? Number(account.credit_limit) : null
-    const isCreditAccount = creditLimit !== null
-    // How much credit is still available (from current balance toward -creditLimit)
-    const creditUsed = isCreditAccount ? Math.abs(Math.min(0, balance)) : 0
-    const creditAvailable = isCreditAccount ? Math.max(0, creditLimit - creditUsed) : 0
-    const creditUsagePercent = isCreditAccount ? Math.min(100, (creditUsed / creditLimit) * 100) : 0
+    const openingDue = account ? Number(account.opening_due || 0) : 0
 
     return (
         <div className="flex flex-col gap-6 max-w-6xl mx-auto">
@@ -162,9 +155,14 @@ export default function SupplierDetailPage() {
                             {supplier.name.charAt(0)}
                         </div>
                         <CardTitle className="text-xl font-bold">{supplier.name}</CardTitle>
-                        <Badge variant="secondary" className="mx-auto uppercase text-[10px] tracking-widest font-black">
-                            {supplier.product_type === 'both' ? 'Fuel & Oil' : supplier.product_type} Supplier
-                        </Badge>
+                        <div className="flex flex-col gap-1 mt-2">
+                            <Badge variant="secondary" className="mx-auto uppercase text-[10px] tracking-widest font-black">
+                                {supplier.product_type === 'both' ? 'Fuel & Oil' : supplier.product_type} Supplier
+                            </Badge>
+                            <Badge variant="outline" className={`mx-auto text-[9px] font-bold h-4 px-2 ${supplier.supplier_type === 'local' ? 'text-amber-600 border-amber-200 bg-amber-50' : 'text-blue-600 border-blue-200 bg-blue-50'}`}>
+                                {supplier.supplier_type === 'local' ? 'Local Supplier' : 'Company'}
+                            </Badge>
+                        </div>
                     </CardHeader>
                     <CardContent className="space-y-4">
                         <div className="space-y-3 pt-2">
@@ -224,26 +222,13 @@ export default function SupplierDetailPage() {
                                     }`}>
                                         {balance < 0 ? "-" : ""}Rs. {Math.abs(balance).toLocaleString()}
                                     </div>
-                                    {isCreditAccount && (
-                                        <div className="mt-2 space-y-1">
-                                            <div className="flex items-center justify-between text-[10px] opacity-75">
-                                                <span>Credit Used</span>
-                                                <span>{creditUsagePercent.toFixed(1)}% of Rs. {creditLimit!.toLocaleString()} limit</span>
-                                            </div>
-                                            <div className="h-1.5 rounded-full bg-white/20 overflow-hidden w-48">
-                                                <div
-                                                    className={`h-full rounded-full transition-all ${
-                                                        creditUsagePercent >= 100 ? "bg-red-400" :
-                                                        creditUsagePercent >= 75 ? "bg-orange-300" : "bg-green-300"
-                                                    }`}
-                                                    style={{ width: `${creditUsagePercent}%` }}
-                                                />
-                                            </div>
-                                            <div className="text-[10px] opacity-75">
-                                                Available credit: <strong>Rs. {creditAvailable.toLocaleString()}</strong>
-                                            </div>
+                                    {openingDue > 0 && (
+                                        <div className="mt-2 pt-2 border-t border-white/20">
+                                            <div className="text-[10px] opacity-75 uppercase font-bold tracking-wider">Separate Opening Due</div>
+                                            <div className="font-bold text-lg">Rs. {openingDue.toLocaleString()}</div>
                                         </div>
                                     )}
+
                                 </div>
                             </div>
                             {!account ? (
@@ -347,26 +332,11 @@ export default function SupplierDetailPage() {
                                     placeholder="0.00"
                                 />
                             </div>
-                            {/* Debit warning: for credit accounts, check against credit limit */}
-                            {txType === 'debit' && parseFloat(txData.amount) > 0 && (() => {
-                                if (isCreditAccount) {
-                                    const newBal = balance - parseFloat(txData.amount)
-                                    if (newBal < -creditLimit!) {
-                                        return (
-                                            <p className="text-[10px] text-red-500 font-bold uppercase tracking-tighter">
-                                                Exceeds credit limit! Credit limit: Rs. {creditLimit!.toLocaleString()} — Available: Rs. {creditAvailable.toLocaleString()}
-                                            </p>
-                                        )
-                                    }
-                                } else if (parseFloat(txData.amount) > balance) {
-                                    return (
-                                        <p className="text-[10px] text-red-500 font-bold uppercase tracking-tighter">
-                                            Error: Amount exceeds current balance (Rs. {balance.toLocaleString()})
-                                        </p>
-                                    )
-                                }
-                                return null
-                            })()}
+                            {txType === 'debit' && parseFloat(txData.amount) > 0 && balance < 0 && (
+                                <p className="text-[10px] text-amber-500 font-bold uppercase tracking-tighter">
+                                    Notice: Account is already in negative balance (Rs. {Math.abs(balance).toLocaleString()})
+                                </p>
+                            )}
                         </div>
                         <div className="grid gap-2">
                             <Label htmlFor="date">Transaction Date</Label>
@@ -402,12 +372,6 @@ export default function SupplierDetailPage() {
                                 type="submit"
                                 disabled={actionLoading || (() => {
                                     if (!parseFloat(txData.amount) || parseFloat(txData.amount) <= 0) return true
-                                    if (txType === 'debit') {
-                                        if (isCreditAccount) {
-                                            return (balance - parseFloat(txData.amount)) < -creditLimit!
-                                        }
-                                        return parseFloat(txData.amount) > balance
-                                    }
                                     return false
                                 })()}
                             >

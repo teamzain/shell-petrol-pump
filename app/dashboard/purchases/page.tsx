@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -55,20 +55,21 @@ export default function PurchasesPage() {
     initDate()
   }, [])
 
-  useEffect(() => {
-    const fetchStats = async () => {
-      try {
-        const data = await getPurchaseSummary({
-          date_from: dateRange.from,
-          date_to: dateRange.to
-        })
-        setStats(data)
-      } catch (error) {
-        console.error("Failed to fetch purchase stats:", error)
-      }
+  const fetchStats = useCallback(async () => {
+    try {
+      const data = await getPurchaseSummary({
+        date_from: dateRange.from,
+        date_to: dateRange.to
+      })
+      setStats(data)
+    } catch (error) {
+      console.error("Failed to fetch purchase stats:", error)
     }
+  }, [dateRange])
+
+  useEffect(() => {
     fetchStats()
-  }, [activeTab, dateRange]) // Refresh when tabs or dates change
+  }, [activeTab, fetchStats]) // Refresh when tabs or dates change
 
   const handleRecordDelivery = (po: any) => {
     setSelectedPOForDelivery(po)
@@ -261,6 +262,7 @@ export default function PurchasesPage() {
           <TabsContent value="holds" className="mt-0 focus-visible:outline-none">
             <ActiveHoldsTab dateFilters={dateRange} />
           </TabsContent>
+
         </Tabs>
       </div>
     </TooltipProvider>

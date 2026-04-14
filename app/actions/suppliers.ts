@@ -12,7 +12,7 @@ export async function getSuppliers() {
       company_accounts (
         id,
         current_balance,
-        credit_limit,
+        opening_due,
         status
       )
     `)
@@ -32,7 +32,7 @@ export async function getSupplierById(id: string) {
       company_accounts (
         id,
         current_balance,
-        credit_limit,
+        opening_due,
         status
       )
     `)
@@ -54,6 +54,7 @@ export async function upsertSupplier(formData: any, supplierId?: string) {
         address: formData.address,
         ntn_number: formData.ntn_number,
         product_type: formData.product_type,
+        supplier_type: formData.supplier_type || "company",
         status: formData.status || "active",
         updated_at: new Date().toISOString(),
     }
@@ -91,7 +92,7 @@ export async function upsertSupplier(formData: any, supplierId?: string) {
     }
 }
 
-export async function createCompanyAccount(supplierId: string, options?: { credit_limit?: number }) {
+export async function createCompanyAccount(supplierId: string, options?: { opening_due?: number }) {
     const supabase = await createClient()
 
     // Check if exists
@@ -102,11 +103,11 @@ export async function createCompanyAccount(supplierId: string, options?: { credi
         .single()
 
     if (existing) {
-        // Update credit_limit if provided
-        if (options?.credit_limit !== undefined) {
+        // Update opening_due if provided
+        if (options?.opening_due !== undefined) {
             await supabase
                 .from("company_accounts")
-                .update({ credit_limit: options.credit_limit > 0 ? options.credit_limit : null })
+                .update({ opening_due: options.opening_due > 0 ? options.opening_due : 0 })
                 .eq("id", existing.id)
         }
         return { success: true, id: existing.id }
@@ -117,7 +118,7 @@ export async function createCompanyAccount(supplierId: string, options?: { credi
         .insert({
             supplier_id: supplierId,
             current_balance: 0,
-            credit_limit: options?.credit_limit && options.credit_limit > 0 ? options.credit_limit : null,
+            opening_due: options?.opening_due || 0,
             status: "active"
         })
         .select("id")
@@ -201,20 +202,6 @@ export async function addLedgerTransaction(payload: {
     } else {
         // Debit = money going out / order placed (decreases balance, may go negative)
         newBalance -= payload.amount
-
-        // Enforce credit limit: balance must NOT go below -creditLimit
-        if (creditLimit !== null && newBalance < -creditLimit) {
-            const available = Number(account.current_balance) + creditLimit
-            throw new Error(
-                `Credit limit exceeded. Credit limit is Rs. ${creditLimit.toLocaleString()}. ` +
-                `Available credit: Rs. ${Math.max(0, available).toLocaleString()}.`
-            )
-        }
-
-        // For non-credit accounts (no credit_limit), disallow going negative
-        if (creditLimit === null && newBalance < 0) {
-            throw new Error("Insufficient balance for this debit transaction")
-        }
     }
 
     // Determine transaction source
@@ -362,6 +349,9 @@ export async function getSupplierLedger(companyAccountId: string, filters?: { da
         } else if (t.transaction_type === 'debit') {
             runningBalance -= Number(t.amount)
             totalDebits += Number(t.amount)
+            if (t.transaction_source === 'opening_balance') {
+                openingBalance -= Number(t.amount)
+            }
         }
 
         const balanceAfter = runningBalance
@@ -401,8 +391,7 @@ export async function getSupplierLedger(companyAccountId: string, filters?: { da
 
             // Re-calculate the subsequent row balances for UI perfection
             let newRunningBalance = discrepancy
-            if (discrepancy > 0) openingBalance += discrepancy
-
+            openingBalance += discrepancy
             for (let i = 1; i < enrichedTransactions.length; i++) {
                 const updatedRow = { ...enrichedTransactions[i] }
                 updatedRow.balance_before = newRunningBalance
@@ -603,3 +592,13 @@ export async function deleteSupplier(supplierId: string) {
     revalidatePath("/dashboard/suppliers")
     return { success: true }
 }
+
+export async function getActiveBankAccounts() {
+    const supabase = await createClient()
+    const { data } = await supabase
+        .from('bank_accounts')
+        .select('id, bank_name, account_name, account_number')
+        .eq('status', 'active')
+    return data || []
+}
+

@@ -199,6 +199,7 @@ export default function SuppliersPage() {
                   <TableHead className="font-bold">Contact Details</TableHead>
                   <TableHead className="font-bold text-center">Account</TableHead>
                   <TableHead className="font-bold text-right">Balance</TableHead>
+
                   <TableHead className="font-bold text-center">Status</TableHead>
                   <TableHead className="font-bold text-right">Actions</TableHead>
                 </TableRow>
@@ -206,7 +207,7 @@ export default function SuppliersPage() {
               <TableBody>
                 {filteredSuppliers.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                    <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
                       No suppliers found.
                     </TableCell>
                   </TableRow>
@@ -225,7 +226,12 @@ export default function SuppliersPage() {
                               {supplier.name.charAt(0)}
                             </div>
                             <div>
-                              <div className="font-bold text-slate-900">{supplier.name}</div>
+                              <div className="font-bold text-slate-900 flex items-center gap-2">
+                                {supplier.name}
+                                <Badge variant="outline" className={`text-[9px] h-4 px-1 lowercase ${supplier.supplier_type === 'local' ? 'text-amber-600 border-amber-200 bg-amber-50' : 'text-blue-600 border-blue-200 bg-blue-50'}`}>
+                                  {supplier.supplier_type === 'local' ? 'local' : 'company'}
+                                </Badge>
+                              </div>
                               <div className="text-[10px] uppercase font-bold tracking-tighter text-muted-foreground">
                                 {supplier.product_type === 'both' ? 'Fuel & Oil' : supplier.product_type} Supplier
                               </div>
@@ -265,6 +271,8 @@ export default function SuppliersPage() {
                             <span className="text-muted-foreground">-</span>
                           )}
                         </TableCell>
+
+
                         <TableCell className="text-center">
                           <Badge
                             variant={supplier.status === "active" ? "secondary" : "outline"}

@@ -47,7 +47,7 @@ type SupplierRow = {
     product_type?: string
     supplier_type?: string
     status: string
-    company_accounts?: { id: string; current_balance: number }[] | { id: string; current_balance: number }
+    company_accounts?: { id: string; current_balance: number; opening_due?: number }[] | { id: string; current_balance: number; opening_due?: number }
     purchase_orders?: any[]
     // computed
     periodPurchases: number
@@ -402,12 +402,16 @@ function SupplierLedgerPanel({ supplier, filters, onLedgerDataLoaded }: { suppli
 
             {/* Account Balance Banner (only if account exists) */}
             {hasAccount && accountBalance !== null && (
-                <div className={`flex items-center justify-between px-4 py-3 rounded-xl border font-bold text-sm ${accountBalance >= 0 ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-rose-50 border-rose-200 text-rose-800"}`}>
-                    <div className="flex items-center gap-2">
-                        <Wallet className="h-4 w-4" />
-                        <span className="text-xs font-black uppercase tracking-wider">Current Account Balance (All Time)</span>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className={`flex items-center justify-between px-4 py-2.5 rounded-xl border font-bold ${accountBalance >= 0 ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-rose-50 border-rose-200 text-rose-800"}`}>
+                        <div className="flex items-center gap-2">
+                            <Wallet className="h-3.5 w-3.5" />
+                            <span className="text-[10px] font-black uppercase tracking-wider">Current Balance</span>
+                        </div>
+                        <span className="text-sm font-black font-mono">Rs. {accountBalance.toLocaleString()}</span>
                     </div>
-                    <span className="text-lg font-black font-mono">Rs. {accountBalance.toLocaleString()}</span>
+
+
                 </div>
             )}
 
@@ -924,7 +928,8 @@ export function SupplierPerformanceReport({ filters, onDetailClick, onDataLoaded
                         *,
                         company_accounts (
                             id,
-                            current_balance
+                            current_balance,
+                            opening_due
                         )
                     `)
 
@@ -1084,10 +1089,16 @@ export function SupplierPerformanceReport({ filters, onDetailClick, onDataLoaded
         return sum + (account ? Number(account.current_balance || 0) : 0)
     }, 0)
 
+    const totalOpeningDue = suppliers.reduce((sum, s) => {
+        const accountData = s.company_accounts
+        const account = Array.isArray(accountData) ? accountData[0] : accountData
+        return sum + (account ? Number(account.opening_due || 0) : 0)
+    }, 0)
+
     return (
         <div className="space-y-6">
             {/* ── Overview Cards ── */}
-            <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
+            <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-7">
                 <Card className="bg-primary/5 border-primary/10">
                     <CardHeader className="pb-2">
                         <CardTitle className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest px-0">Total Suppliers</CardTitle>
@@ -1097,6 +1108,15 @@ export function SupplierPerformanceReport({ filters, onDetailClick, onDataLoaded
                             <div className="text-2xl font-black">{suppliers.length}</div>
                             <div className="text-[10px] text-muted-foreground mb-1 font-medium">in view</div>
                         </div>
+                    </CardContent>
+                </Card>
+                <Card className="bg-rose-50 border-rose-100">
+                    <CardHeader className="pb-2">
+                        <CardTitle className="text-[10px] font-bold text-rose-600 uppercase tracking-widest px-0 text-center">Opening Due</CardTitle>
+                    </CardHeader>
+                    <CardContent className="px-5 text-center">
+                        <div className="text-xl font-black text-rose-700">Rs. {totalOpeningDue.toLocaleString()}</div>
+                        <div className="text-[10px] text-rose-600/70 mt-1 font-medium italic">Fixed Opening Debt</div>
                     </CardContent>
                 </Card>
                 <Card className="bg-emerald-50 border-emerald-100">
@@ -1185,7 +1205,7 @@ export function SupplierPerformanceReport({ filters, onDetailClick, onDataLoaded
                                 return (
                                     <div key={s.id}>
                                         {/* ── Supplier Row ── */}
-                                        <div className={`grid grid-cols-2 sm:grid-cols-[2fr,1fr,1fr,1fr,1fr,auto] items-center gap-4 px-4 py-3 transition-colors ${isExpanded ? "bg-primary/5" : "hover:bg-slate-50/60"} overflow-x-auto`}>
+                                        <div className={`grid grid-cols-2 sm:grid-cols-[2fr,1fr,1fr,1fr,1fr,1fr,1fr,auto] items-center gap-4 px-4 py-3 transition-colors ${isExpanded ? "bg-primary/5" : "hover:bg-slate-50/60"} overflow-x-auto`}>
 
                                             {/* Supplier info */}
                                             <div className="flex items-center gap-3">
@@ -1224,6 +1244,18 @@ export function SupplierPerformanceReport({ filters, onDetailClick, onDataLoaded
                                                     </div>
                                                 ) : (
                                                     <span className="text-xs text-muted-foreground italic">No account</span>
+                                                )}
+                                            </div>
+
+                                            {/* Opening Due */}
+                                            <div>
+                                                <div className="text-[9px] font-black uppercase text-muted-foreground tracking-wider mb-1">Opening Due</div>
+                                                {account && account.opening_due ? (
+                                                    <div className="font-mono font-bold text-sm text-red-600">
+                                                        Rs. {Number(account.opening_due).toLocaleString()}
+                                                    </div>
+                                                ) : (
+                                                    <span className="text-[10px] text-muted-foreground italic">No Due</span>
                                                 )}
                                             </div>
 

@@ -13,6 +13,7 @@ import {
     FormMessage,
     FormDescription,
 } from "@/components/ui/form"
+import { Badge } from "@/components/ui/badge"
 import {
     Select,
     SelectContent,
@@ -118,8 +119,8 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
     }
 
     async function onSubmit(values: POFormValues) {
-        if (balanceWarning) {
-            toast.error("Supplier's available balance is too low to process this purchase.")
+        if (!hasAccount) {
+            toast.error("Supplier has no active company account. Please create one first.")
             return
         }
 
@@ -150,22 +151,8 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
 
     const activeAccount = accounts.find((acc: any) => acc.status === 'active') || accounts[0]
     const supplierBalance = Number(activeAccount?.current_balance || 0)
-    const creditLimit = activeAccount?.credit_limit ? Number(activeAccount.credit_limit) : null
-    const isCreditAccount = creditLimit !== null
-
-    // For credit accounts: available = how much more they can borrow (creditLimit - |negative balance|)
-    // For normal accounts: available = positive balance
-    const availableCredit = isCreditAccount
-        ? Math.max(0, creditLimit + supplierBalance) // supplierBalance is negative, so creditLimit + negBal = remaining
-        : supplierBalance
-
-    // Warning: for credit accounts, warn if order exceeds available credit
-    // For normal accounts, warn if order exceeds positive balance
-    const balanceWarning = selectedSupplier && (
-        isCreditAccount
-            ? totalAmount > availableCredit
-            : totalAmount > supplierBalance
-    )
+    const hasAccount = accounts.length > 0 && !!activeAccount
+    const balanceWarning = selectedSupplier && !hasAccount
 
     return (
         <div className="grid gap-6 md:grid-cols-3">
@@ -276,6 +263,8 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
                                                 </FormItem>
                                             )}
                                         />
+
+
                                     </div>
 
                                     <div className="space-y-4">
@@ -434,23 +423,11 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
                     <Alert variant="destructive" className="bg-red-50 text-red-800 border-red-200">
                         <AlertCircle className="h-4 w-4" />
                         <AlertTitle className="font-bold text-xs uppercase tracking-wider">
-                            {isCreditAccount ? "Credit Limit Reached" : "Low Account Balance"}
+                            No Company Account
                         </AlertTitle>
                         <AlertDescription className="text-xs mt-1">
-                            {isCreditAccount ? (
-                                <>
-                                    Available credit: <strong>Rs. {availableCredit.toLocaleString()}</strong>.
-                                    This order requires <strong>Rs. {totalAmount.toLocaleString()}</strong>.
-                                    The credit limit of Rs. {creditLimit!.toLocaleString()} would be exceeded.
-                                    Please transfer money to the supplier first.
-                                </>
-                            ) : (
-                                <>
-                                    Supplier account balance is Rs. {supplierBalance.toLocaleString()}.
-                                    This order requires Rs. {totalAmount.toLocaleString()}.
-                                    <strong> Orders cannot exceed the account balance.</strong>
-                                </>
-                            )}
+                            This supplier has no active company account linked.
+                            <strong> You must create a company account before placing orders.</strong>
                         </AlertDescription>
                     </Alert>
                 )}
@@ -486,55 +463,10 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
                                         </span>
                                     </div>
 
-                                    {isCreditAccount && (
-                                        <>
-                                            <div className="flex justify-between items-center text-xs text-slate-500">
-                                                <span>Credit Limit</span>
-                                                <span className="font-bold">Rs. {creditLimit!.toLocaleString()}</span>
-                                            </div>
-                                            <div className="space-y-1">
-                                                <div className="flex justify-between text-[10px] text-slate-500">
-                                                    <span>Available Credit</span>
-                                                    <span className={`font-black ${
-                                                        availableCredit <= 0 ? "text-red-600" :
-                                                        availableCredit < creditLimit! * 0.25 ? "text-orange-500" : "text-green-600"
-                                                    }`}>Rs. {availableCredit.toLocaleString()}</span>
-                                                </div>
-                                                <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
-                                                    <div
-                                                        className={`h-full rounded-full transition-all ${
-                                                            availableCredit <= 0 ? "bg-red-500" :
-                                                            availableCredit < creditLimit! * 0.25 ? "bg-orange-400" : "bg-green-500"
-                                                        }`}
-                                                        style={{
-                                                            width: `${Math.min(100, (availableCredit / creditLimit!) * 100)}%`
-                                                        }}
-                                                    />
-                                                </div>
-                                                {totalAmount > 0 && (
-                                                    <div className={`text-[10px] font-bold ${
-                                                        totalAmount > availableCredit ? "text-red-600" : "text-slate-500"
-                                                    }`}>
-                                                        This order: Rs. {totalAmount.toLocaleString()}
-                                                        {totalAmount > availableCredit
-                                                            ? " ⚠ Exceeds available credit!"
-                                                            : ` → After order: Rs. ${(availableCredit - totalAmount).toLocaleString()} left`
-                                                        }
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </>
-                                    )}
-
-                                    {!isCreditAccount && totalAmount > 0 && (
-                                        <div className={`text-[10px] font-bold ${
-                                            totalAmount > supplierBalance ? "text-red-600" : "text-slate-500"
-                                        }`}>
+                                    {totalAmount > 0 && (
+                                        <div className="text-[10px] font-bold text-slate-500">
                                             This order: Rs. {totalAmount.toLocaleString()}
-                                            {totalAmount > supplierBalance
-                                                ? " ⚠ Exceeds balance!"
-                                                : ` → Balance after: Rs. ${(supplierBalance - totalAmount).toLocaleString()}`
-                                            }
+                                            → Balance after: Rs. {(supplierBalance - totalAmount).toLocaleString()}
                                         </div>
                                     )}
                                 </div>

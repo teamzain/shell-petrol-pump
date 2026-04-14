@@ -22,6 +22,16 @@ import {
 } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
 import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
+import {
     ArrowLeft,
     Download,
     Printer,
@@ -34,7 +44,8 @@ import {
     Eye
 } from "lucide-react"
 import { BrandLoader } from "@/components/ui/brand-loader"
-import { getSupplierById, getSupplierLedger } from "@/app/actions/suppliers"
+import { getSupplierById, getSupplierLedger, getActiveBankAccounts } from "@/app/actions/suppliers"
+import { recordBalanceTransaction } from "@/app/actions/balance"
 import { toast } from "sonner"
 
 export default function SupplierTransactionsPage() {
@@ -43,6 +54,19 @@ export default function SupplierTransactionsPage() {
     const [supplier, setSupplier] = useState<any>(null)
     const [transactions, setTransactions] = useState<any[]>([])
     const [loading, setLoading] = useState(true)
+
+    // Pay Dues States
+    const [txDialogOpen, setTxDialogOpen] = useState(false)
+    const [txActionLoading, setTxActionLoading] = useState(false)
+    const [bankAccounts, setBankAccounts] = useState<any[]>([])
+    
+    const [txData, setTxData] = useState({
+        method: "cash",
+        bank_account_id: "none",
+        amount: "",
+        date: new Date().toISOString().split("T")[0],
+        note: ""
+    })
 
     // Filter States
     const [txTypeFilter, setTxTypeFilter] = useState<string>("all")
@@ -59,6 +83,9 @@ export default function SupplierTransactionsPage() {
                 const ledgerData = await getSupplierLedger(account.id)
                 setTransactions(ledgerData.transactions || [])
             }
+            
+            const banks = await getActiveBankAccounts()
+            setBankAccounts(banks || [])
         } catch (error: any) {
             console.error(error)
             toast.error(error?.message || "Failed to load transactions")
@@ -70,6 +97,38 @@ export default function SupplierTransactionsPage() {
     useEffect(() => {
         if (id) fetchData()
     }, [id])
+
+    const handlePayDues = async (e: React.FormEvent) => {
+        e.preventDefault()
+        if (!txData.amount || Number(txData.amount) <= 0) return
+        
+        setTxActionLoading(true)
+        try {
+            await recordBalanceTransaction({
+                transaction_type: 'transfer_to_supplier',
+                amount: Number(txData.amount),
+                supplier_id: id as string,
+                bank_account_id: txData.method === 'bank' && txData.bank_account_id !== 'none' ? txData.bank_account_id : undefined,
+                description: `${txData.note || 'Payment to Supplier'} (payed due amount)`,
+                date: txData.date
+            })
+            
+            toast.success("Payment recorded and balance updated.")
+            setTxDialogOpen(false)
+            setTxData({
+                method: "cash",
+                bank_account_id: "none",
+                amount: "",
+                date: new Date().toISOString().split("T")[0],
+                note: ""
+            })
+            fetchData() 
+        } catch (error: any) {
+            toast.error(error.message || "Failed to record payment")
+        } finally {
+            setTxActionLoading(false)
+        }
+    }
 
     if (loading) {
         return (
@@ -114,6 +173,9 @@ export default function SupplierTransactionsPage() {
                     </div>
                 </div>
                 <div className="flex gap-2">
+                    <Button variant="default" size="sm" onClick={() => setTxDialogOpen(true)} className="bg-orange-600 hover:bg-orange-700 text-white font-bold tracking-wider">
+                        Pay Dues
+                    </Button>
                     <Button variant="outline" size="sm">
                         <Download className="mr-2 h-4 w-4" /> Export CSV
                     </Button>
@@ -132,8 +194,19 @@ export default function SupplierTransactionsPage() {
                     </CardHeader>
                     <CardContent>
                         <div className="text-2xl font-black text-blue-700">
-                            Rs. {(transactions.find(t => t.transaction_source === 'opening_balance')?.amount ||
-                                (transactions.length > 0 && transactions[0].transaction_type === 'credit' ? transactions[0].amount : 0))?.toLocaleString() || "0"}
+                            Rs. {
+                                (() => {
+                                    const openingTx = transactions.find(t => t.transaction_source === 'opening_balance');
+                                    if (openingTx) {
+                                        const amount = Number(openingTx.amount);
+                                        return (openingTx.transaction_type === 'debit' ? -amount : amount).toLocaleString();
+                                    }
+                                    if (transactions.length > 0 && transactions[0].transaction_type === 'credit') {
+                                        return Number(transactions[0].amount).toLocaleString();
+                                    }
+                                    return "0";
+                                })()
+                            }
                         </div>
                     </CardContent>
                 </Card>
@@ -159,7 +232,9 @@ export default function SupplierTransactionsPage() {
                     </CardHeader>
                     <CardContent>
                         <div className="text-2xl font-black text-red-700">
-                            Rs. {transactions.filter(t => t.transaction_type === 'debit').reduce((acc, t) => acc + Number(t.amount), 0).toLocaleString()}
+                            Rs. {transactions
+                                .filter(t => t.transaction_type === 'debit' && t.transaction_source !== 'opening_balance')
+                                .reduce((acc, t) => acc + Number(t.amount), 0).toLocaleString()}
                         </div>
                     </CardContent>
                 </Card>
@@ -330,6 +405,92 @@ export default function SupplierTransactionsPage() {
                     </Table>
                 </CardContent>
             </Card>
+
+            <Dialog open={txDialogOpen} onOpenChange={setTxDialogOpen}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Pay Supplier Dues</DialogTitle>
+                        <DialogDescription>
+                            Record a payment to this supplier. This will reduce your physical cash or bank balance and credit the supplier's account.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <form onSubmit={handlePayDues} className="space-y-4 pt-4">
+                        <div className="grid gap-2">
+                            <Label>Payment Method</Label>
+                            <Select value={txData.method} onValueChange={(val) => setTxData({ ...txData, method: val })}>
+                                <SelectTrigger>
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="cash">Cash Account</SelectItem>
+                                    <SelectItem value="bank">Bank Account</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        
+                        {txData.method === "bank" && (
+                            <div className="grid gap-2">
+                                <Label>Select Bank Account</Label>
+                                <Select value={txData.bank_account_id} onValueChange={(val) => setTxData({ ...txData, bank_account_id: val })}>
+                                    <SelectTrigger>
+                                        <SelectValue placeholder="Select Bank..." />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="none" disabled>Select Bank...</SelectItem>
+                                        {bankAccounts.map((b) => (
+                                            <SelectItem key={b.id} value={b.id}>{b.account_name} ({b.bank_name})</SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                        )}
+                        
+                        <div className="grid gap-2">
+                            <Label>Transaction Date</Label>
+                            <Input
+                                type="date"
+                                required
+                                value={txData.date}
+                                onChange={(e) => setTxData({ ...txData, date: e.target.value })}
+                            />
+                        </div>
+                        
+                        <div className="grid gap-2">
+                            <Label>Amount (PKR)</Label>
+                            <div className="relative">
+                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm font-bold">Rs.</span>
+                                <Input
+                                    type="number"
+                                    className="pl-10 font-bold"
+                                    required
+                                    value={txData.amount}
+                                    onChange={(e) => setTxData({ ...txData, amount: e.target.value })}
+                                    placeholder="0.00"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="grid gap-2">
+                            <Label>Note / Comment</Label>
+                            <Textarea
+                                placeholder="Details about this payment..."
+                                value={txData.note}
+                                onChange={(e) => setTxData({ ...txData, note: e.target.value })}
+                            />
+                        </div>
+
+                        <DialogFooter className="gap-2">
+                            <Button type="button" variant="outline" onClick={() => setTxDialogOpen(false)}>Cancel</Button>
+                            <Button
+                                type="submit"
+                                disabled={txActionLoading || (txData.method === "bank" && txData.bank_account_id === "none") || !parseFloat(txData.amount)}
+                            >
+                                {txActionLoading ? <BrandLoader size="xs" /> : "Save Payment"}
+                            </Button>
+                        </DialogFooter>
+                    </form>
+                </DialogContent>
+            </Dialog>
         </div>
     )
 }

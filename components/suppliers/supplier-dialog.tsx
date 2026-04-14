@@ -31,7 +31,7 @@ import {
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
-import { upsertSupplier } from "@/app/actions/suppliers"
+import { upsertSupplier, createCompanyAccount } from "@/app/actions/suppliers"
 import { BrandLoader } from "@/components/ui/brand-loader"
 
 const supplierSchema = z.object({
@@ -42,6 +42,7 @@ const supplierSchema = z.object({
   address: z.string().optional(),
   ntn_number: z.string().optional(),
   product_type: z.enum(["fuel", "oil", "both"]),
+  supplier_type: z.enum(["local", "company"]),
   status: z.enum(["active", "inactive"]),
 })
 
@@ -65,6 +66,7 @@ export function SupplierDialog({ open, onOpenChange, supplier, onSuccess }: Supp
       address: "",
       ntn_number: "",
       product_type: "both",
+      supplier_type: "company",
       status: "active",
     },
   })
@@ -79,6 +81,7 @@ export function SupplierDialog({ open, onOpenChange, supplier, onSuccess }: Supp
         address: supplier.address || "",
         ntn_number: supplier.ntn_number || "",
         product_type: supplier.product_type || "both",
+        supplier_type: supplier.supplier_type || "company",
         status: supplier.status || "active",
       })
     }
@@ -206,6 +209,27 @@ export function SupplierDialog({ open, onOpenChange, supplier, onSuccess }: Supp
               />
               <FormField
                 control={form.control}
+                name="supplier_type"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Classification</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Classification" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="company">Company</SelectItem>
+                        <SelectItem value="local">Local Supplier</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
                 name="status"
                 render={({ field }) => (
                   <FormItem>
@@ -225,6 +249,7 @@ export function SupplierDialog({ open, onOpenChange, supplier, onSuccess }: Supp
                   </FormItem>
                 )}
               />
+
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
