@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache"
 
 export async function getSuppliers() {
     const supabase = await createClient()
-    const { data, error } = await supabase
+    let query = supabase
         .from("suppliers")
         .select(`
       *,
@@ -17,7 +17,8 @@ export async function getSuppliers() {
       )
     `)
         .eq("status", "active")
-        .order("name")
+
+    const { data, error } = await query.order("name")
 
     if (error) throw error
     return data
@@ -131,31 +132,25 @@ export async function createCompanyAccount(supplierId: string, options?: { openi
     return { success: true, id: data.id }
 }
 
-export async function setSupplierCreditLimit(companyAccountId: string, creditLimit: number | null) {
+export async function validateSupplierBalance(supplierId: string, requiredAmount: number) {
     const supabase = await createClient()
-
-    const { data: account, error: accError } = await supabase
+    const { data: account, error } = await supabase
         .from("company_accounts")
-        .select("supplier_id")
-        .eq("id", companyAccountId)
+        .select("id, current_balance")
+        .eq("supplier_id", supplierId)
         .single()
 
-    if (accError) throw accError
+    if (error) throw new Error("Could not verify supplier balance.")
 
-    const { error } = await supabase
-        .from("company_accounts")
-        .update({
-            credit_limit: creditLimit && creditLimit > 0 ? creditLimit : null,
-            updated_at: new Date().toISOString()
-        })
-        .eq("id", companyAccountId)
+    const currentBalance = Number(account.current_balance)
+    if (currentBalance < requiredAmount) {
+        throw new Error(`Insufficient balance. Current balance: Rs. ${currentBalance.toLocaleString()}. Required: Rs. ${requiredAmount.toLocaleString()}.`)
+    }
 
-    if (error) throw error
-
-    revalidatePath("/dashboard/suppliers")
-    revalidatePath(`/dashboard/suppliers/${account.supplier_id}`)
-    return { success: true }
+    return { success: true, accountId: account.id }
 }
+
+
 
 export async function addLedgerTransaction(payload: {
     company_account_id: string,
@@ -166,6 +161,7 @@ export async function addLedgerTransaction(payload: {
     card_hold_id?: string,
     reference_number?: string,
     note?: string,
+    purchase_order_id?: string,
     is_opening_balance?: boolean, // explicit flag for opening balance
     skip_date_validation?: boolean, // skip future-date check when called internally
 }) {
@@ -180,27 +176,35 @@ export async function addLedgerTransaction(payload: {
         }
     }
 
-    if (payload.amount <= 0) {
-        throw new Error("Amount must be greater than 0")
+    if (payload.amount < 0) {
+        throw new Error("Amount cannot be negative")
     }
 
-    // Get current balance AND credit_limit
+    // Get current balance AND supplier type
     const { data: account, error: accError } = await supabase
         .from("company_accounts")
-        .select("current_balance, credit_limit, supplier_id")
+        .select("current_balance, supplier_id, suppliers(supplier_type)")
         .eq("id", payload.company_account_id)
         .single()
 
     if (accError) throw accError
 
+    // Supabase joins can return array or object depending on relation type
+    const supplierType = Array.isArray(account.suppliers)
+        ? (account.suppliers as any[])[0]?.supplier_type
+        : (account.suppliers as any)?.supplier_type
+    const isLocalSupplier = supplierType === 'local'
+
     let newBalance = Number(account.current_balance)
-    const creditLimit = account.credit_limit !== null ? Number(account.credit_limit) : null
 
     if (payload.transaction_type === 'credit') {
         // Credit = money coming into the account (increases balance / reduces debt)
         newBalance += payload.amount
     } else {
-        // Debit = money going out / order placed (decreases balance, may go negative)
+        // Debit = money going out / order placed (decreases balance)
+        if (newBalance < payload.amount && !payload.is_opening_balance) {
+            throw new Error(`Insufficient balance. Current balance: Rs. ${newBalance.toLocaleString()}. Required: Rs. ${payload.amount.toLocaleString()}.`)
+        }
         newBalance -= payload.amount
     }
 
@@ -215,6 +219,7 @@ export async function addLedgerTransaction(payload: {
     const isFirstTransaction = count === 0
     const txSource = (payload.is_opening_balance || isFirstTransaction)
         ? 'opening_balance'
+        : payload.purchase_order_id ? 'purchase_order' 
         : 'manual_transfer'
 
     const bankAccountId = payload.bank_account_id || undefined
@@ -232,7 +237,10 @@ export async function addLedgerTransaction(payload: {
             balance_after: newBalance,
             transaction_date: payload.transaction_date,
             reference_number: payload.reference_number,
-            note: payload.note || (txSource === 'opening_balance' ? "Opening Balance" : undefined)
+            purchase_order_id: payload.purchase_order_id || undefined,
+            note: payload.note || (txSource === 'opening_balance' ? "Opening Balance" : undefined),
+            remaining_amount: (isLocalSupplier && payload.transaction_type === 'debit') ? payload.amount : 0,
+            is_due: (isLocalSupplier && payload.transaction_type === 'debit') ? true : false
         })
 
     if (txError) throw txError
@@ -271,40 +279,14 @@ export async function getSupplierLedger(companyAccountId: string, filters?: { da
                 vehicle_number,
                 driver_name,
                 notes,
-                delivered_quantity,
-                purchase_orders (
-                    po_number,
-                    ordered_quantity,
-                    unit_type,
-                    products (
-                        name
-                    )
-                )
+                delivered_quantity
             ),
             po_hold_records (
                 hold_quantity,
                 hold_amount,
                 expected_return_date,
                 actual_return_date,
-                created_at,
-                purchase_orders (
-                    po_number,
-                    products (
-                        name
-                    )
-                )
-            ),
-            purchase_orders (
-                po_number,
-                ordered_quantity,
-                unit_type,
-                rate_per_liter,
-                products (
-                    name,
-                    category,
-                    unit,
-                    unit_type
-                )
+                created_at
             ),
             card_hold_records (
                 amount,

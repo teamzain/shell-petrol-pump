@@ -32,9 +32,6 @@ interface PurchaseOrder {
   purchase_date: string
   invoice_number: string
   total_amount: number
-  paid_amount: number
-  due_amount: number
-  payment_method: string
   status: string
   notes: string | null
   supplier_id: string
@@ -97,12 +94,6 @@ export function PurchaseDetailsDialog({
   const supabase = createClient()
 
   if (!order) return null
-
-  const paymentMethodLabels: Record<string, string> = {
-    bank_transfer: "Bank Transfer",
-    cheque: "Cheque",
-    cash: "Cash",
-  }
 
   const formatCurrency = (val: number) => `Rs. ${Number(val).toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
@@ -340,21 +331,10 @@ export function PurchaseDetailsDialog({
             </div>
           </div>
 
-          {/* Totals Section */}
           <div className="bg-muted/30 p-4 rounded-lg space-y-2 ml-auto w-full sm:w-72">
             <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground capitalize">Total Value</span>
-              <span className="font-bold">{formatCurrency(order.estimated_total || 0)}</span>
-            </div>
-            <div className="flex justify-between text-sm text-green-600 border-b border-muted pb-2">
-              <span className="capitalize">- Paid Value / Debited Amount</span>
-              <span className="font-bold">-{formatCurrency(order.paid_amount || 0)}</span>
-            </div>
-            <div className="flex justify-between font-black text-lg pt-1">
-              <span className="uppercase text-amber-700 tracking-tight text-sm self-center">= Amount On Hold</span>
-              <span className="text-amber-600">
-                {formatCurrency(Math.max(0, (order.estimated_total || 0) - (order.paid_amount || 0)))}
-              </span>
+              <span className="text-muted-foreground capitalize font-bold">Total Order Value</span>
+              <span className="font-black text-lg">{formatCurrency(order.estimated_total || 0)}</span>
             </div>
           </div>
 

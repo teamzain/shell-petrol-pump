@@ -4,14 +4,14 @@ import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
 import { validateTransactionDate } from "./balance"
 
+import { addLedgerTransaction, validateSupplierBalance } from "./suppliers"
+
 export async function createPurchaseOrder(formData: {
     supplier_id: string;
     order_date: string;
     expected_delivery_date: string;
     po_number: string;
     notes?: string;
-    payment_mode?: 'upfront' | 'deferred';
-    is_prepaid?: boolean; // Keep for internal logic if needed, but we'll use payment_mode primary
     products: {
         product_id: string;
         product_type: "fuel" | "oil" | "other";
@@ -20,152 +20,107 @@ export async function createPurchaseOrder(formData: {
         rate_per_liter: number;
     }[];
 }) {
-    const supabase = await createClient()
+    try {
+        const supabase = await createClient()
 
-    // 1. Get User
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) throw new Error("Unauthorized")
+        // 1. Get User
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) return { error: "Unauthorized" }
 
-    // --- DATE VALIDATION ---
-    await validateTransactionDate(formData.order_date)
-    // -----------------------
-    
-    const poNumber = formData.po_number || `PO-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`
+        // --- DATE VALIDATION ---
+        await validateTransactionDate(formData.order_date)
+        // -----------------------
 
-    let estimatedTotal = 0
-    let totalOrderedQuantity = 0
-    const items = formData.products.map(item => {
-        const total = item.ordered_quantity * item.rate_per_liter
-        estimatedTotal += total
-        totalOrderedQuantity += item.ordered_quantity
-        return {
-            product_id: item.product_id,
-            product_type: item.product_type,
-            ordered_quantity: item.ordered_quantity,
-            quantity_remaining: item.ordered_quantity,
-            unit_type: item.unit_type,
-            rate_per_liter: item.rate_per_liter,
-            total_amount: total,
-            status: 'pending'
-        }
-    })
+        const poNumber = formData.po_number || `PO-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`
 
-    const firstItem = formData.products[0]
-
-    const { data: po, error: poError } = await supabase
-        .from("purchase_orders")
-        .insert({
-            po_number: poNumber,
-            supplier_id: formData.supplier_id,
-            ordered_quantity: totalOrderedQuantity,
-            quantity_remaining: totalOrderedQuantity,
-            product_id: firstItem.product_id,
-            product_type: firstItem.product_type,
-            unit_type: firstItem.unit_type,
-            rate_per_liter: firstItem.rate_per_liter,
-            estimated_total: estimatedTotal,
-            expected_delivery_date: formData.expected_delivery_date,
-            created_at: new Date(formData.order_date).toISOString(),
-            notes: formData.notes,
-            payment_mode: formData.payment_mode || 'upfront',
-            payment_status: (formData.payment_mode === 'deferred') ? 'unpaid' : 'paid',
-            paid_amount: (formData.payment_mode === 'deferred') ? 0 : estimatedTotal,
-            status: 'pending',
-            items: items
+        let estimatedTotal = 0
+        let totalOrderedQuantity = 0
+        const items = formData.products.map(item => {
+            const total = item.ordered_quantity * item.rate_per_liter
+            estimatedTotal += total
+            totalOrderedQuantity += item.ordered_quantity
+            return {
+                product_id: item.product_id,
+                product_type: item.product_type,
+                ordered_quantity: item.ordered_quantity,
+                quantity_remaining: item.ordered_quantity,
+                unit_type: item.unit_type,
+                rate_per_liter: item.rate_per_liter,
+                total_amount: total,
+                status: 'pending'
+            }
         })
-        .select()
-        .single()
 
-    if (poError) {
-        console.error("PO Insert Error:", poError)
-        if (poError.code === '23505') {
-            throw new Error(`The Purchase Order Number "${poNumber}" already exists. Please use a different PO number.`);
+        // PRE-CHECK: Ensure balance is sufficient before any database insertions
+        await validateSupplierBalance(formData.supplier_id, estimatedTotal)
+
+        const firstItem = formData.products[0]
+
+        const { data: po, error: poError } = await supabase
+            .from("purchase_orders")
+            .insert({
+                po_number: poNumber,
+                supplier_id: formData.supplier_id,
+                ordered_quantity: totalOrderedQuantity,
+                quantity_remaining: totalOrderedQuantity,
+                product_id: firstItem.product_id,
+                product_type: firstItem.product_type,
+                unit_type: firstItem.unit_type,
+                rate_per_liter: firstItem.rate_per_liter,
+                estimated_total: estimatedTotal,
+                expected_delivery_date: formData.expected_delivery_date,
+                created_at: new Date(formData.order_date).toISOString(),
+                notes: formData.notes,
+                status: 'pending',
+                items: items
+            })
+            .select()
+            .single()
+
+        if (poError) {
+            console.error("PO Insert Error:", poError)
+            if (poError.code === '23505') {
+                return { error: `The Purchase Order Number "${poNumber}" already exists. Please use a different PO number.` };
+            }
+            return { error: poError.message }
         }
-        throw poError
-    }
 
-    // 2. Financial Impact Handling
-    const isUpfront = formData.payment_mode !== 'deferred'
-    
-    if (isUpfront) {
-        // Validate and Deduct Balance from Supplier's Account (Prepaid Workflow)
-        const { data: account, error: accountError } = await supabase
+        // 2. Record full order amount as debit in supplier ledger
+        const { data: compAcc } = await supabase
             .from("company_accounts")
-            .select("id, current_balance, credit_limit")
+            .select("id")
             .eq("supplier_id", formData.supplier_id)
             .single()
 
-        if (accountError || !account) {
-            await supabase.from("purchase_orders").delete().eq("id", po.id)
-            throw new Error("No active company account found for this supplier. Please create an account first.")
-        }
-
-        const currentBalance = Number(account.current_balance)
-        const totalToDeduct = po.estimated_total
-        const newBalance = currentBalance - totalToDeduct
-        const creditLimit = account.credit_limit !== null ? Number(account.credit_limit) : null
-
-        if (creditLimit !== null && newBalance < -creditLimit) {
-            await supabase.from("purchase_orders").delete().eq("id", po.id)
-            const available = currentBalance + creditLimit
-            throw new Error(
-                `Credit limit exceeded. The credit limit for this supplier is Rs. ${creditLimit.toLocaleString()}. ` +
-                `Available credit remaining: Rs. ${Math.max(0, available).toLocaleString()}. ` +
-                `This order requires Rs. ${totalToDeduct.toLocaleString()}.`
-            )
-        }
-
-        if (creditLimit === null && newBalance < 0) {
-            await supabase.from("purchase_orders").delete().eq("id", po.id)
-            throw new Error(
-                `Insufficient balance. Current balance: Rs. ${currentBalance.toLocaleString()}, Order total: Rs. ${totalToDeduct.toLocaleString()}.`
-            )
-        }
-
-        const { error: balanceError } = await supabase
-            .from("company_accounts")
-            .update({ current_balance: newBalance, updated_at: new Date().toISOString() })
-            .eq("id", account.id)
-
-        if (balanceError) {
-            await supabase.from("purchase_orders").delete().eq("id", po.id)
-            throw new Error("Failed to update supplier account balance.")
-        }
-
-        const { error: txError } = await supabase
-            .from("company_account_transactions")
-            .insert({
-                company_account_id: account.id,
+        if (compAcc) {
+            await addLedgerTransaction({
+                company_account_id: compAcc.id,
                 transaction_type: 'debit',
-                transaction_source: 'purchase_order',
-                amount: totalToDeduct,
-                balance_before: currentBalance,
-                balance_after: newBalance,
+                amount: estimatedTotal,
                 transaction_date: formData.order_date,
                 reference_number: po.po_number,
                 purchase_order_id: po.id,
-                note: `Balance deducted upfront for Purchase Order #${po.po_number}`,
-                created_by: user.id
+                note: `Purchase Order Placed: ${totalOrderedQuantity} liters/units`,
+                skip_date_validation: true
             })
+        }
 
-        if (txError) console.error("Transaction Record Error:", txError)
-    } else {
-        // Deferred payment selected. No balance impact at order time.
-        // Liability will be recorded upon delivery via record_delivery_atomic_item.
+        // 3. Create Notification Reminder
+        await supabase.from("notifications").insert({
+            type: 'delivery_expected',
+            title: 'Delivery Expected Today',
+            message: `Purchase Order ${po.po_number} is scheduled for delivery today.`,
+            reference_type: 'purchase_order',
+            reference_id: po.id,
+            scheduled_for: formData.expected_delivery_date,
+        })
+
+        revalidatePath("/dashboard/purchases")
+        return { success: true, count: 1 }
+    } catch (err: any) {
+        console.error("Server Action Error:", err)
+        return { error: err.message || "An unexpected error occurred" }
     }
-
-    // 3. Create Notification Reminder
-    await supabase.from("notifications").insert({
-        type: 'delivery_expected',
-        title: 'Delivery Expected Today',
-        message: `Purchase Order ${po.po_number} is scheduled for delivery today.`,
-        reference_type: 'purchase_order',
-        reference_id: po.id,
-        scheduled_for: formData.expected_delivery_date,
-    })
-
-    revalidatePath("/dashboard/purchases")
-    return { success: true, count: 1 }
 }
 
 export async function getNextPONumber() {
@@ -202,16 +157,18 @@ export async function getPurchaseOrders(filters?: {
     product_type?: string;
     date_from?: string;
     date_to?: string;
+    supplier_type?: 'local' | 'company';
 }) {
     const supabase = await createClient()
     let query = supabase
         .from("purchase_orders")
         .select(`
             *,
-            suppliers (
+            suppliers!inner (
                 name,
                 contact_person,
-                phone
+                phone,
+                supplier_type
             ),
             products (
                 name,
@@ -459,10 +416,10 @@ export async function cancelPurchaseOrderItem(poId: string, itemId: string) {
 export async function getPurchaseSummary(filters?: { date_from?: string; date_to?: string }) {
     const supabase = await createClient()
 
-    // 1. Fetch all relevant orders to calculate Paid vs Due
+    // 1. Fetch all relevant orders
     let query = supabase
         .from("purchase_orders")
-        .select("estimated_total, paid_amount, status")
+        .select("id, estimated_total, status")
         .neq("status", "cancelled")
 
     if (filters?.date_from) query = query.gte("created_at", filters.date_from)
@@ -470,19 +427,32 @@ export async function getPurchaseSummary(filters?: { date_from?: string; date_to
 
     const { data: pos } = await query
 
-    const totalOrders = pos?.filter(po => ['pending', 'partially_delivered'].includes(po.status)).length || 0
-    const totalValue = pos?.reduce((acc, po) => acc + Number(po.estimated_total), 0) || 0
-    const totalPaid = pos?.reduce((acc, po) => acc + Number(po.paid_amount || 0), 0) || 0
-    const totalDue = totalValue - totalPaid
+    const totalOrders = pos?.filter((po: any) => ['pending', 'partially_delivered'].includes(po.status)).length || 0
+    const totalValue = pos?.reduce((acc: number, po: any) => acc + Number(po.estimated_total), 0) || 0
 
-    // 2. Fetch Hold Stats (Independent of date filter)
+    // 2. Fetch Total Settled (Ledger Debits linked to POs)
+    let ledgerQuery = supabase
+        .from("company_account_transactions")
+        .select("amount")
+        .eq("transaction_type", "debit")
+        .not("purchase_order_id", "is", null)
+
+    if (filters?.date_from) ledgerQuery = ledgerQuery.gte("transaction_date", filters.date_from)
+    if (filters?.date_to) ledgerQuery = ledgerQuery.lte("transaction_date", filters.date_to)
+
+    const { data: ledgerTxs } = await ledgerQuery
+    const totalPaid = ledgerTxs?.reduce((acc: number, tx: any) => acc + Number(tx.amount), 0) || 0
+    
+    const totalDue = Math.max(0, totalValue - totalPaid)
+
+    // 3. Fetch Hold Stats 
     const { data: holdData } = await supabase
         .from("po_hold_records")
         .select("hold_amount, status")
 
-    const totalOnHold = holdData?.filter(h => h.status === 'on_hold').reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
-    const totalReleased = holdData?.filter(h => h.status === 'released').reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
-    const totalCancelled = holdData?.filter(h => h.status === 'cancelled').reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
+    const totalOnHold = holdData?.filter((h: any) => h.status === 'on_hold').reduce((acc: number, h: any) => acc + Number(h.hold_amount), 0) || 0
+    const totalReleased = holdData?.filter((h: any) => h.status === 'released').reduce((acc: number, h: any) => acc + Number(h.hold_amount), 0) || 0
+    const totalCancelled = holdData?.filter((h: any) => h.status === 'cancelled').reduce((acc: number, h: any) => acc + Number(h.hold_amount), 0) || 0
 
     return {
         totalOrders,
@@ -592,11 +562,11 @@ export async function setPOHoldExpectedDate(holdRecordId: string, poId: string, 
     return { success: true }
 }
 
-export async function getAllHolds(filters?: { date_from?: string; date_to?: string }) {
+export async function getAllHolds(filters?: { date_from?: string; date_to?: string; supplier_type?: 'local' | 'company' }) {
     const supabase = await createClient()
 
     // Show ALL holds by default — no date filtering applied
-    const { data, error } = await supabase
+    let query = supabase
         .from("po_hold_records")
         .select(`
             id,
@@ -609,13 +579,17 @@ export async function getAllHolds(filters?: { date_from?: string; date_to?: stri
             product_name,
             status,
             created_at,
-            purchase_orders (
+            purchase_orders!inner (
                 id,
                 po_number,
                 created_at,
-                suppliers ( name )
+                suppliers!inner ( name, supplier_type )
             )
         `)
+
+    if (filters?.supplier_type) query = query.eq("purchase_orders.suppliers.supplier_type", filters.supplier_type)
+
+    const { data, error } = await query
         .order("created_at", { ascending: false })
 
     if (error) throw error

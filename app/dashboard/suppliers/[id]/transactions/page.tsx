@@ -41,11 +41,12 @@ import {
     Filter,
     Wallet,
     Landmark,
-    Eye
+    Eye,
+    CheckCircle2
 } from "lucide-react"
 import { BrandLoader } from "@/components/ui/brand-loader"
 import { getSupplierById, getSupplierLedger, getActiveBankAccounts } from "@/app/actions/suppliers"
-import { recordBalanceTransaction } from "@/app/actions/balance"
+import { recordBalanceTransaction, paySpecificTransactionDue } from "@/app/actions/balance"
 import { toast } from "sonner"
 
 export default function SupplierTransactionsPage() {
@@ -58,6 +59,7 @@ export default function SupplierTransactionsPage() {
     // Pay Dues States
     const [txDialogOpen, setTxDialogOpen] = useState(false)
     const [txActionLoading, setTxActionLoading] = useState(false)
+    const [paySpecificId, setPaySpecificId] = useState<string | null>(null)
     const [bankAccounts, setBankAccounts] = useState<any[]>([])
     
     const [txData, setTxData] = useState({
@@ -104,17 +106,30 @@ export default function SupplierTransactionsPage() {
         
         setTxActionLoading(true)
         try {
-            await recordBalanceTransaction({
-                transaction_type: 'transfer_to_supplier',
-                amount: Number(txData.amount),
-                supplier_id: id as string,
-                bank_account_id: txData.method === 'bank' && txData.bank_account_id !== 'none' ? txData.bank_account_id : undefined,
-                description: `${txData.note || 'Payment to Supplier'} (payed due amount)`,
-                date: txData.date
-            })
+            if (paySpecificId) {
+                await paySpecificTransactionDue({
+                    transaction_id: paySpecificId,
+                    amount: Number(txData.amount),
+                    supplier_id: id as string,
+                    method: txData.method as any,
+                    bank_account_id: txData.method === 'bank' && txData.bank_account_id !== 'none' ? txData.bank_account_id : undefined,
+                    note: txData.note,
+                    date: txData.date
+                })
+            } else {
+                await recordBalanceTransaction({
+                    transaction_type: 'transfer_to_supplier',
+                    amount: Number(txData.amount),
+                    supplier_id: id as string,
+                    bank_account_id: txData.method === 'bank' && txData.bank_account_id !== 'none' ? txData.bank_account_id : undefined,
+                    description: `${txData.note || 'Payment to Supplier'}`,
+                    date: txData.date
+                })
+            }
             
             toast.success("Payment recorded and balance updated.")
             setTxDialogOpen(false)
+            setPaySpecificId(null)
             setTxData({
                 method: "cash",
                 bank_account_id: "none",
@@ -143,15 +158,22 @@ export default function SupplierTransactionsPage() {
     const account = Array.isArray(_companyAccounts) ? _companyAccounts[0] : _companyAccounts
     const currentBalance = account ? Number(account.current_balance || 0) : 0
 
-    const filteredTransactions = transactions.filter(t => {
-        const matchesType = txTypeFilter === "all" || t.transaction_type === txTypeFilter
+    const filteredTransactions = transactions
+        .filter(t => {
+            const matchesType = txTypeFilter === "all" || t.transaction_type === txTypeFilter
+            const txDate = new Date(t.transaction_date)
+            const matchesStart = !startDate || txDate >= new Date(startDate)
+            const matchesEnd = !endDate || txDate <= new Date(endDate)
+            return matchesType && matchesStart && matchesEnd
+        })
+        .sort((a, b) => {
+            // ALWAYS force opening_balance to the very top
+            if (a.transaction_source === 'opening_balance') return -1;
+            if (b.transaction_source === 'opening_balance') return 1;
 
-        const txDate = new Date(t.transaction_date)
-        const matchesStart = !startDate || txDate >= new Date(startDate)
-        const matchesEnd = !endDate || txDate <= new Date(endDate)
-
-        return matchesType && matchesStart && matchesEnd
-    })
+            // Otherwise sort by date as usual
+            return new Date(a.transaction_date).getTime() - new Date(b.transaction_date).getTime()
+        })
 
     return (
         <div className="flex flex-col gap-6">
@@ -173,9 +195,11 @@ export default function SupplierTransactionsPage() {
                     </div>
                 </div>
                 <div className="flex gap-2">
-                    <Button variant="default" size="sm" onClick={() => setTxDialogOpen(true)} className="bg-orange-600 hover:bg-orange-700 text-white font-bold tracking-wider">
-                        Pay Dues
-                    </Button>
+                    {supplier?.supplier_type !== 'local' && (
+                        <Button variant="default" size="sm" onClick={() => setTxDialogOpen(true)} className="bg-orange-600 hover:bg-orange-700 text-white font-bold tracking-wider">
+                            Pay Dues
+                        </Button>
+                    )}
                     <Button variant="outline" size="sm">
                         <Download className="mr-2 h-4 w-4" /> Export CSV
                     </Button>
@@ -198,11 +222,11 @@ export default function SupplierTransactionsPage() {
                                 (() => {
                                     const openingTx = transactions.find(t => t.transaction_source === 'opening_balance');
                                     if (openingTx) {
+                                        // Directions for balance calculation:
+                                        // In many cases, an Opening Balance (credit) means starting with positive funds.
+                                        // In this ledger, Debit reduces balance. 
                                         const amount = Number(openingTx.amount);
                                         return (openingTx.transaction_type === 'debit' ? -amount : amount).toLocaleString();
-                                    }
-                                    if (transactions.length > 0 && transactions[0].transaction_type === 'credit') {
-                                        return Number(transactions[0].amount).toLocaleString();
                                     }
                                     return "0";
                                 })()
@@ -307,14 +331,14 @@ export default function SupplierTransactionsPage() {
                     <Table>
                         <TableHeader>
                             <TableRow className="bg-slate-50/50">
-                                <TableHead className="w-[100px] font-bold">#</TableHead>
-                                <TableHead className="w-[120px] font-bold">Date</TableHead>
-                                <TableHead className="font-bold">Description</TableHead>
-                                <TableHead className="font-bold">Type</TableHead>
-                                <TableHead className="font-bold text-right">Balance Before</TableHead>
-                                <TableHead className="font-bold text-right">Amount</TableHead>
-                                <TableHead className="font-bold text-right">Balance After</TableHead>
-                                <TableHead className="font-bold text-center">Actions</TableHead>
+                                <TableHead className="w-[80px] font-bold">#</TableHead>
+                                <TableHead className="w-[100px] font-bold text-xs uppercase tracking-wider">Date</TableHead>
+                                <TableHead className="font-bold text-xs uppercase tracking-wider">Description</TableHead>
+                                <TableHead className="font-bold text-xs uppercase tracking-wider">Type</TableHead>
+                                <TableHead className="font-bold text-right text-xs uppercase tracking-wider">Amount</TableHead>
+                                {supplier?.supplier_type === 'local' && <TableHead className="font-bold text-right text-xs uppercase tracking-wider">Remaining Due</TableHead>}
+                                <TableHead className="font-bold text-right text-xs uppercase tracking-wider">Balance After</TableHead>
+                                <TableHead className="font-bold text-center text-xs uppercase tracking-wider">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -331,18 +355,21 @@ export default function SupplierTransactionsPage() {
                                     // Generate the standard Description string
                                     let description = "Manual Transaction"
                                     if (tx.transaction_source === 'opening_balance' || (idx === 0 && tx.transaction_type === 'credit')) {
-                                        description = "Opening Balance"
+                                        description = supplier?.supplier_type === 'local' ? "Opening Due" : "Opening Balance"
                                     } else if (tx.transaction_source === 'manual_transfer') {
-                                        description = "Fund Transfer"
-                                        if (tx.reference_number) description += ` | Ref# ${tx.reference_number}`
-                                    } else if (tx.transaction_source === 'delivery' || tx.transaction_source === 'purchase' || tx.transaction_source === 'purchase_order') {
+                                        description = tx.note || "Fund Transfer"
+                                        if (tx.reference_number && !description.includes('Ref#')) description += ` | Ref# ${tx.reference_number}`
+                                    } else if (tx.transaction_source === 'delivery' || tx.transaction_source === 'purchase' || tx.transaction_source === 'purchase_order' || tx.purchase_order_id) {
                                         const poObj = tx.purchase_orders || tx.deliveries?.purchase_orders
 
-                                        // Product name might come from product_name or name
-                                        const prodName = poObj?.products?.product_name || poObj?.products?.name || "Product"
-                                        description = tx.transaction_source === 'purchase_order' ? "Purchase Order" : "Purchase Delivery"
+                                        // Try to get product info - fallback to type if nested products join was removed
+                                        const prodName = poObj?.products?.name || poObj?.product_type || "Items"
+                                        
+                                        const isDebit = tx.transaction_type === 'debit'
+                                        description = isDebit ? "Purchase Order" : "PO Payment"
+                                        
                                         if (poObj?.po_number) description += ` | PO# ${poObj.po_number}`
-
+                                        
                                         const qty = tx.deliveries?.delivered_quantity || poObj?.ordered_quantity
                                         if (qty) description += ` | ${qty} ${prodName}`
 
@@ -374,16 +401,39 @@ export default function SupplierTransactionsPage() {
                                                     {isCredit ? <span className="flex items-center gap-1">Credit <ArrowUpCircle className="h-3 w-3" /></span> : <span className="flex items-center gap-1">Debit <ArrowDownCircle className="h-3 w-3" /></span>}
                                                 </Badge>
                                             </TableCell>
-                                            <TableCell className="text-right text-slate-500 font-medium">
-                                                PKR {Number(tx.balance_before || 0).toLocaleString()}
-                                            </TableCell>
-                                            <TableCell className={`text-right font-bold ${isCredit ? 'text-green-600' : 'text-red-500'}`}>
+                                            <TableCell className={`text-right font-bold ${isCredit ? 'text-green-600' : 'text-red-600'}`}>
                                                 {isCredit ? '+' : '-'} PKR {Number(tx.amount).toLocaleString()}
                                             </TableCell>
+                                            {supplier?.supplier_type === 'local' && (
+                                                <TableCell className="text-right font-black">
+                                                    {tx.transaction_type === 'debit' && tx.remaining_amount !== null ? (
+                                                        <div className="flex flex-col gap-1 items-end">
+                                                            {Number(tx.remaining_amount) > 0 ? (
+                                                                <span className="text-amber-600">PKR {Number(tx.remaining_amount).toLocaleString()}</span>
+                                                            ) : (
+                                                                <Badge variant="outline" className="text-[10px] text-slate-400">Settled</Badge>
+                                                            )}
+                                                            {Number(tx.amount) - Number(tx.remaining_amount) > 0 && (
+                                                                <div className="text-[9px] text-green-600 flex items-center gap-1 opacity-80 uppercase tracking-wider">
+                                                                    <CheckCircle2 className="h-3 w-3" /> Paid: PKR {(Number(tx.amount) - Number(tx.remaining_amount)).toLocaleString()}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    ) : "-"}
+                                                </TableCell>
+                                            )}
                                             <TableCell className={`text-right font-black ${Number(tx.balance_after || 0) > 0 ? 'text-green-600' : Number(tx.balance_after || 0) < 0 ? 'text-red-600' : 'text-slate-600'}`}>
-                                                PKR {Number(tx.balance_after || 0).toLocaleString()}
+                                                {description.includes('Payment against') ? "-" : `PKR ${Number(tx.balance_after || 0).toLocaleString()}`}
                                             </TableCell>
-                                            <TableCell className="text-center">
+                                            <TableCell className="text-center flex justify-center gap-2">
+                                                {supplier?.supplier_type === 'local' && tx.is_due && Number(tx.remaining_amount) > 0 && (
+                                                    <Button size="sm" className="h-8 bg-orange-600 hover:bg-orange-700 text-white text-[10px] uppercase font-bold tracking-wider" onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setPaySpecificId(tx.id);
+                                                        setTxData({ ...txData, amount: tx.remaining_amount.toString() });
+                                                        setTxDialogOpen(true);
+                                                    }}>Pay Due</Button>
+                                                )}
                                                 <Button
                                                     variant="ghost"
                                                     size="sm"
@@ -406,12 +456,15 @@ export default function SupplierTransactionsPage() {
                 </CardContent>
             </Card>
 
-            <Dialog open={txDialogOpen} onOpenChange={setTxDialogOpen}>
+            <Dialog open={txDialogOpen} onOpenChange={(val) => {
+                setTxDialogOpen(val)
+                if (!val) setPaySpecificId(null)
+            }}>
                 <DialogContent>
                     <DialogHeader>
-                        <DialogTitle>Pay Supplier Dues</DialogTitle>
+                        <DialogTitle>{paySpecificId ? 'Pay Specific Due' : 'Pay Supplier Dues'}</DialogTitle>
                         <DialogDescription>
-                            Record a payment to this supplier. This will reduce your physical cash or bank balance and credit the supplier's account.
+                            {paySpecificId ? 'Record a payment towards this specific transaction balance.' : 'Record a general payment to this supplier. This will reduce your cash/bank balance and credit the supplier account.'}
                         </DialogDescription>
                     </DialogHeader>
                     <form onSubmit={handlePayDues} className="space-y-4 pt-4">

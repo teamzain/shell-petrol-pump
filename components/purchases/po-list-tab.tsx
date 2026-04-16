@@ -35,7 +35,7 @@ export function POListTab({ onCreateDelivery, dateFilters }: POListTabProps) {
             const data = await getPurchaseOrders({
                 status: statusFilter === 'all' ? undefined : statusFilter,
                 date_from: dateFilters?.from,
-                date_to: dateFilters?.to
+                date_to: dateFilters?.to,
             })
             setPos(data || [])
         } catch (error) {

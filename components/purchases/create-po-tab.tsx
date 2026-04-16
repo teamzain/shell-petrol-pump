@@ -31,8 +31,10 @@ import { DeleteConfirmDialog } from "@/components/ui/delete-confirm-dialog"
 import { getSuppliers } from "@/app/actions/suppliers"
 import { getProducts } from "@/app/actions/products"
 import { createPurchaseOrder, getNextPONumber } from "@/app/actions/purchase-orders"
-import { getSystemActiveDate } from "@/app/actions/balance"
-import { AlertCircle, Plus, Trash2, ShoppingCart, RefreshCcw } from "lucide-react"
+import { getSystemActiveDate, getCashAndBankBalances } from "@/app/actions/balance"
+import { AlertCircle, Plus, Trash2, ShoppingCart, RefreshCcw, Wallet, CreditCard, Clock, Truck } from "lucide-react"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { getTodayPKT } from "@/lib/utils"
 
@@ -60,6 +62,8 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
     const [suppliers, setSuppliers] = useState<any[]>([])
     const [inventoryProducts, setInventoryProducts] = useState<any[]>([])
     const [selectedSupplier, setSelectedSupplier] = useState<any>(null)
+    const [bankAccounts, setBankAccounts] = useState<any[]>([])
+    const [cashBalance, setCashBalance] = useState<number>(0)
     const [systemActiveDate, setSystemActiveDateState] = useState(getTodayPKT())
 
     const form = useForm<POFormValues>({
@@ -68,7 +72,7 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
             po_number: "",
             supplier_id: "",
             order_date: getTodayPKT(),
-            expected_delivery_date: getTodayPKT(),
+            expected_delivery_date: "",
             notes: "",
             products: [{ product_id: "", product_type: "fuel", unit_type: "liter", ordered_quantity: 0, rate_per_liter: 0 }]
         }
@@ -80,7 +84,7 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
     })
 
     const watchProducts = form.watch("products")
-    const totalAmount = watchProducts.reduce((sum, item) => sum + ((Number(item.ordered_quantity) || 0) * (Number(item.rate_per_liter) || 0)), 0)
+    const totalAmount = watchProducts.reduce((acc: number, p: any) => acc + (Number(p.ordered_quantity || 0) * Number(p.rate_per_liter || 0)), 0)
 
     useEffect(() => {
         const fetchData = async () => {
@@ -89,7 +93,7 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
                     getSuppliers(),
                     getProducts(),
                     getNextPONumber(),
-                    getSystemActiveDate()
+                    getSystemActiveDate(),
                 ])
                 setSuppliers(supps.filter((s: any) => s.status === 'active'))
                 setInventoryProducts(prods)
@@ -126,7 +130,13 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
 
         setLoading(true)
         try {
-            await createPurchaseOrder(values)
+            const result = await createPurchaseOrder(values)
+            
+            if (result?.error) {
+                toast.error(result.error)
+                return
+            }
+
             toast.success("Purchase Order created successfully!")
 
             // Re-fetch next PO number for subsequent creations
@@ -386,9 +396,9 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
                                         name="notes"
                                         render={({ field }) => (
                                             <FormItem>
-                                                <FormLabel className="font-bold">Remarks / Notes</FormLabel>
+                                                <FormLabel className="font-bold text-slate-700">Remarks / Notes</FormLabel>
                                                 <FormControl>
-                                                    <Textarea placeholder="Any specific instructions..." className="resize-none" {...field} />
+                                                    <Textarea placeholder="Any specific instructions..." className="h-24 resize-none" {...field} />
                                                 </FormControl>
                                                 <FormMessage />
                                             </FormItem>
@@ -455,20 +465,13 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
                             {accounts.length > 0 && activeAccount ? (
                                 <div className="border-t border-slate-200 pt-3 space-y-2">
                                     <div className="flex justify-between items-center">
-                                        <span className="text-xs font-black uppercase text-slate-500">Account Balance</span>
+                                        <span className="text-xs font-black uppercase text-slate-500">Net Current Balance</span>
                                         <span className={`text-base font-black ${
                                             supplierBalance < 0 ? "text-red-600" : "text-green-600"
                                         }`}>
                                             {supplierBalance < 0 ? "-" : "+"}Rs. {Math.abs(supplierBalance).toLocaleString()}
                                         </span>
                                     </div>
-
-                                    {totalAmount > 0 && (
-                                        <div className="text-[10px] font-bold text-slate-500">
-                                            This order: Rs. {totalAmount.toLocaleString()}
-                                            → Balance after: Rs. {(supplierBalance - totalAmount).toLocaleString()}
-                                        </div>
-                                    )}
                                 </div>
                             ) : (
                                 <div className="border-t border-slate-200 pt-3">

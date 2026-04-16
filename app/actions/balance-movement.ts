@@ -114,7 +114,9 @@ export async function getBalanceMovement(filters?: {
             `)
         
         if (category === 'sale') {
-            balanceQuery = balanceQuery.or(`is_hold.eq.true,card_hold_id.not.is.null,transaction_type.neq.transfer_to_supplier,transaction_type.neq.supplier_to_bank`)
+            // Include everything that impacts physical Cash or Bank (including transfers to suppliers)
+            // or anything that is a hold/settlement.
+            balanceQuery = balanceQuery.or(`is_hold.eq.true,card_hold_id.not.is.null,transaction_type.neq.dummy`) 
         } else {
             // For 'all', we want everything
         }
@@ -362,12 +364,13 @@ export async function getBalanceMovement(filters?: {
 
 
 
-    // 7. Sort in JS (descending chronological order)
+    // 7. Sort in JS (Descending: newest first by date and time)
     unified.sort((a, b) => {
-        const dateA = new Date(a.transaction_date + 'T' + (a.created_at?.split('T')[1]?.split('+')[0] || '00:00:00')).getTime()
-        const dateB = new Date(b.transaction_date + 'T' + (b.created_at?.split('T')[1]?.split('+')[0] || '00:00:00')).getTime()
-        return dateB - dateA
-    })
+        if (a.transaction_date !== b.transaction_date) {
+            return new Date(b.transaction_date).getTime() - new Date(a.transaction_date).getTime();
+        }
+        return new Date(b.created_at || b.transaction_date).getTime() - new Date(a.created_at || a.transaction_date).getTime();
+    });
 
     // 8. Compute Running Balances for Sale Tab (Cash vs Bank)
     if (category === 'sale') {
@@ -533,8 +536,11 @@ export async function getBalanceMovement(filters?: {
         }
     }
 
-    // 9. Paginate
-    const paginated = unified.slice(from, to + 1)
+    // 8b. Ensure chronological is actually Descending as intended for standard dashboards
+    const displayList = [...unified];
+
+    // 9. Paginate from the Descending list
+    const paginated = displayList.slice(from, to + 1)
 
     return {
         data: paginated,

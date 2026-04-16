@@ -45,7 +45,7 @@ export async function recordDelivery(formData: {
 
     if (error) throw error
 
-    // Determine if there is a hold to return
+    // 4. Determine if there is a hold to return
     const { data: holdRecords } = await supabase
         .from('po_hold_records')
         .select('id, hold_amount, hold_quantity')
@@ -54,6 +54,7 @@ export async function recordDelivery(formData: {
         .limit(1)
 
     revalidatePath("/dashboard/purchases")
+
     return {
         success: true,
         deliveryId: data,
@@ -66,6 +67,7 @@ export async function getDeliveries(filters?: {
     product_type?: string;
     date_from?: string;
     date_to?: string;
+    supplier_type?: 'local' | 'company';
 }) {
     const supabase = await createClient()
     let query = supabase
@@ -73,7 +75,7 @@ export async function getDeliveries(filters?: {
         .select(`
             *,
             purchase_orders (*),
-            suppliers (name),
+            suppliers!inner (name, supplier_type),
             po_hold_records (*)
         `)
         .order("delivery_date", { ascending: false })
@@ -82,6 +84,7 @@ export async function getDeliveries(filters?: {
     if (filters?.product_type && filters.product_type !== 'all') query = query.eq("product_type", filters.product_type)
     if (filters?.date_from) query = query.gte("delivery_date", filters.date_from)
     if (filters?.date_to) query = query.lte("delivery_date", filters.date_to)
+    if (filters?.supplier_type) query = query.eq("suppliers.supplier_type", filters.supplier_type)
 
     const { data, error } = await query
     if (error) throw error

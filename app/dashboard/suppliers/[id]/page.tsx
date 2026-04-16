@@ -216,11 +216,9 @@ export default function SupplierDetailPage() {
                                     <Wallet className="h-6 w-6" />
                                 </div>
                                 <div>
-                                    <h3 className="text-sm font-black uppercase tracking-widest opacity-80">Current Statement Balance</h3>
-                                    <div className={`text-3xl font-black tracking-tighter ${
-                                        balance < 0 ? "text-red-200" : "text-white"
-                                    }`}>
-                                        {balance < 0 ? "-" : ""}Rs. {Math.abs(balance).toLocaleString()}
+                                    <h3 className="text-sm font-black uppercase tracking-widest opacity-80">{supplier.supplier_type === 'local' ? 'Due Amount' : 'Current Statement Balance'}</h3>
+                                    <div className="text-3xl font-black tracking-tighter text-white">
+                                        {supplier.supplier_type === 'local' ? '-' : ''} Rs. {Math.abs(balance).toLocaleString()}
                                     </div>
                                     {openingDue > 0 && (
                                         <div className="mt-2 pt-2 border-t border-white/20">
@@ -273,7 +271,7 @@ export default function SupplierDetailPage() {
                                                                 <span className="flex items-center gap-1.5 italic text-primary">
                                                                     Card Hold Release: {tx.card_hold_records?.supplier_cards?.card_name || tx.card_hold_records?.card_type || 'Supplier Card'}
                                                                 </span>
-                                                            ) : tx.transaction_source === 'opening_balance' ? "Opening Balance" :
+                                                            ) : tx.transaction_source === 'opening_balance' ? (supplier.supplier_type === 'local' ? "Due" : "Opening Balance") :
                                                                 (tx.note || (tx.transaction_type === 'credit' ? 'Account Deposit' : 'Supply Payment'))}
                                                         </div>
                                                         <div className="text-[10px] text-muted-foreground font-medium">
@@ -332,11 +330,7 @@ export default function SupplierDetailPage() {
                                     placeholder="0.00"
                                 />
                             </div>
-                            {txType === 'debit' && parseFloat(txData.amount) > 0 && balance < 0 && (
-                                <p className="text-[10px] text-amber-500 font-bold uppercase tracking-tighter">
-                                    Notice: Account is already in negative balance (Rs. {Math.abs(balance).toLocaleString()})
-                                </p>
-                            )}
+
                         </div>
                         <div className="grid gap-2">
                             <Label htmlFor="date">Transaction Date</Label>

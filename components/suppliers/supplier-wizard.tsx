@@ -43,8 +43,8 @@ const supplierSchema = z.object({
     email: z.string().email().optional().or(z.literal("")),
     address: z.string().optional(),
     ntn_number: z.string().optional(),
-    supplier_type: z.enum(["local", "company"]),
     product_type: z.enum(["fuel", "oil", "both"]),
+    supplier_type: z.enum(["company", "local"]).default("company"),
     status: z.enum(["active", "inactive"]).default("active"),
 })
 
@@ -78,8 +78,8 @@ export function SupplierWizard({ open, onOpenChange, onSuccess }: SupplierWizard
             email: "",
             address: "",
             ntn_number: "",
-            supplier_type: "company",
             product_type: "both",
+            supplier_type: "company",
             status: "active",
         },
     })
@@ -95,7 +95,7 @@ export function SupplierWizard({ open, onOpenChange, onSuccess }: SupplierWizard
     })
 
     const watchAmount = balanceForm.watch("amount")
-    const supplierType = form.watch("supplier_type")
+    const watchSupplierType = form.watch("supplier_type")
 
     const onSupplierSubmit = async (values: z.infer<typeof supplierSchema>) => {
         setLoading(true)
@@ -104,7 +104,19 @@ export function SupplierWizard({ open, onOpenChange, onSuccess }: SupplierWizard
             if (result.success) {
                 setSupplierId(result.id)
                 setSupplierName(values.name)
-                setStep(2)
+                
+                if (values.supplier_type === "local") {
+                    // Auto-provision ledger account and skip directly to Due Amount entry
+                    const accountResult = await createCompanyAccount(result.id)
+                    if (accountResult.success) {
+                        setAccountId(accountResult.id)
+                        balanceForm.setValue("note", "Opening Due")
+                        setStep(4) 
+                    }
+                } else {
+                    setStep(2)
+                }
+                
                 toast.success("Supplier created successfully")
             }
         } catch (error) {
@@ -134,26 +146,20 @@ export function SupplierWizard({ open, onOpenChange, onSuccess }: SupplierWizard
         if (!accountId) return
         setLoading(true)
         try {
-            if (values.amount < 0 && supplierType !== 'local') {
-                toast.error("Negative balance is only allowed for local suppliers.")
-                setLoading(false)
-                return
-            }
-
             if (values.amount !== 0) {
                 const isDebit = values.amount < 0;
                 const absoluteAmount = Math.abs(values.amount);
 
                 await addLedgerTransaction({
                     company_account_id: accountId,
-                    transaction_type: isDebit ? 'debit' : 'credit',
+                    transaction_type: watchSupplierType === 'local' ? 'debit' : (isDebit ? 'debit' : 'credit'),
                     amount: absoluteAmount,
                     transaction_date: values.transaction_date,
                     reference_number: values.reference_number,
-                    note: values.note || `Opening Balance`,
+                    note: values.note || (watchSupplierType === 'local' ? `Opening Due` : `Opening Balance`),
                     is_opening_balance: true,
                 })
-                toast.success(`Opening balance of Rs. ${values.amount.toLocaleString()} added`)
+                toast.success(`${watchSupplierType === 'local' ? 'Due Amount' : 'Opening balance'} of Rs. ${values.amount.toLocaleString()} added`)
             }
             
             finish()
@@ -230,34 +236,45 @@ export function SupplierWizard({ open, onOpenChange, onSuccess }: SupplierWizard
                                     )}
                                 />
                             </div>
-                            <FormField
-                                control={form.control}
-                                name="address"
-                                render={({ field }) => (
-                                    <FormItem>
-                                        <FormLabel>Physical Address</FormLabel>
-                                        <FormControl><Textarea placeholder="Full address" {...field} /></FormControl>
-                                        <FormMessage />
-                                    </FormItem>
-                                )}
-                            />
                             <div className="grid grid-cols-2 gap-4">
                                 <FormField
                                     control={form.control}
-                                    name="ntn_number"
+                                    name="supplier_type"
                                     render={({ field }) => (
                                         <FormItem>
-                                            <FormLabel>NTN Number (Optional)</FormLabel>
-                                            <FormControl><Input placeholder="1234567-8" {...field} /></FormControl>
+                                            <FormLabel>Supplier Type</FormLabel>
+                                            <Select onValueChange={field.onChange} defaultValue={field.value}>
+                                                <FormControl>
+                                                    <SelectTrigger>
+                                                        <SelectValue placeholder="Select type" />
+                                                    </SelectTrigger>
+                                                </FormControl>
+                                                <SelectContent>
+                                                    <SelectItem value="company">Company Supplier (Ledger Account)</SelectItem>
+                                                    <SelectItem value="local">Local Supplier (Due Statement)</SelectItem>
+                                                </SelectContent>
+                                            </Select>
                                             <FormMessage />
                                         </FormItem>
                                     )}
                                 />
                                 <FormField
                                     control={form.control}
-                                    name="product_type"
+                                    name="address"
                                     render={({ field }) => (
                                         <FormItem>
+                                            <FormLabel>Physical Address</FormLabel>
+                                            <FormControl><Textarea placeholder="Full address" {...field} className="resize-none" rows={1} /></FormControl>
+                                            <FormMessage />
+                                        </FormItem>
+                                    )}
+                                />
+                            </div>
+                                <FormField
+                                    control={form.control}
+                                    name="product_type"
+                                    render={({ field }) => (
+                                        <FormItem className="col-span-2">
                                             <FormLabel>Product Type</FormLabel>
                                             <Select onValueChange={field.onChange} defaultValue={field.value}>
                                                 <FormControl>
@@ -275,28 +292,6 @@ export function SupplierWizard({ open, onOpenChange, onSuccess }: SupplierWizard
                                         </FormItem>
                                     )}
                                 />
-                                <FormField
-                                    control={form.control}
-                                    name="supplier_type"
-                                    render={({ field }) => (
-                                        <FormItem>
-                                            <FormLabel>Classification</FormLabel>
-                                            <Select onValueChange={field.onChange} defaultValue={field.value}>
-                                                <FormControl>
-                                                    <SelectTrigger>
-                                                        <SelectValue placeholder="Select classification" />
-                                                    </SelectTrigger>
-                                                </FormControl>
-                                                <SelectContent>
-                                                    <SelectItem value="company">Company</SelectItem>
-                                                    <SelectItem value="local">Local Supplier</SelectItem>
-                                                </SelectContent>
-                                            </Select>
-                                            <FormMessage />
-                                        </FormItem>
-                                    )}
-                                />
-                            </div>
                             <DialogFooter>
                                 <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
                                 <Button type="submit" disabled={loading}>{loading ? <BrandLoader size="xs" /> : "Save Supplier"}</Button>
@@ -327,7 +322,6 @@ export function SupplierWizard({ open, onOpenChange, onSuccess }: SupplierWizard
                 </DialogContent>
             </Dialog>
 
-            {/* Step 3: Add Balance? */}
             <Dialog open={open && step === 3} onOpenChange={(val) => !val && finish()}>
                 <DialogContent>
                     <DialogHeader>
@@ -350,8 +344,8 @@ export function SupplierWizard({ open, onOpenChange, onSuccess }: SupplierWizard
             <Dialog open={open && step === 4} onOpenChange={(val) => !val && finish()}>
                 <DialogContent className="max-w-lg">
                     <DialogHeader>
-                        <DialogTitle>Enter Opening Balance</DialogTitle>
-                        <DialogDescription>Set the opening balance for this supplier account.</DialogDescription>
+                        <DialogTitle>{watchSupplierType === 'local' ? 'Enter Opening Due' : 'Enter Opening Balance'}</DialogTitle>
+                        <DialogDescription>{watchSupplierType === 'local' ? 'Set the opening due amount for this local supplier.' : 'Set the opening balance for this supplier account.'}</DialogDescription>
                     </DialogHeader>
                     <Form {...balanceForm}>
                         <form onSubmit={balanceForm.handleSubmit(handleBalanceSubmit)} className="space-y-5">
@@ -363,23 +357,21 @@ export function SupplierWizard({ open, onOpenChange, onSuccess }: SupplierWizard
                                     name="amount"
                                     render={({ field }) => (
                                         <FormItem>
-                                            <FormLabel>Opening Balance (PKR)</FormLabel>
+                                            <FormLabel>{watchSupplierType === 'local' ? 'Opening Due Amount (PKR)' : 'Opening Balance (PKR)'}</FormLabel>
                                             <div className="relative">
                                                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-black text-slate-600">Rs.</span>
                                                 <FormControl>
                                                     <Input
                                                         type="number"
                                                         step="0.01"
-                                                        min={supplierType === 'local' ? undefined : "0"}
+                                                        min="0"
                                                         className="pl-12 font-bold"
                                                         {...field}
                                                     />
                                                 </FormControl>
                                             </div>
                                             <p className="text-[10px] text-muted-foreground mt-1 px-1">
-                                                {supplierType === 'local' 
-                                                    ? "Use negative amount for payable (due) balance, positive for advance payment." 
-                                                    : "Enter the advance amount. Must be 0 or more."}
+                                                Enter the opening advance amount. Must be 0 or more.
                                             </p>
                                             <FormMessage />
                                         </FormItem>

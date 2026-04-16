@@ -37,7 +37,7 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
         try {
             const data = await getDeliveries({
                 date_from: dateFilters?.from,
-                date_to: dateFilters?.to
+                date_to: dateFilters?.to,
             })
             setDeliveries(data || [])
         } catch (error) {

@@ -79,18 +79,24 @@ export async function getDailyReportData(date: string) {
     const bankReleased = bankCardRecords?.filter(r => r.status === 'released' && r.released_at?.startsWith(targetDate))
         .reduce((acc, r) => acc + Number(r.net_amount), 0) || 0
 
-    // 5. Purchase Shortage Holds & Releases
-    // Join with deliveries to filter by actual delivery date
-    const { data: poHolds } = await supabase
+    // 5. Purchase Shortage Holds (Created Today)
+    const { data: createdHolds } = await supabase
         .from("po_hold_records")
-        .select("hold_amount, status, deliveries!inner(delivery_date)")
-        .or(`deliveries.delivery_date.eq.${targetDate},actual_return_date.eq.${targetDate}`)
+        .select("hold_amount, deliveries!inner(delivery_date)")
+        .filter("deliveries.delivery_date", "eq", targetDate)
 
-    const purchaseHoldOnHold = poHolds?.filter(h => h.status === 'on_hold')
+    // 5b. Purchase Shortage Releases (Released Today)
+    const { data: releasedHolds } = await supabase
+        .from("po_hold_records")
+        .select("hold_amount, status, actual_return_date")
+        .eq("actual_return_date", targetDate)
+
+    const purchaseHoldOnHold = createdHolds?.reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
+    const purchaseHoldReleased = (releasedHolds || [])
+        .filter(h => h.status?.toLowerCase() === 'released')
         .reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
-    const purchaseHoldReleased = poHolds?.filter(h => h.status === 'released')
-        .reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
-    const purchaseHoldCancelled = poHolds?.filter(h => h.status === 'cancelled')
+    const purchaseHoldCancelled = (releasedHolds || [])
+        .filter(h => h.status?.toLowerCase() === 'cancelled')
         .reduce((acc, h) => acc + Number(h.hold_amount), 0) || 0
 
     // 6. Supplier Section

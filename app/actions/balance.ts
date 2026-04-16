@@ -423,6 +423,39 @@ export async function validateTransactionDate(transactionDate: string) {
     }
 }
 
+export async function validatePhysicalBalance(data: {
+    transaction_type: string;
+    amount: number;
+    bank_account_id?: string;
+    date?: string;
+}) {
+    const supabase = await createClient()
+    const targetDate = data.date || getTodayPKT()
+
+    if (data.bank_account_id && data.bank_account_id !== 'none') {
+        const { data: bank } = await supabase
+            .from("bank_accounts")
+            .select("current_balance")
+            .eq("id", data.bank_account_id)
+            .single()
+        const balance = Number(bank?.current_balance || 0)
+        if (balance < data.amount) {
+            throw new Error(`Insufficient Bank balance - Rs. ${balance.toLocaleString()} available, Rs. ${data.amount.toLocaleString()} required. Please recharge first.`)
+        }
+    } else if (data.transaction_type === 'transfer_to_supplier' || data.transaction_type === 'cash_to_bank' || data.transaction_type === 'add_cash') {
+        // Check cash balance
+        const { data: status } = await supabase
+            .from("daily_accounts_status")
+            .select("closing_cash, opening_cash")
+            .eq("status_date", targetDate)
+            .single()
+        const currentCash = status ? Number(status.closing_cash ?? status.opening_cash ?? 0) : 0
+        if (currentCash < data.amount) {
+            throw new Error(`Insufficient Cash balance - Rs. ${currentCash.toLocaleString()} available, Rs. ${data.amount.toLocaleString()} required. Please recharge first.`)
+        }
+    }
+}
+
 export async function recordBalanceTransaction(data: {
     transaction_type: 'cash_to_bank' | 'bank_to_cash' | 'add_cash' | 'add_bank' | 'transfer_to_supplier' | 'supplier_to_bank' | 'bank_to_bank';
     amount: number;
@@ -437,6 +470,9 @@ export async function recordBalanceTransaction(data: {
     card_hold_id?: string;
     hold_gross_amount?: number;
     date?: string;
+    reference_number?: string;
+    purchase_order_id?: string;
+    skip_ledger_sync?: boolean;
 }) {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
@@ -483,7 +519,9 @@ export async function recordBalanceTransaction(data: {
         supplier_card_id: data.supplier_card_id || undefined,
         is_opening: data.isOpeningBalance || false,
         is_hold: data.is_hold || false,
-        card_hold_id: data.card_hold_id || undefined
+        card_hold_id: data.card_hold_id || undefined,
+        reference_number: data.reference_number || undefined,
+        purchase_order_id: data.purchase_order_id || undefined
     }
 
     // --- TRACK RUNNING BALANCE ---
@@ -544,6 +582,23 @@ export async function recordBalanceTransaction(data: {
     let cashAdj = 0
     let bankAdj = 0
     let holdAdj = 0
+
+    // --- BALANCE VALIDATION ---
+    // Only check for outflows (not holds, not opening adjustments, not settlements)
+    if (!data.is_hold && !data.isOpeningBalance && !data.card_hold_id) {
+        if (data.transaction_type === 'transfer_to_supplier' || 
+            data.transaction_type === 'cash_to_bank' || 
+            data.transaction_type === 'bank_to_cash' || 
+            data.transaction_type === 'bank_to_bank') {
+            
+            await validatePhysicalBalance({
+                transaction_type: data.transaction_type,
+                amount: data.amount,
+                bank_account_id: effectiveBankId,
+                date: targetDate
+            })
+        }
+    }
 
     // Only set adjustments if not a hold.
     // Holds will be recorded as a transaction record (ledger) but won't affect physical balances until settlement.
@@ -676,8 +731,8 @@ export async function recordBalanceTransaction(data: {
     }
 
     // 5. Update supplier balance if applicable
-    // ONLY update the ledger if NOT a hold. Holds will be recorded when released.
-    if (!data.is_hold && (data.transaction_type === 'transfer_to_supplier' || data.transaction_type === 'supplier_to_bank') && effectiveSupplierId) {
+    // ONLY update the ledger if NOT a hold AND NOT skipped.
+    if (!data.is_hold && !data.skip_ledger_sync && (data.transaction_type === 'transfer_to_supplier' || data.transaction_type === 'supplier_to_bank') && effectiveSupplierId) {
         const { data: compAcc } = await supabase
             .from("company_accounts")
             .select("id")
@@ -693,7 +748,9 @@ export async function recordBalanceTransaction(data: {
                 transaction_date: targetDate,
                 bank_account_id: effectiveBankId,
                 card_hold_id: data.card_hold_id || undefined,
-                note: data.description || `Transfer ${data.transaction_type === 'transfer_to_supplier' ? 'to' : 'from'} supplier`,
+                reference_number: data.reference_number || undefined,
+                purchase_order_id: data.purchase_order_id || undefined,
+                note: data.description || `Transfer ${txType === 'credit' ? 'to' : 'from'} supplier`,
                 skip_date_validation: true, // date already validated by recordBalanceTransaction
             })
         }
@@ -973,5 +1030,96 @@ export async function releaseCardHold(holdId: string, targetId: string, releaseD
     revalidatePath('/dashboard/balance')
     revalidatePath('/dashboard/sales/history')
     revalidatePath('/dashboard/suppliers')
+    return { success: true }
+}
+
+/**
+ * Lightweight action to get current cash balance and active bank balances.
+ * Used by forms that need to show available funds.
+ */
+export async function getCashAndBankBalances() {
+    const supabase = await createClient()
+    const today = getTodayPKT()
+
+    // Get the most recent daily status to find current cash
+    const { data: status } = await supabase
+        .from('daily_accounts_status')
+        .select('closing_cash, opening_cash, status_date')
+        .order('status_date', { ascending: false })
+        .limit(1)
+        .single()
+
+    // closing_cash is the live running total updated by every transaction
+    const cashBalance = status
+        ? Number(status.closing_cash ?? status.opening_cash ?? 0)
+        : 0
+
+    // Get all active bank accounts with their current balances
+    const { data: bankAccounts } = await supabase
+        .from('bank_accounts')
+        .select('id, bank_name, account_name, account_number, current_balance')
+        .eq('status', 'active')
+        .order('account_name')
+
+    return {
+        cashBalance,
+        bankAccounts: bankAccounts || []
+    }
+}
+
+export async function paySpecificTransactionDue(payload: {
+    transaction_id: string,
+    amount: number,
+    supplier_id: string,
+    method: "cash" | "bank",
+    bank_account_id?: string,
+    note?: string,
+    date: string
+}) {
+    const supabase = await createClient()
+
+    if (payload.amount <= 0) throw new Error("Amount must be greater than zero.")
+
+    // 1. Fetch target transaction
+    const { data: targetTx, error: txErr } = await supabase
+        .from("company_account_transactions")
+        .select("id, remaining_amount, is_due, transaction_source")
+        .eq("id", payload.transaction_id)
+        .single()
+
+    if (txErr) throw new Error("Could not find the specified due transaction.")
+    if (!targetTx.is_due) throw new Error("This transaction is not marked as an outstanding due.")
+    
+    if (Number(targetTx.remaining_amount) < payload.amount) {
+        throw new Error(`Payment amount (Rs. ${payload.amount.toLocaleString()}) cannot exceed the remaining due of Rs. ${Number(targetTx.remaining_amount).toLocaleString()}.`)
+    }
+
+    // 2. Perform the actual payment (deducts cash/bank and adds a specific ledger row noting which due is paid)
+    let desc = targetTx.transaction_source === 'opening_balance' ? `Payment against Opening Due` : `Payment against specific due`
+    if (payload.note) {
+        desc = `${desc} - ${payload.note}`
+    }
+
+    await recordBalanceTransaction({
+        transaction_type: 'transfer_to_supplier',
+        amount: payload.amount,
+        supplier_id: payload.supplier_id,
+        bank_account_id: payload.method === 'bank' ? payload.bank_account_id : undefined,
+        description: desc,
+        date: payload.date
+    })
+
+    // 3. Subtract the paid amount from the specific due transaction
+    const newRemaining = Number(targetTx.remaining_amount) - payload.amount
+    const { error: upErr } = await supabase
+        .from("company_account_transactions")
+        .update({
+            remaining_amount: newRemaining,
+            is_due: newRemaining > 0 // optional, we can just look at remaining_amount
+        })
+        .eq("id", payload.transaction_id)
+
+    if (upErr) throw upErr
+
     return { success: true }
 }
