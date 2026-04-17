@@ -160,11 +160,22 @@ export default function SupplierTransactionsPage() {
 
     const filteredTransactions = transactions
         .filter(t => {
+            // 1. Basic Type/Date Filters
             const matchesType = txTypeFilter === "all" || t.transaction_type === txTypeFilter
             const txDate = new Date(t.transaction_date)
             const matchesStart = !startDate || txDate >= new Date(startDate)
             const matchesEnd = !endDate || txDate <= new Date(endDate)
-            return matchesType && matchesStart && matchesEnd
+            const basicMatch = matchesType && matchesStart && matchesEnd
+            
+            if (!basicMatch) return false
+
+            // 2. Consolidation Logic: Hide PO Payments from main list
+            // These will be visible inside the "View Detail" of the parent PO Debit row.
+            if (t.transaction_type === 'credit' && (t.purchase_order_id || t.transaction_source === 'po_payment')) {
+                return false
+            }
+
+            return true
         })
         .sort((a, b) => {
             // ALWAYS force opening_balance to the very top
@@ -335,16 +346,16 @@ export default function SupplierTransactionsPage() {
                                 <TableHead className="w-[100px] font-bold text-xs uppercase tracking-wider">Date</TableHead>
                                 <TableHead className="font-bold text-xs uppercase tracking-wider">Description</TableHead>
                                 <TableHead className="font-bold text-xs uppercase tracking-wider">Type</TableHead>
-                                <TableHead className="font-bold text-right text-xs uppercase tracking-wider">Amount</TableHead>
-                                {supplier?.supplier_type === 'local' && <TableHead className="font-bold text-right text-xs uppercase tracking-wider">Remaining Due</TableHead>}
-                                <TableHead className="font-bold text-right text-xs uppercase tracking-wider">Balance After</TableHead>
+                                <TableHead className="font-bold text-right text-xs uppercase tracking-wider">Total Amount</TableHead>
+                                <TableHead className="font-bold text-right text-xs uppercase tracking-wider">Paid Amount</TableHead>
+                                <TableHead className="font-bold text-right text-xs uppercase tracking-wider">Remaining Amount</TableHead>
                                 <TableHead className="font-bold text-center text-xs uppercase tracking-wider">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {filteredTransactions.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+                                    <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
                                         No transactions found for this supplier
                                     </TableCell>
                                 </TableRow>
@@ -387,6 +398,10 @@ export default function SupplierTransactionsPage() {
                                     const isCredit = tx.transaction_type === 'credit'
                                     const rowBgClass = isCredit ? 'bg-green-50/10 hover:bg-green-50/50' : 'bg-red-50/10 hover:bg-red-50/50'
 
+                                    const totalAmt = Number(tx.amount || 0)
+                                    const remainingAmt = Number(tx.remaining_amount || 0)
+                                    const paidAmt = Math.max(0, totalAmt - remainingAmt)
+
                                     return (
                                         <TableRow
                                             key={tx.id}
@@ -401,29 +416,23 @@ export default function SupplierTransactionsPage() {
                                                     {isCredit ? <span className="flex items-center gap-1">Credit <ArrowUpCircle className="h-3 w-3" /></span> : <span className="flex items-center gap-1">Debit <ArrowDownCircle className="h-3 w-3" /></span>}
                                                 </Badge>
                                             </TableCell>
-                                            <TableCell className={`text-right font-bold ${isCredit ? 'text-green-600' : 'text-red-600'}`}>
-                                                {isCredit ? '+' : '-'} PKR {Number(tx.amount).toLocaleString()}
+                                            {/* TOTAL AMOUNT */}
+                                            <TableCell className={`text-right font-bold ${isCredit ? 'text-green-600' : 'text-red-700'}`}>
+                                                PKR {totalAmt.toLocaleString()}
                                             </TableCell>
-                                            {supplier?.supplier_type === 'local' && (
-                                                <TableCell className="text-right font-black">
-                                                    {tx.transaction_type === 'debit' && tx.remaining_amount !== null ? (
-                                                        <div className="flex flex-col gap-1 items-end">
-                                                            {Number(tx.remaining_amount) > 0 ? (
-                                                                <span className="text-amber-600">PKR {Number(tx.remaining_amount).toLocaleString()}</span>
-                                                            ) : (
-                                                                <Badge variant="outline" className="text-[10px] text-slate-400">Settled</Badge>
-                                                            )}
-                                                            {Number(tx.amount) - Number(tx.remaining_amount) > 0 && (
-                                                                <div className="text-[9px] text-green-600 flex items-center gap-1 opacity-80 uppercase tracking-wider">
-                                                                    <CheckCircle2 className="h-3 w-3" /> Paid: PKR {(Number(tx.amount) - Number(tx.remaining_amount)).toLocaleString()}
-                                                                </div>
-                                                            )}
-                                                        </div>
-                                                    ) : "-"}
-                                                </TableCell>
-                                            )}
-                                            <TableCell className={`text-right font-black ${Number(tx.balance_after || 0) > 0 ? 'text-green-600' : Number(tx.balance_after || 0) < 0 ? 'text-red-600' : 'text-slate-600'}`}>
-                                                {description.includes('Payment against') ? "-" : `PKR ${Number(tx.balance_after || 0).toLocaleString()}`}
+                                            
+                                            {/* PAID AMOUNT */}
+                                            <TableCell className="text-right font-bold text-green-600">
+                                                {paidAmt > 0 ? `+ PKR ${paidAmt.toLocaleString()}` : "-"}
+                                            </TableCell>
+
+                                            {/* REMAINING AMOUNT */}
+                                            <TableCell className="text-right font-black">
+                                                {remainingAmt > 0 ? (
+                                                    <span className="text-orange-600">PKR {remainingAmt.toLocaleString()}</span>
+                                                ) : (
+                                                    <Badge variant="outline" className="text-[10px] text-green-600 bg-green-50 border-green-200">Fully Settled</Badge>
+                                                )}
                                             </TableCell>
                                             <TableCell className="text-center flex justify-center gap-2">
                                                 {supplier?.supplier_type === 'local' && tx.is_due && Number(tx.remaining_amount) > 0 && (

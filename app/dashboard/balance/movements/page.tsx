@@ -123,6 +123,7 @@ export default function BalanceMovementsPage() {
                     else if (t.transaction_type === 'add_bank') desc = t.is_opening ? "Opening Bank Balance" : "Manual Bank Deposit";
                     else if (t.transaction_type === 'transfer_to_supplier') {
                         if (t.card_hold_id) desc = "Card Settlement";
+                        else if (t.payment_source === 'local_purchase' || t.purchase_order_id) desc = "Paid Local Order Amount";
                         else if (t.description && t.description.startsWith('Payment against')) desc = t.description;
                         else desc = "Transfer to Supplier Account";
                     }
@@ -520,6 +521,8 @@ export default function BalanceMovementsPage() {
                                                     if (tx.card_hold_id) {
                                                         const parts = tx.description?.split('Settlement:');
                                                         displayDescription = parts && parts.length > 1 ? `Settlement: ${parts[1]}` : "Card Settlement";
+                                                    } else if (tx.payment_source === 'local_purchase' || tx.purchase_order_id) {
+                                                        displayDescription = "Paid Local Order Amount";
                                                     } else if (tx.description && tx.description.startsWith('Payment against')) {
                                                         displayDescription = tx.description;
                                                     } else {

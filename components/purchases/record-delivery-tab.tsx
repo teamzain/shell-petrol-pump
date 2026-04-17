@@ -506,7 +506,7 @@ export function RecordDeliveryTab({ initialPO, onSuccess }: RecordDeliveryTabPro
                                 <Info className="h-3 w-3 text-primary" />
                                 <AlertDescription className="text-[10px] leading-tight flex flex-col gap-1 pl-2">
                                     <span>• Saves delivery & updates stock.</span>
-                                    <span>• Debits supplier account for {totalAmount.toLocaleString()}.</span>
+                                    <span>• {selectedPO?.suppliers?.supplier_type === 'local' ? 'Updates PO remaining balance for manual settlement.' : `Debits supplier account for Rs. ${totalAmount.toLocaleString()}.`}</span>
                                     {isPartial && <span>• Creates hold record for missing {holdQuantity} {shortUnitLabel}.</span>}
                                     <span>• Closes THIS item inside the PO array.</span>
                                 </AlertDescription>

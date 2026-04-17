@@ -127,10 +127,11 @@ export async function getNextPONumber() {
     const supabase = await createClient()
     const year = new Date().getFullYear()
 
+    // Match both PO-2026- and LPO-2026- (any prefix before PO-)
     const { data, error } = await supabase
         .from("purchase_orders")
         .select("po_number")
-        .like("po_number", `PO-${year}-%`)
+        .ilike("po_number", `%PO-${year}-%`)
 
     if (error) {
         console.error("Failed to fetch next PO number", error)
@@ -140,11 +141,11 @@ export async function getNextPONumber() {
     let maxNum = 0
     data?.forEach(po => {
         const parts = po.po_number.split('-')
-        if (parts.length >= 3) {
-            const parsedNum = parseInt(parts[2], 10)
-            if (!isNaN(parsedNum) && parsedNum > maxNum) {
-                maxNum = parsedNum
-            }
+        // The numeric part is always the last part in PO-YYYY-NNNN format
+        const lastPart = parts[parts.length - 1]
+        const parsedNum = parseInt(lastPart, 10)
+        if (!isNaN(parsedNum) && parsedNum > maxNum) {
+            maxNum = parsedNum
         }
     })
 

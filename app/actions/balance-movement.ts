@@ -86,18 +86,64 @@ export async function getBalanceMovement(filters?: {
             *,
             bank_accounts:bank_account_id ( account_name ),
             suppliers:supplier_id ( name ),
-            card_hold_records ( status, released_at, sale_date )
+            card_hold_records ( status, released_at, sale_date ),
+            purchase_orders:purchase_order_id ( purchase_type )
         `).not("supplier_id", "is", null)
 
         if (filters?.date_from) bSuppQuery = bSuppQuery.gte("transaction_date", filters.date_from)
         if (filters?.date_to) bSuppQuery = bSuppQuery.lte("transaction_date", filters.date_to)
         if (filters?.supplier_id && filters.supplier_id !== 'all') bSuppQuery = bSuppQuery.eq("supplier_id", filters.supplier_id)
         
-        const { data: bSuppData } = await bSuppQuery
+        let bSuppData: any[] | null = null;
+        const { data: bSuppResult, error: bSuppError } = await bSuppQuery;
+        
+        if (bSuppError && (bSuppError.code === '42703' || bSuppError.message.includes('column'))) {
+            console.warn("Retrying bSuppQuery without purchase_orders join due to missing column.");
+            const { data: fallbackData, error: fallbackError } = await supabase.from("balance_transactions").select(`
+                *,
+                bank_accounts:bank_account_id ( account_name ),
+                suppliers:supplier_id ( name ),
+                card_hold_records ( status, released_at, sale_date )
+            `).not("supplier_id", "is", null)
+              .gte(filters?.date_from ? "transaction_date" : "id", filters?.date_from || '0') // dummy check to keep chain
+              .filter("id", "gt", 0); // dummy filter to reset chain
+            
+            // Re-apply filters for fallback
+            let fbQuery = supabase.from("balance_transactions").select(`
+                *,
+                bank_accounts:bank_account_id ( account_name ),
+                suppliers:supplier_id ( name ),
+                card_hold_records ( status, released_at, sale_date )
+            `).not("supplier_id", "is", null);
+            if (filters?.date_from) fbQuery = fbQuery.gte("transaction_date", filters.date_from);
+            if (filters?.date_to) fbQuery = fbQuery.lte("transaction_date", filters.date_to);
+            if (filters?.supplier_id && filters.supplier_id !== 'all') fbQuery = fbQuery.eq("supplier_id", filters.supplier_id);
+            
+            const { data: fbData } = await fbQuery;
+            bSuppData = fbData;
+        } else {
+            bSuppData = bSuppResult;
+        }
+
         if (bSuppData) {
+            // Filter: EXCLUDE local purchase payments from the Purchase Tab
+            // as they are handled as simple outflows in the Sale Tab according to user request.
+            const filteredBSupp = bSuppData.filter(tx => {
+                const po: any = tx.purchase_orders;
+                
+                // 1. If we have the PO join, use the purchase_type
+                if (po) return po.purchase_type !== 'local';
+
+                // 2. Fallback: If join failed (missing column), use description keyword matching
+                const desc = (tx.description || "").toLowerCase();
+                const isLocal = desc.includes('local purchase') || desc.includes('lpo-');
+                
+                return !isLocal;
+            });
+
             // Filter out those already in balanceTx to avoid duplicates if category === 'all'
             const existingIds = new Set(balanceTx.map(t => t.id))
-            balanceTx = [...balanceTx, ...bSuppData.filter(t => !existingIds.has(t.id))]
+            balanceTx = [...balanceTx, ...filteredBSupp.filter(t => !existingIds.has(t.id))]
         }
     }
 
@@ -110,7 +156,8 @@ export async function getBalanceMovement(filters?: {
                 bank_accounts:bank_account_id ( account_name ),
                 to_bank_accounts:to_bank_account_id ( account_name ),
                 suppliers:supplier_id ( name ),
-                card_hold_records ( status, released_at, sale_date )
+                card_hold_records ( status, released_at, sale_date ),
+                purchase_orders:purchase_order_id ( purchase_type )
             `)
         
         if (category === 'sale') {
@@ -132,7 +179,32 @@ export async function getBalanceMovement(filters?: {
             }
         }
 
-        const { data, error } = await balanceQuery
+        let { data, error } = await balanceQuery
+        
+        // Fallback for Sale query
+        if (error && (error.code === '42703' || error.message.includes('column'))) {
+            console.warn("Retrying balanceQuery without purchase_orders join.");
+            let fbQuery = supabase
+                .from("balance_transactions")
+                .select(`
+                    *,
+                    bank_accounts:bank_account_id ( account_name ),
+                    to_bank_accounts:to_bank_account_id ( account_name ),
+                    suppliers:supplier_id ( name ),
+                    card_hold_records ( status, released_at, sale_date )
+                `)
+            
+            if (category === 'sale') {
+                fbQuery = fbQuery.or(`is_hold.eq.true,card_hold_id.not.is.null,transaction_type.neq.dummy`) 
+            }
+            if (filters?.date_from) fbQuery = fbQuery.gte("transaction_date", filters.date_from)
+            if (filters?.date_to) fbQuery = fbQuery.lte("transaction_date", filters.date_to)
+            
+            const { data: fbData, error: fbError } = await fbQuery
+            data = fbData;
+            error = fbError;
+        }
+
         if (error) throw error
         
         // Merge with existing balanceTx (from purchase block) if any

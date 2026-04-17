@@ -24,7 +24,13 @@ import { toast } from "sonner"
 import { BrandLoader } from "@/components/ui/brand-loader"
 import { PODetailModal } from "./po-detail-modal"
 
-export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: string; to: string } }) {
+export function DeliveryHistoryTab({ 
+    dateFilters, 
+    supplierType // 'local' or 'company'
+}: { 
+    dateFilters?: { from: string; to: string },
+    supplierType?: 'local' | 'company'
+}) {
     const [deliveries, setDeliveries] = useState<any[]>([])
     const [loading, setLoading] = useState(true)
     const [searchQuery, setSearchQuery] = useState("")
@@ -38,6 +44,7 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
             const data = await getDeliveries({
                 date_from: dateFilters?.from,
                 date_to: dateFilters?.to,
+                supplier_type: supplierType
             })
             setDeliveries(data || [])
         } catch (error) {
@@ -49,7 +56,7 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
 
     useEffect(() => {
         fetchDeliveries()
-    }, [dateFilters])
+    }, [dateFilters, supplierType])
 
     const formatMultiUnit = (unitsObj: { [key: string]: number }) => {
         const parts = Object.entries(unitsObj)
@@ -74,13 +81,15 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
                 order_date: poData?.created_at,
                 receiving_date: del.delivery_date,
                 total_order_value: poData?.estimated_total || 0,
+                paid_amount: poData?.paid_amount || 0,
                 debited_value: 0,
                 hold_value: 0,
                 release_value: 0,
                 short_units: {} as { [key: string]: number },
                 extra_units: {} as { [key: string]: number },
                 tank_distributions: {} as { [key: string]: number },
-                unit_type: del.unit_type || poData?.unit_type
+                unit_type: del.unit_type || poData?.unit_type,
+                supplier_type: del.suppliers?.supplier_type
             }
         }
         const itemValue = Number(del.delivered_amount || (Math.min(Number(del.delivered_quantity || 0), Number(del.quantity_ordered || 0)) * Number(poData?.rate_per_liter || 0)))
@@ -129,6 +138,8 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
         del.po_number?.toLowerCase().includes(searchQuery.toLowerCase())
     )
 
+    const isLocalMode = supplierType === 'local'
+
     return (
         <div className="space-y-4">
             <div className="flex flex-col sm:flex-row gap-4 justify-between items-center">
@@ -138,39 +149,52 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
                         placeholder="Search Invoice#, PO#, or Supplier..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        className="pl-10"
+                        className="pl-10 h-10 font-medium"
                     />
                 </div>
                 <div className="flex gap-2 w-full sm:w-auto">
-                    <Button variant="outline" onClick={fetchDeliveries} size="icon">
+                    <Button variant="outline" onClick={fetchDeliveries} size="icon" className="h-10 w-10">
                         <Search className="h-4 w-4" />
                     </Button>
                 </div>
             </div>
 
-            <div className="border rounded-lg bg-white overflow-hidden">
+            <div className="border rounded-xl bg-white overflow-hidden shadow-sm">
                 <Table>
                     <TableHeader>
-                        <TableRow className="bg-slate-50/50 text-[10px]">
-                            <TableHead className="font-bold">Invoice #</TableHead>
-                            <TableHead className="font-bold">PO #</TableHead>
-                            <TableHead className="font-bold">Supplier</TableHead>
-                            <TableHead className="font-bold">Allocations</TableHead>
-                            <TableHead className="font-bold">Order Date</TableHead>
-                            <TableHead className="font-bold">Received Date</TableHead>
-                            <TableHead className="font-bold text-right text-amber-600">Short Qty</TableHead>
-                            <TableHead className="font-bold text-right text-emerald-600">Extra Qty</TableHead>
-                            <TableHead className="font-bold text-right text-slate-700">Order Value</TableHead>
-                            <TableHead className="font-bold text-right text-blue-700 font-black">Debited</TableHead>
-                            <TableHead className="font-bold text-right text-amber-700">Hold</TableHead>
-                            <TableHead className="font-bold text-right text-green-700">Released</TableHead>
-                            <TableHead className="font-bold text-right">Actions</TableHead>
+                        <TableRow className="bg-slate-50/80 text-[10px] uppercase font-black tracking-widest">
+                            <TableHead className="py-4">Invoice #</TableHead>
+                            <TableHead className="py-4">PO #</TableHead>
+                            <TableHead className="py-4">Supplier</TableHead>
+                            <TableHead className="py-4">Allocations</TableHead>
+                            <TableHead className="py-4 whitespace-nowrap">Order Date</TableHead>
+                            <TableHead className="py-4 whitespace-nowrap">Received Date</TableHead>
+                            {!isLocalMode && (
+                                <>
+                                    <TableHead className="text-right text-amber-600">Short Qty</TableHead>
+                                    <TableHead className="text-right text-emerald-600">Extra Qty</TableHead>
+                                </>
+                            )}
+                            <TableHead className="text-right text-slate-700">Order Value</TableHead>
+                            {isLocalMode ? (
+                                <>
+                                    <TableHead className="text-right text-green-600">Paid</TableHead>
+                                    <TableHead className="text-right text-red-600">Due</TableHead>
+                                </>
+                            ) : (
+                                <>
+                                    <TableHead className="text-right text-blue-700 font-black">Debited</TableHead>
+                                    <TableHead className="text-right text-amber-700">Hold</TableHead>
+                                    <TableHead className="text-right text-green-700">Released</TableHead>
+                                </>
+                            )}
+                            <TableHead className="text-center">Action</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
                         {loading ? (
                             <TableRow>
-                                <TableCell colSpan={13} className="h-48">
+                                <TableCell colSpan={isLocalMode ? 10 : 13} className="h-64">
                                     <div className="flex items-center justify-center w-full h-full">
                                         <BrandLoader size="lg" />
                                     </div>
@@ -178,67 +202,91 @@ export function DeliveryHistoryTab({ dateFilters }: { dateFilters?: { from: stri
                             </TableRow>
                         ) : filteredDeliveries.length === 0 ? (
                             <TableRow>
-                                <TableCell colSpan={13} className="h-24 text-center text-muted-foreground">
+                                <TableCell colSpan={isLocalMode ? 10 : 13} className="h-32 text-center text-muted-foreground italic font-medium">
                                     No delivery records found.
                                 </TableCell>
                             </TableRow>
                         ) : (
-                            filteredDeliveries.map((del: any) => (
-                                <TableRow key={`${del.purchase_order_id}-${del.company_invoice_number}`} className="hover:bg-slate-50/30">
-                                    <TableCell className="font-mono text-[10px] font-bold">{del.company_invoice_number || 'N/A'}</TableCell>
-                                    <TableCell className="font-mono text-[10px] text-muted-foreground">{del.po_number}</TableCell>
-                                    <TableCell className="font-medium text-[10px]">{del.name}</TableCell>
-                                    <TableCell className="text-[9px]">
-                                        {Object.keys(del.tank_distributions).length > 0 ? (
-                                            <div className="flex flex-col gap-1 max-w-[120px]">
-                                                {Object.entries(del.tank_distributions).map(([tank, qty], i) => (
-                                                    <span key={i} className="bg-slate-100 text-slate-600 px-1 py-0.5 rounded whitespace-nowrap">
-                                                        {tank}: {Number(qty).toLocaleString()}L
-                                                    </span>
-                                                ))}
-                                            </div>
-                                        ) : "-"}
-                                    </TableCell>
-                                    <TableCell className="text-[10px] whitespace-nowrap">
-                                        {del.order_date ? new Date(del.order_date).toLocaleDateString('en-PK') : '-'}
-                                    </TableCell>
-                                    <TableCell className="text-[10px] whitespace-nowrap">
-                                        {del.receiving_date ? new Date(del.receiving_date).toLocaleDateString('en-PK') : '-'}
-                                    </TableCell>
-                                    <TableCell className="text-right font-bold text-[10px] text-amber-600">
-                                        {formatMultiUnit(del.short_units)}
-                                    </TableCell>
-                                    <TableCell className="text-right font-bold text-[10px] text-emerald-600">
-                                        {formatMultiUnit(del.extra_units)}
-                                    </TableCell>
-                                    <TableCell className="text-right font-bold text-xs text-slate-500">
-                                        Rs. {Number(del.total_order_value || 0).toLocaleString()}
-                                    </TableCell>
-                                    <TableCell className="text-right font-black text-blue-800 text-xs text-nowrap pl-4">
-                                        Rs. {Number(del.debited_value).toLocaleString()}
-                                    </TableCell>
+                            filteredDeliveries.map((del: any) => {
+                                const dueAmt = Math.max(0, Number(del.total_order_value || 0) - Number(del.paid_amount || 0))
+                                
+                                return (
+                                    <TableRow key={`${del.purchase_order_id}-${del.company_invoice_number}`} className="hover:bg-slate-50/50 transition-colors">
+                                        <TableCell className="font-mono text-[10px] font-bold text-slate-500 uppercase">{del.company_invoice_number || 'N/A'}</TableCell>
+                                        <TableCell className="font-mono text-[10px] font-bold text-amber-600 uppercase">{del.po_number}</TableCell>
+                                        <TableCell className="font-bold text-[10px] uppercase text-slate-700">{del.name}</TableCell>
+                                        <TableCell className="text-[9px]">
+                                            {Object.keys(del.tank_distributions).length > 0 ? (
+                                                <div className="flex flex-col gap-1 max-w-[120px]">
+                                                    {Object.entries(del.tank_distributions).map(([tank, qty], i) => (
+                                                        <span key={i} className="bg-slate-100 text-slate-600 px-1 py-0.5 rounded-sm font-bold text-[8px] uppercase">
+                                                            {tank}: {Number(qty).toLocaleString()}L
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            ) : <span className="text-slate-300">—</span>}
+                                        </TableCell>
+                                        <TableCell className="text-[10px] font-medium whitespace-nowrap">
+                                            {del.order_date ? new Date(del.order_date).toLocaleDateString('en-PK', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+                                        </TableCell>
+                                        <TableCell className="text-[10px] font-medium whitespace-nowrap">
+                                            {del.receiving_date ? new Date(del.receiving_date).toLocaleDateString('en-PK', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+                                        </TableCell>
+                                        
+                                        {!isLocalMode && (
+                                            <>
+                                                <TableCell className="text-right font-black text-[10px] text-amber-600">
+                                                    {formatMultiUnit(del.short_units)}
+                                                </TableCell>
+                                                <TableCell className="text-right font-black text-[10px] text-emerald-600">
+                                                    {formatMultiUnit(del.extra_units)}
+                                                </TableCell>
+                                            </>
+                                        )}
 
-                                    <TableCell className="text-right font-bold text-amber-700 text-xs text-nowrap pl-4">
-                                        Rs. {Number(del.hold_value).toLocaleString()}
-                                    </TableCell>
-                                    <TableCell className="text-right font-bold text-green-700 text-xs text-nowrap pl-4">
-                                        {del.release_value > 0 ? `Rs. ${Number(del.release_value).toLocaleString()}` : '-'}
-                                    </TableCell>
-                                    <TableCell className="text-right">
-                                        <Button
-                                            variant="ghost"
-                                            size="icon"
-                                            className="h-7 w-7 text-blue-600"
-                                            onClick={() => {
-                                                setSelectedPO(del.purchase_order_id)
-                                                setSelectedDelivery(del.id)
-                                            }}
-                                        >
-                                            <Eye className="h-3.5 w-3.5" />
-                                        </Button>
-                                    </TableCell>
-                                </TableRow>
-                            ))
+                                        <TableCell className="text-right font-black text-xs text-slate-600">
+                                            Rs. {Number(del.total_order_value || 0).toLocaleString()}
+                                        </TableCell>
+
+                                        {isLocalMode ? (
+                                            <>
+                                                <TableCell className="text-right font-black text-xs text-green-600">
+                                                    Rs. {Number(del.paid_amount || 0).toLocaleString()}
+                                                </TableCell>
+                                                <TableCell className={`text-right font-black text-xs ${dueAmt > 0 ? 'text-red-600' : 'text-slate-400'}`}>
+                                                    Rs. {dueAmt.toLocaleString()}
+                                                </TableCell>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <TableCell className="text-right font-black text-blue-800 text-xs whitespace-nowrap">
+                                                    Rs. {Number(del.debited_value).toLocaleString()}
+                                                </TableCell>
+                                                <TableCell className="text-right font-black text-amber-700 text-xs whitespace-nowrap">
+                                                    Rs. {Number(del.hold_value).toLocaleString()}
+                                                </TableCell>
+                                                <TableCell className="text-right font-black text-green-700 text-xs whitespace-nowrap">
+                                                    {del.release_value > 0 ? `Rs. ${Number(del.release_value).toLocaleString()}` : <span className="text-slate-300">—</span>}
+                                                </TableCell>
+                                            </>
+                                        )}
+
+                                        <TableCell className="text-center">
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                className="h-8 w-8 text-blue-600 hover:bg-blue-50"
+                                                onClick={() => {
+                                                    setSelectedPO(del.purchase_order_id)
+                                                    setSelectedDelivery(del.id)
+                                                }}
+                                            >
+                                                <Eye className="h-4 w-4" />
+                                            </Button>
+                                        </TableCell>
+                                    </TableRow>
+                                )
+                            })
                         )}
                     </TableBody>
                 </Table>

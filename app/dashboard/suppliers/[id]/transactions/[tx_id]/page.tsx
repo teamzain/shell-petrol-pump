@@ -131,10 +131,68 @@ export default function TransactionDetailPage() {
                             </div>
                         </div>
 
+                        {/* PO SETTLEMENT HISTORY (CONSOLIDATED VIEW) */}
+                        {transaction.payment_history && (transaction.purchase_order_id || transaction.transaction_source === 'purchase_order') && (
+                            <div className="border-t bg-indigo-50/50 p-6">
+                                <h4 className="text-[10px] font-black uppercase tracking-widest text-indigo-500 mb-4 flex items-center gap-2">
+                                    <Clock className="h-4 w-4" /> PO Settlement Summary
+                                </h4>
+                                
+                                <div className="grid grid-cols-3 gap-4 text-center mb-6">
+                                    <div className="bg-white p-3 rounded-lg border shadow-sm">
+                                        <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1">Total PO Amount</p>
+                                        <p className="font-semibold text-slate-600">PKR {Number(transaction.amount).toLocaleString()}</p>
+                                    </div>
+                                    <div className="bg-white p-3 rounded-lg border shadow-sm border-green-200">
+                                        <p className="text-[10px] font-bold uppercase tracking-widest text-green-600 mb-1">Total Paid</p>
+                                        <p className="font-black text-green-700">
+                                            PKR {transaction.payment_history.reduce((acc: number, p: any) => acc + Number(p.amount), 0).toLocaleString()}
+                                        </p>
+                                    </div>
+                                    <div className="bg-white p-3 rounded-lg border shadow-sm border-orange-200">
+                                        <p className="text-[10px] font-bold uppercase tracking-widest text-orange-600 mb-1">Remaining Due</p>
+                                        <p className="font-black text-orange-700">
+                                            PKR {Math.max(0, Number(transaction.amount) - transaction.payment_history.reduce((acc: number, p: any) => acc + Number(p.amount), 0)).toLocaleString()}
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
+                                    <div className="bg-slate-100 px-4 py-2 border-b">
+                                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Payment History against this Order</p>
+                                    </div>
+                                    <div className="divide-y max-h-[300px] overflow-y-auto">
+                                        {transaction.payment_history.length === 0 ? (
+                                            <div className="p-4 text-center text-xs text-muted-foreground italic">No payments recorded for this order yet.</div>
+                                        ) : (
+                                            transaction.payment_history.map((pay: any, idx: number) => (
+                                                <div key={pay.id} className="p-3 flex items-center justify-between hover:bg-slate-50 transition-colors">
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="h-8 w-8 rounded-full bg-green-100 flex items-center justify-center text-green-600">
+                                                            <ArrowUpCircle className="h-4 w-4" />
+                                                        </div>
+                                                        <div>
+                                                            <p className="text-xs font-bold text-slate-800">{pay.note || "PO Payment"}</p>
+                                                            <p className="text-[10px] text-muted-foreground">
+                                                                {new Date(pay.transaction_date).toLocaleDateString('en-GB').replace(/\//g, '-')} 
+                                                                {pay.created_at && ` @ ${new Date(pay.created_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`}
+                                                                {pay.reference_number && ` • Ref: ${pay.reference_number}`}
+                                                            </p>
+                                                        </div>
+                                                    </div>
+                                                    <p className="text-sm font-black text-green-600">+ PKR {Number(pay.amount).toLocaleString()}</p>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
                         {/* Balance Movement Sub-section */}
                         <div className="border-t bg-slate-50 p-6">
                             <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-4 flex items-center gap-2">
-                                <Wallet className="h-4 w-4" /> Balance Movement
+                                <Wallet className="h-4 w-4" /> Account Balance State
                             </h4>
                             <div className="grid grid-cols-3 gap-4 text-center">
                                 <div className="bg-white p-3 rounded-lg border shadow-sm">
@@ -142,7 +200,7 @@ export default function TransactionDetailPage() {
                                     <p className="font-semibold text-slate-600">PKR {Number(transaction.balance_before || 0).toLocaleString()}</p>
                                 </div>
                                 <div className={`p-3 rounded-lg border shadow-sm ${isCredit ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
-                                    <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1">This Transaction</p>
+                                    <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1">This Entry Effect</p>
                                     <p className={`font-black ${isCredit ? 'text-green-700' : 'text-red-700'}`}>
                                         {isCredit ? '+' : '-'} PKR {Number(transaction.amount).toLocaleString()}
                                     </p>

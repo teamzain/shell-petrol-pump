@@ -202,7 +202,8 @@ export async function addLedgerTransaction(payload: {
         newBalance += payload.amount
     } else {
         // Debit = money going out / order placed (decreases balance)
-        if (newBalance < payload.amount && !payload.is_opening_balance) {
+        // CRITICAL: Local suppliers are allowed to have a negative balance (showing 'Due')
+        if (!isLocalSupplier && newBalance < payload.amount && !payload.is_opening_balance) {
             throw new Error(`Insufficient balance. Current balance: Rs. ${newBalance.toLocaleString()}. Required: Rs. ${payload.amount.toLocaleString()}.`)
         }
         newBalance -= payload.amount
@@ -244,6 +245,38 @@ export async function addLedgerTransaction(payload: {
         })
 
     if (txError) throw txError
+
+    // 4. SMART SYNC: If this is a payment (Credit) for a PO, update the parent Debit's remaining_amount
+    if (payload.transaction_type === 'credit' && payload.purchase_order_id && isLocalSupplier) {
+        try {
+            // Find the corresponding Debit row for this PO
+            const { data: parentTx } = await supabase
+                .from("company_account_transactions")
+                .select("id, remaining_amount")
+                .eq("purchase_order_id", payload.purchase_order_id)
+                .eq("transaction_type", "debit")
+                .order('created_at', { ascending: true })
+                .limit(1)
+                .maybeSingle()
+
+            if (parentTx) {
+                const currentRemaining = Number(parentTx.remaining_amount || 0)
+                const newlyPaid = payload.amount
+                const updatedRemaining = Math.max(0, currentRemaining - newlyPaid)
+
+                await supabase
+                    .from("company_account_transactions")
+                    .update({ 
+                        remaining_amount: updatedRemaining,
+                        is_due: updatedRemaining > 0
+                    })
+                    .eq("id", parentTx.id)
+            }
+        } catch (syncErr) {
+            console.error("Auto-sync of remaining amount failed:", syncErr)
+            // We don't throw here to ensure the main transaction is still saved
+        }
+    }
 
     const { error: upError } = await supabase
         .from("company_accounts")
@@ -309,8 +342,59 @@ export async function getSupplierLedger(companyAccountId: string, filters?: { da
             .order("transaction_date", { ascending: true })
             .order("created_at", { ascending: true })
 
-        if (fallbackErr) throw fallbackErr
+    if (fallbackErr) throw fallbackErr
         transactions = fallbackTx || []
+    }
+
+    // --- BULK RECONCILIATION: Fix data drift for Local Suppliers ---
+    try {
+        const localDebits = (transactions || []).filter(tx => 
+            tx.transaction_type === 'debit' && 
+            tx.purchase_order_id
+        )
+
+        // Only reconcile if this is likely a local supplier ledger
+        if (localDebits.length > 0) {
+            const poIds = localDebits.map(d => d.purchase_order_id)
+            
+            // Get all payments for these POs
+            const { data: allPayments } = await supabase
+                .from("company_account_transactions")
+                .select("purchase_order_id, amount")
+                .in("purchase_order_id", poIds)
+                .eq("transaction_type", "credit")
+
+            const paymentMap: Record<string, number> = {}
+            allPayments?.forEach(p => {
+                paymentMap[p.purchase_order_id] = (paymentMap[p.purchase_order_id] || 0) + Number(p.amount)
+            })
+
+            for (let i = 0; i < (transactions || []).length; i++) {
+                const tx = transactions![i]
+                if (tx.transaction_type === 'debit' && tx.purchase_order_id) {
+                    const totalPaid = paymentMap[tx.purchase_order_id] || 0
+                    const expectedRemaining = Math.max(0, Number(tx.amount) - totalPaid)
+                    
+                    if (Number(tx.remaining_amount) !== expectedRemaining) {
+                        // Silent update in DB
+                        supabase
+                            .from("company_account_transactions")
+                            .update({ 
+                                remaining_amount: expectedRemaining,
+                                is_due: expectedRemaining > 0
+                            })
+                            .eq("id", tx.id)
+                            .then(() => {})
+
+                        // Update in-memory for immediate UI
+                        transactions![i].remaining_amount = expectedRemaining
+                        transactions![i].is_due = expectedRemaining > 0
+                    }
+                }
+            }
+        }
+    } catch (err) {
+        console.error("Bulk reconciliation error:", err)
     }
 
     // 2. Calculate Running Balances
@@ -508,6 +592,43 @@ export async function getTransactionDetail(transactionId: string) {
         if (resultTx.all_related_deliveries) {
             for (let del of resultTx.all_related_deliveries) {
                 if (del.purchase_orders) del.purchase_orders = await mapPOItems(del.purchase_orders);
+            }
+        }
+
+        // Fetch related payment history if it's a PO transaction
+        if (resultTx.purchase_order_id || resultTx.transaction_source === 'purchase_order') {
+            const poId = resultTx.purchase_order_id || resultTx.deliveries?.purchase_order_id
+            if (poId) {
+                const { data: payments } = await supabase
+                    .from("company_account_transactions")
+                    .select("*")
+                    .eq("purchase_order_id", poId)
+                    .eq("transaction_type", "credit")
+                    .order("transaction_date", { ascending: true })
+                    .order("created_at", { ascending: true })
+                
+                resultTx.payment_history = payments || []
+
+                // SELF-HEALING: If the stored remaining_amount doesn't match the history, fix it now
+                const totalPaid = (payments || []).reduce((acc: number, p: any) => acc + Number(p.amount), 0)
+                const expectedRemaining = Math.max(0, Number(resultTx.amount) - totalPaid)
+                
+                if (Number(resultTx.remaining_amount) !== expectedRemaining) {
+                    // Update only if it's a Debit row (the parent)
+                    if (resultTx.transaction_type === 'debit') {
+                        await supabase
+                            .from("company_account_transactions")
+                            .update({ 
+                                remaining_amount: expectedRemaining,
+                                is_due: expectedRemaining > 0
+                            })
+                            .eq("id", resultTx.id)
+                        
+                        // Update the object in memory so the UI shows the fixed value immediately
+                        resultTx.remaining_amount = expectedRemaining
+                        resultTx.is_due = expectedRemaining > 0
+                    }
+                }
             }
         }
 

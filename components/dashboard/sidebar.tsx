@@ -29,6 +29,7 @@ import {
   Gauge,
   Download,
   CreditCard,
+  ShoppingBag,
 } from "lucide-react"
 import { exportAllData } from "@/lib/backup"
 
@@ -62,6 +63,7 @@ const navItems: NavItem[] = [
   },
   { title: "Suppliers", href: "/dashboard/suppliers", icon: Truck },
   { title: "Purchases", href: "/dashboard/purchases", icon: ShoppingCart },
+  { title: "Local Purchases", href: "/dashboard/local-purchases", icon: ShoppingBag },
   {
     title: "Inventory",
     href: "/dashboard/inventory",

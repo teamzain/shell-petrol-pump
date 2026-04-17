@@ -550,9 +550,22 @@ export async function recordBalanceTransaction(data: {
     insertPayload.balance_after = balanceBefore + netEffect
     // -----------------------------
 
-    const { error: txErr } = await supabase
+    let { error: txErr } = await supabase
         .from("balance_transactions")
         .insert(insertPayload)
+
+    // Fallback logic for missing columns (e.g. if purchase_order_id column wasn't added yet)
+    if (txErr && (txErr.code === '42703' || txErr.message.includes('column'))) {
+        console.warn("Retrying balance transaction without purchase_order_id due to schema mismatch.")
+        const fallbackPayload = { ...insertPayload }
+        delete (fallbackPayload as any).purchase_order_id
+        
+        const { error: retryErr } = await supabase
+            .from("balance_transactions")
+            .insert(fallbackPayload)
+        
+        txErr = retryErr
+    }
 
     if (txErr) throw txErr
 
