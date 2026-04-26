@@ -25,11 +25,15 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { toast } from "sonner"
 import { BrandLoader } from "@/components/ui/brand-loader"
-import { getPurchaseOrders } from "@/app/actions/purchase-orders"
+import { getPurchaseOrders, updatePOPricePropagation } from "@/app/actions/purchase-orders"
 import { getTanks } from "@/app/actions/tanks"
-import { recordDelivery } from "@/app/actions/deliveries"
+import { getProducts } from "@/app/actions/products"
+import { recordDelivery, getDeliveryPaymentStatus } from "@/app/actions/deliveries"
+import { addLedgerTransaction } from "@/app/actions/suppliers"
 import { getSystemActiveDate } from "@/app/actions/balance"
-import { Truck, Info, AlertTriangle, CheckCircle2, ChevronRight } from "lucide-react"
+import { Truck, Info, AlertTriangle, CheckCircle2, ChevronRight, PackageOpen, FileX } from "lucide-react"
+import { Label } from "@/components/ui/label"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
     Dialog,
@@ -56,7 +60,8 @@ const deliverySchema = z.object({
         tank_id: z.string(),
         tank_name: z.string().optional(),
         quantity: z.number().min(0)
-    })).optional()
+    })).optional(),
+    delivery_type: z.enum(['short', 'partial']).optional()
 })
 
 interface RecordDeliveryTabProps {
@@ -74,6 +79,12 @@ export function RecordDeliveryTab({ initialPO, onSuccess }: RecordDeliveryTabPro
     const [pendingSubmitValues, setPendingSubmitValues] = useState<z.infer<typeof deliverySchema> | null>(null)
     const [holdData, setHoldData] = useState<{ holdRecordId: string; poId: string; holdAmount: number; holdQuantity: number; productName: string } | null>(null)
     const [systemActiveDate, setSystemActiveDate] = useState("")
+    const [deliveryTypeChoice, setDeliveryTypeChoice] = useState<'short' | 'partial'>('partial')
+    const [products, setProducts] = useState<any[]>([])
+    
+    // Payment Validation State
+    const [showPaymentModal, setShowPaymentModal] = useState(false)
+    const [paymentDetails, setPaymentDetails] = useState<any>(null)
 
     const form = useForm<z.infer<typeof deliverySchema>>({
         resolver: zodResolver(deliverySchema),
@@ -87,20 +98,23 @@ export function RecordDeliveryTab({ initialPO, onSuccess }: RecordDeliveryTabPro
             vehicle_number: "",
             driver_name: "",
             notes: "",
+            delivery_type: "short"
         }
     })
 
     useEffect(() => {
         const fetchData = async () => {
-            const [poData, tankData, activeDate] = await Promise.all([
+            const [poData, tankData, activeDate, productsData] = await Promise.all([
                 getPurchaseOrders({ status: 'all' }),
                 getTanks(),
-                getSystemActiveDate()
+                getSystemActiveDate(),
+                getProducts()
             ])
             
             const availablePOs = poData.filter((po: any) => po.status === 'pending' || po.status === 'partially_delivered')
             setPOs(availablePOs)
             setTanks(tankData || [])
+            setProducts(productsData || [])
             setSystemActiveDate(activeDate)
             form.setValue("delivery_date", activeDate)
         }
@@ -185,12 +199,101 @@ export function RecordDeliveryTab({ initialPO, onSuccess }: RecordDeliveryTabPro
 
     // Calculate holds
     const isPartial = selectedPO && Number(watchQty) > 0 && Number(watchQty) < remainingQty;
+    const isLocalSupplier = selectedPO?.suppliers?.supplier_type === 'local';
     const holdQuantity = isPartial ? remainingQty - Number(watchQty) : 0;
     const holdAmount = holdQuantity * (Number(watchPrice) || 0);
 
     const availableItems = selectedPO && Array.isArray(selectedPO.items) ? selectedPO.items : []
 
+    // Price Sync Banner Logic
+    const liveProduct = products.find(p => p.id === productId);
+    const liveProductPrice = liveProduct ? Number(liveProduct.purchase_price) : 0;
+    const currentItemPrice = Number(watchPrice) || 0;
+    const isPriceIncreased = liveProductPrice > 0 && liveProductPrice > currentItemPrice;
+
+    const handleSyncPrice = async () => {
+        if (!selectedPO || !productId || liveProductPrice <= 0) return;
+        setLoading(true);
+        try {
+            await updatePOPricePropagation([selectedPO.id], productId, liveProductPrice);
+            toast.success("PO price synced with live product price!");
+            // Refetch POs
+            const data = await getPurchaseOrders({ status: 'all' });
+            const availablePOs = data.filter((po: any) => po.status === 'pending' || po.status === 'partially_delivered');
+            setPOs(availablePOs);
+            
+            const updatedPO = availablePOs.find(p => p.id === selectedPO.id);
+            if (updatedPO) {
+                setSelectedPO(updatedPO);
+                if (selectedItemIndex !== null && updatedPO.items && updatedPO.items[selectedItemIndex]) {
+                    form.setValue("rate_per_liter", updatedPO.items[selectedItemIndex].rate_per_liter);
+                } else if (updatedPO.items && updatedPO.items.length > 0) {
+                    const pendingIdx = updatedPO.items.findIndex((i: any) => i.status !== 'delivered' && i.status !== 'received');
+                    if (pendingIdx >= 0) {
+                        setSelectedItemIndex(pendingIdx);
+                        form.setValue("item_index", pendingIdx);
+                        form.setValue("rate_per_liter", updatedPO.items[pendingIdx].rate_per_liter);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error(error);
+            toast.error("Failed to sync price.");
+        } finally {
+            setLoading(false);
+        }
+    };
+
     async function onSubmit(values: z.infer<typeof deliverySchema>) {
+        if (!selectedPO) return;
+        
+        setLoading(true);
+        
+        // Validation Feature 3: Check Supplier Payment Balance
+        if (!isLocalSupplier) {
+            try {
+                const status = await getDeliveryPaymentStatus(selectedPO.id);
+                // If the user manually changed the price in the form, the current transaction amount might be higher.
+                // We must check if the new Total exceeds what's paid.
+                // Re-calculate the expected Total Amount based on the form values vs the database.
+                
+                let expectedAmountDue = status.amountDue;
+                
+                // If they changed the price locally on this form, adjust the due amount prediction
+                const originalItemRate = currentItem ? Number(currentItem.rate_per_liter) : 0;
+                const newRate = Number(values.rate_per_liter);
+                if (newRate > originalItemRate) {
+                    const rateDiff = newRate - originalItemRate;
+                    const amountDiff = rateDiff * remainingQty; // Assuming the rate diff applies to the remainder
+                    expectedAmountDue += amountDiff;
+                }
+                
+                if (expectedAmountDue > 0) {
+                    if (status.currentSupplierBalance < expectedAmountDue) {
+                        // Insufficient balance!
+                        setPaymentDetails({ ...status, expectedAmountDue, missingAmount: expectedAmountDue - status.currentSupplierBalance });
+                        setShowPaymentModal(true);
+                        setPendingSubmitValues(values);
+                        setLoading(false);
+                        return;
+                    } else {
+                        // We have sufficient balance to cover the difference!
+                        // The user will just proceed, and since we don't automatically deduct extra here,
+                        // Wait! The user said: "if there is enough money to pay in supplier account then also ask to pay"
+                        setPaymentDetails({ ...status, expectedAmountDue, hasEnough: true });
+                        setShowPaymentModal(true);
+                        setPendingSubmitValues(values);
+                        setLoading(false);
+                        return;
+                    }
+                }
+            } catch (err: any) {
+                console.error("Payment status check failed:", err);
+            }
+        }
+        
+        setLoading(false);
+
         if (isPartial) {
             setPendingSubmitValues(values)
             setShowWarning(true)
@@ -200,11 +303,28 @@ export function RecordDeliveryTab({ initialPO, onSuccess }: RecordDeliveryTabPro
         await processDelivery(values)
     }
 
-    async function processDelivery(values: z.infer<typeof deliverySchema>) {
+    async function processDelivery(values: z.infer<typeof deliverySchema>, extraDebitAmount?: number) {
         setLoading(true)
         setShowWarning(false)
         try {
-            const result = await recordDelivery(values)
+            // If there's an extra debit amount (price hike), record it now
+            if (extraDebitAmount && extraDebitAmount > 0 && paymentDetails?.companyAccountId) {
+                await addLedgerTransaction({
+                    company_account_id: paymentDetails.companyAccountId,
+                    transaction_type: 'debit',
+                    amount: extraDebitAmount,
+                    transaction_date: values.delivery_date,
+                    reference_number: selectedPO?.po_number,
+                    purchase_order_id: selectedPO?.id,
+                    note: `Price Increase Adjustment for Delivery: ${productLabel}`,
+                    skip_date_validation: true
+                })
+            }
+
+            const result = await recordDelivery({
+                ...values,
+                original_rate: currentItem?.original_rate || currentItem?.rate_per_liter
+            })
             toast.success("Delivery recorded and inventory updated!")
 
             if (result.holdRecord) {
@@ -299,6 +419,21 @@ export function RecordDeliveryTab({ initialPO, onSuccess }: RecordDeliveryTabPro
                                                 </FormItem>
                                             )}
                                         />
+                                    )}
+
+                                    {isPriceIncreased && (
+                                        <Alert className="bg-amber-50 border-amber-200">
+                                            <AlertTriangle className="h-4 w-4 text-amber-600" />
+                                            <AlertTitle className="text-amber-800 text-sm font-bold">Price Increased!</AlertTitle>
+                                            <AlertDescription className="text-amber-700 text-xs mt-1 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                                <span>
+                                                    The live purchase price for this product is now <strong>Rs. {liveProductPrice}</strong>, but this order is locked at <strong>Rs. {currentItemPrice}</strong>.
+                                                </span>
+                                                <Button size="sm" type="button" onClick={handleSyncPrice} className="bg-amber-600 hover:bg-amber-700 text-white shadow-sm shrink-0">
+                                                    Sync Price Now
+                                                </Button>
+                                            </AlertDescription>
+                                        </Alert>
                                     )}
 
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -523,7 +658,7 @@ export function RecordDeliveryTab({ initialPO, onSuccess }: RecordDeliveryTabPro
                                 Partial Item Delivery Detected
                             </DialogTitle>
                             <DialogDescription className="text-amber-700/80 text-sm">
-                                You are recording less than the ordered item quantity. Only ONE delivery is allowed per order item.
+                                You are recording less than the ordered item quantity. Please choose how to handle the remaining {holdQuantity} {shortUnitLabel}.
                             </DialogDescription>
                         </DialogHeader>
 
@@ -539,51 +674,142 @@ export function RecordDeliveryTab({ initialPO, onSuccess }: RecordDeliveryTabPro
                                         <p className="font-mono text-blue-600 font-bold">{watchQty} {shortUnitLabel}</p>
                                     </div>
                                     <div className="col-span-2 pt-3 border-t">
-                                        <p className="text-[10px] font-bold uppercase text-slate-500">Missing / Undelivered</p>
+                                        <p className="text-[10px] font-bold uppercase text-slate-500">Remaining / Undelivered</p>
                                         <p className="font-mono text-lg text-amber-600 font-black">{holdQuantity} {shortUnitLabel}</p>
                                     </div>
                                 </div>
                             </div>
 
-                            <Alert className="bg-white border-amber-200">
-                                <CheckCircle2 className="h-4 w-4 text-amber-600" />
-                                <AlertTitle className="text-amber-800 text-xs uppercase font-bold tracking-wider">What happens next?</AlertTitle>
-                                <AlertDescription className="text-amber-700/90 text-xs mt-2 space-y-2">
-                                    <p className="flex items-start gap-2">
-                                        <ChevronRight className="h-4 w-4 shrink-0" />
-                                        This ITEM will be marked as <strong>DELIVERED</strong>. No more deliveries can be made.
+                            {isLocalSupplier ? (
+                                <div className="bg-slate-50 border border-slate-200 p-4 rounded-lg mt-2">
+                                    <p className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                                        <Info className="h-4 w-4 text-blue-500" /> Local Supplier Delivery
                                     </p>
-                                    <p className="flex items-start gap-2">
-                                        <ChevronRight className="h-4 w-4 shrink-0" />
-                                        A hold record of <strong>Rs. {holdAmount.toLocaleString()}</strong> will be created and tracked.
-                                    </p>
-                                    <p className="flex items-start gap-2">
-                                        <ChevronRight className="h-4 w-4 shrink-0" />
-                                        You will be reminded to collect this missing inventory or get a refund from the supplier.
-                                    </p>
-                                </AlertDescription>
-                            </Alert>
+                                    <p className="text-xs text-slate-500 mt-1">Partial deliveries (keeping items pending) are not supported for local purchases. This item will be closed and a hold record will be generated for the missing inventory.</p>
+                                </div>
+                            ) : (
+                                <RadioGroup value={deliveryTypeChoice} onValueChange={(val: any) => setDeliveryTypeChoice(val)} className="gap-3">
+                                    <div className={`flex items-start space-x-3 border p-3 rounded-lg cursor-pointer transition-colors ${deliveryTypeChoice === 'partial' ? 'bg-amber-100/50 border-amber-400' : 'bg-white border-slate-200 hover:border-amber-300'}`} onClick={() => setDeliveryTypeChoice('partial')}>
+                                        <RadioGroupItem value="partial" id="partial" className="mt-1" />
+                                        <div className="grid gap-1">
+                                            <Label htmlFor="partial" className="font-bold text-amber-900 cursor-pointer flex items-center gap-1.5"><PackageOpen className="h-4 w-4" /> Partial Delivery (Keep Pending)</Label>
+                                            <p className="text-[11px] text-amber-700/90 leading-tight">Item remains open. You can receive the remaining {holdQuantity} {shortUnitLabel} in future deliveries. No hold record is created.</p>
+                                        </div>
+                                    </div>
+                                    <div className={`flex items-start space-x-3 border p-3 rounded-lg cursor-pointer transition-colors ${deliveryTypeChoice === 'short' ? 'bg-amber-100/50 border-amber-400' : 'bg-white border-slate-200 hover:border-amber-300'}`} onClick={() => setDeliveryTypeChoice('short')}>
+                                        <RadioGroupItem value="short" id="short" className="mt-1" />
+                                        <div className="grid gap-1">
+                                            <Label htmlFor="short" className="font-bold text-amber-900 cursor-pointer flex items-center gap-1.5"><FileX className="h-4 w-4" /> Short Delivery (Close & Hold)</Label>
+                                            <p className="text-[11px] text-amber-700/90 leading-tight">Item will be closed immediately. A hold record of Rs. {holdAmount.toLocaleString()} will be generated to track missing inventory.</p>
+                                        </div>
+                                    </div>
+                                </RadioGroup>
+                            )}
                         </div>
 
                         <DialogFooter className="gap-2 sm:gap-0">
                             <Button variant="outline" onClick={() => setShowWarning(false)} className="w-full sm:w-auto border-amber-200 text-amber-800 hover:bg-amber-100">Cancel</Button>
-                            <Button onClick={() => pendingSubmitValues && processDelivery(pendingSubmitValues)} disabled={loading} className="w-full sm:w-auto bg-amber-600 hover:bg-amber-700 text-white">
+                            <Button onClick={() => pendingSubmitValues && processDelivery({ ...pendingSubmitValues, delivery_type: isLocalSupplier ? 'short' : deliveryTypeChoice }, paymentDetails?.hasEnough ? paymentDetails.expectedAmountDue : 0)} disabled={loading} className="w-full sm:w-auto bg-amber-600 hover:bg-amber-700 text-white">
                                 {loading ? <BrandLoader size="sm" /> : "Confirm Delivery"}
                             </Button>
                         </DialogFooter>
                     </DialogContent>
                 </Dialog>
-            </div >
-            <HoldAmountPopup
-                open={!!holdData}
-                onOpenChange={(open) => !open && setHoldData(null)}
-                holdRecordId={holdData?.holdRecordId || null}
-                poId={holdData?.poId || null}
-                holdAmount={holdData?.holdAmount || 0}
-                holdQuantity={holdData?.holdQuantity || 0}
-                productName={holdData?.productName || ""}
-                onSuccess={() => { setHoldData(null); onSuccess() }}
-            />
+            </div>
+            
+            {holdData && (
+                <HoldAmountPopup
+                    open={!!holdData}
+                    onOpenChange={(open) => !open && setHoldData(null)}
+                    holdRecordId={holdData.holdRecordId}
+                    poId={holdData.poId}
+                    holdAmount={holdData.holdAmount}
+                    holdQuantity={holdData.holdQuantity}
+                    productName={holdData.productName}
+                    onSuccess={() => { setHoldData(null); onSuccess() }}
+                />
+            )}
+
+            {/* Payment Validation Modal */}
+            <Dialog open={showPaymentModal} onOpenChange={setShowPaymentModal}>
+                <DialogContent className="sm:max-w-[450px]">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2 text-destructive">
+                            <AlertTriangle className="h-5 w-5" />
+                            {paymentDetails?.hasEnough ? "Price Difference Due" : "Insufficient Supplier Balance"}
+                        </DialogTitle>
+                        <DialogDescription>
+                            {paymentDetails?.hasEnough 
+                                ? "Because the price increased, there is an outstanding amount due for this delivery."
+                                : "The supplier's account does not have enough funds to cover the price difference for this delivery."}
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    {paymentDetails && (
+                        <div className="space-y-4 py-4">
+                            <div className="bg-slate-50 p-4 rounded-lg border space-y-2">
+                                <div className="flex justify-between text-sm">
+                                    <span className="text-slate-500">Additional Amount Due:</span>
+                                    <span className="font-bold text-slate-800">Rs. {paymentDetails.expectedAmountDue.toLocaleString()}</span>
+                                </div>
+                                <div className="flex justify-between text-sm">
+                                    <span className="text-slate-500">Current Supplier Balance:</span>
+                                    <span className={`font-bold ${paymentDetails.currentSupplierBalance < paymentDetails.expectedAmountDue ? 'text-destructive' : 'text-emerald-600'}`}>
+                                        Rs. {paymentDetails.currentSupplierBalance.toLocaleString()}
+                                    </span>
+                                </div>
+                                {!paymentDetails.hasEnough && (
+                                    <div className="flex justify-between text-sm border-t pt-2 mt-2">
+                                        <span className="text-slate-500 font-medium">Missing Amount:</span>
+                                        <span className="font-bold text-destructive">Rs. {paymentDetails.missingAmount.toLocaleString()}</span>
+                                    </div>
+                                )}
+                            </div>
+                            
+                            {!paymentDetails.hasEnough && (
+                                <Alert variant="destructive">
+                                    <AlertDescription>
+                                        Please add funds to the supplier's account before processing this delivery.
+                                    </AlertDescription>
+                                </Alert>
+                            )}
+                        </div>
+                    )}
+
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => {
+                            setShowPaymentModal(false);
+                            setPendingSubmitValues(null);
+                        }}>
+                            Cancel
+                        </Button>
+                        
+                        {paymentDetails?.hasEnough ? (
+                            <Button onClick={async () => {
+                                const values = pendingSubmitValues;
+                                const amount = paymentDetails.expectedAmountDue;
+                                setShowPaymentModal(false);
+                                if (values) {
+                                    if (isPartial) {
+                                        setShowWarning(true);
+                                    } else {
+                                        await processDelivery(values, amount);
+                                    }
+                                }
+                            }}>
+                                Yes, Deduct & Deliver
+                            </Button>
+                        ) : (
+                            <Button onClick={() => {
+                                window.open(`/dashboard/suppliers/${paymentDetails?.supplierId}/transactions`, '_blank');
+                                setShowPaymentModal(false);
+                            }} className="bg-destructive hover:bg-destructive/90">
+                                Pay Now
+                            </Button>
+                        )}
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </>
     )
 }

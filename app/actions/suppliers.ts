@@ -3,7 +3,7 @@
 import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
 
-export async function getSuppliers() {
+export async function getSuppliers(includeInactive = false) {
     const supabase = await createClient()
     let query = supabase
         .from("suppliers")
@@ -16,7 +16,10 @@ export async function getSuppliers() {
         status
       )
     `)
-        .eq("status", "active")
+    
+    if (!includeInactive) {
+        query = query.eq("status", "active")
+    }
 
     const { data, error } = await query.order("name")
 
@@ -678,19 +681,16 @@ export async function getTransactionDetail(transactionId: string) {
 export async function deleteSupplier(supplierId: string) {
     const supabase = await createClient()
 
-    // Check balance before allowing deletion
-    const { data: qAcc } = await supabase
-        .from("company_accounts")
-        .select("current_balance")
-        .eq("supplier_id", supplierId)
-        .single()
+    // Delete balance transactions referencing this supplier (avoids foreign key constraints as it often doesn't cascade)
+    await supabase.from("balance_transactions").delete().eq("supplier_id", supplierId)
 
-    if (qAcc && Number(qAcc.current_balance) !== 0) {
-        throw new Error("Cannot delete supplier with an outstanding account balance. Please settle the balance first.")
-    }
-
+    // Suppliers table has ON DELETE CASCADE for company_accounts, purchase_orders, and deliveries.
+    // Deleting the supplier will completely wipe all of its records from the system.
     const { error: delErr } = await supabase.from("suppliers").delete().eq("id", supplierId)
-    if (delErr) throw delErr
+    
+    if (delErr) {
+        throw new Error("Failed to delete supplier. Detail: " + delErr.message)
+    }
 
     revalidatePath("/dashboard/suppliers")
     return { success: true }

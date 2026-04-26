@@ -36,12 +36,14 @@ import {
   UserPlus,
   Phone,
   Building2,
-  Filter
+  Filter,
+  Trash2
 } from "lucide-react"
 import { BrandLoader } from "@/components/ui/brand-loader"
-import { getSuppliers, createCompanyAccount } from "@/app/actions/suppliers"
+import { getSuppliers, createCompanyAccount, deleteSupplier } from "@/app/actions/suppliers"
 import { SupplierWizard } from "@/components/suppliers/supplier-wizard"
 import { SupplierDialog } from "@/components/suppliers/supplier-dialog"
+import { DeleteConfirmDialog } from "@/components/ui/delete-confirm-dialog"
 import { toast } from "sonner"
 
 export default function SuppliersPage() {
@@ -51,6 +53,8 @@ export default function SuppliersPage() {
   const [wizardOpen, setWizardOpen] = useState(false)
   const [editDialogOpen, setEditDialogOpen] = useState(false)
   const [selectedSupplier, setSelectedSupplier] = useState<any>(null)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [supplierToDelete, setSupplierToDelete] = useState<any>(null)
 
   // New Filter States
   const [productTypeFilter, setProductTypeFilter] = useState<string>("all")
@@ -60,7 +64,7 @@ export default function SuppliersPage() {
   const fetchSuppliers = async () => {
     setLoading(true)
     try {
-      const data = await getSuppliers()
+      const data = await getSuppliers(true)
       setSuppliers(data || [])
     } catch (error) {
       console.error("Error fetching suppliers:", error)
@@ -82,6 +86,19 @@ export default function SuppliersPage() {
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to create account")
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!supplierToDelete) return
+    try {
+      await deleteSupplier(supplierToDelete.id)
+      toast.success("Supplier and all related records deleted successfully")
+      setDeleteDialogOpen(false)
+      setSupplierToDelete(null)
+      fetchSuppliers()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to delete supplier")
     }
   }
 
@@ -345,6 +362,25 @@ export default function SuppliersPage() {
                                 <p>Edit Supplier</p>
                               </TooltipContent>
                             </Tooltip>
+
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                  onClick={() => {
+                                    setSupplierToDelete(supplier)
+                                    setDeleteDialogOpen(true)
+                                  }}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>Delete Supplier</p>
+                              </TooltipContent>
+                            </Tooltip>
                           </div>
                         </TableCell>
                       </TableRow>
@@ -368,6 +404,14 @@ export default function SuppliersPage() {
         onOpenChange={setEditDialogOpen}
         supplier={selectedSupplier}
         onSuccess={fetchSuppliers}
+      />
+
+      <DeleteConfirmDialog
+        open={deleteDialogOpen}
+        onOpenChange={setDeleteDialogOpen}
+        onConfirm={handleDelete}
+        title="Delete Supplier Completely?"
+        description="This will permanently remove the supplier and ALL related records including company accounts, purchase orders, deliveries, and transactions. This action cannot be undone."
       />
     </div>
   )

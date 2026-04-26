@@ -105,6 +105,7 @@ export function PurchaseDetailsDialog({
     ordered_quantity: p.quantity,
     unit_type: p.products?.unit || order.unit_type,
     rate_per_liter: p.purchase_price_per_unit || order.rate_per_liter,
+    original_rate: (p as any).original_rate,
     total_amount: p.total_amount,
     status: order.status
   })) || [];
@@ -302,7 +303,16 @@ export function PurchaseDetailsDialog({
                         <p className="text-xs text-muted-foreground capitalize">{item.product_category?.replace("_", " ")}</p>
                       </td>
                       <td className="p-2 text-right">{item.ordered_quantity?.toLocaleString()} {item.unit_type}</td>
-                      <td className="p-2 text-right">{formatCurrency(item.rate_per_liter)}</td>
+                      <td className="p-2 text-right">
+                        {(item as any).original_rate ? (
+                          <div className="flex flex-col items-end leading-tight">
+                            <span className="line-through text-slate-400 text-[10px]">Rs. {Number((item as any).original_rate).toLocaleString()}</span>
+                            <span className="text-emerald-600 font-bold">{formatCurrency(item.rate_per_liter)}</span>
+                          </div>
+                        ) : (
+                          formatCurrency(item.rate_per_liter)
+                        )}
+                      </td>
                       <td className="p-2 text-right font-medium">{formatCurrency(item.total_amount)}</td>
                       <td className="p-2 text-right">
                         {order.status === 'pending' && item.status !== 'cancelled' && item.status !== 'delivered' && (

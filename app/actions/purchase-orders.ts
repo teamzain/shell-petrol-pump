@@ -494,6 +494,9 @@ export async function getPurchaseOrderDetail(poId: string) {
                 po_item_index,
                 delivered_quantity,
                 delivered_amount,
+                rate_per_liter,
+                original_rate,
+                is_price_synced,
                 tank_distribution
             ),
             po_hold_records (
@@ -715,4 +718,112 @@ export async function cancelPOHold(holdId: string, reason: string) {
     return { success: true }
 }
 
+export async function getAffectedPurchaseOrders(productId: string) {
+    const supabase = await createClient()
+    const { data: pos, error } = await supabase
+        .from("purchase_orders")
+        .select(`
+            id,
+            po_number,
+            status,
+            items,
+            suppliers!inner (
+                name,
+                supplier_type
+            )
+        `)
+        .in("status", ["pending", "partially_delivered"])
+        .eq("suppliers.supplier_type", "company")
+    
+    if (error) throw error
 
+    // Filter POs that contain the productId and have remaining quantity
+    const affectedPOs = pos?.filter((po: any) => {
+        if (!po.items || !Array.isArray(po.items)) return false;
+        return po.items.some((item: any) => item.product_id === productId && item.quantity_remaining > 0);
+    });
+
+    return affectedPOs || [];
+}
+
+export async function updatePOPricePropagation(poIds: string[], productId: string, newPrice: number) {
+    const supabase = await createClient()
+    
+    for (const poId of poIds) {
+        const { data: po } = await supabase
+            .from("purchase_orders")
+            .select("items, estimated_total")
+            .eq("id", poId)
+            .single()
+            
+        if (!po || !po.items) continue;
+        
+        let newEstimatedTotal = 0;
+        let itemsChanged = false;
+        const newItems: any[] = [];
+        
+        po.items.forEach((item: any) => {
+            if (item.product_id === productId && item.quantity_remaining > 0) {
+                itemsChanged = true;
+                
+                const deliveredQty = Number(item.ordered_quantity) - Number(item.quantity_remaining);
+                
+                if (deliveredQty > 0) {
+                    // It's a partially delivered item. Split it!
+                    const oldRate = Number(item.rate_per_liter);
+                    
+                    // 1. Cap the old item to what was delivered
+                    newItems.push({
+                        ...item,
+                        ordered_quantity: deliveredQty,
+                        quantity_remaining: 0,
+                        total_amount: deliveredQty * oldRate,
+                        status: 'delivered'
+                    });
+                    newEstimatedTotal += deliveredQty * oldRate;
+                    
+                    // 2. Add a new item for the remainder with the new price
+                    const newRemQty = Number(item.quantity_remaining);
+                    newItems.push({
+                        ...item,
+                        ordered_quantity: newRemQty,
+                        quantity_remaining: newRemQty,
+                        rate_per_liter: newPrice,
+                        original_rate: oldRate,
+                        total_amount: newRemQty * newPrice,
+                        status: 'pending',
+                        delivered_quantity: 0
+                    });
+                    newEstimatedTotal += newRemQty * newPrice;
+                } else {
+                    // Not delivered at all, just update it in place
+                    const qty = Number(item.ordered_quantity);
+                    const oldRate = Number(item.rate_per_liter);
+                    newItems.push({
+                        ...item,
+                        rate_per_liter: newPrice,
+                        original_rate: item.original_rate || oldRate,
+                        total_amount: qty * newPrice
+                    });
+                    newEstimatedTotal += qty * newPrice;
+                }
+            } else {
+                newItems.push(item);
+                newEstimatedTotal += Number(item.total_amount || (item.ordered_quantity * item.rate_per_liter));
+            }
+        });
+        
+        if (itemsChanged) {
+            await supabase
+                .from("purchase_orders")
+                .update({ 
+                    items: newItems,
+                    estimated_total: newEstimatedTotal
+                })
+                .eq("id", poId);
+        }
+    }
+    
+    revalidatePath("/dashboard/purchases")
+    return { success: true }
+}

@@ -24,6 +24,9 @@ import {
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command"
+import { cn } from "@/lib/utils"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { toast } from "sonner"
 import { BrandLoader } from "@/components/ui/brand-loader"
@@ -32,7 +35,7 @@ import { getSuppliers } from "@/app/actions/suppliers"
 import { getProducts } from "@/app/actions/products"
 import { createPurchaseOrder, getNextPONumber } from "@/app/actions/purchase-orders"
 import { getSystemActiveDate, getCashAndBankBalances } from "@/app/actions/balance"
-import { AlertCircle, Plus, Trash2, ShoppingCart, RefreshCcw, Wallet, CreditCard, Clock, Truck } from "lucide-react"
+import { AlertCircle, Plus, Trash2, ShoppingCart, RefreshCcw, Check, ChevronsUpDown } from "lucide-react"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -300,26 +303,58 @@ export function CreatePOTab({ onSuccess }: { onSuccess: () => void }) {
                                                         render={({ field }) => (
                                                             <FormItem>
                                                                 <FormLabel className="text-xs">Product</FormLabel>
-                                                                <Select
-                                                                    onValueChange={(val) => {
-                                                                        field.onChange(val)
-                                                                        onProductChange(index, val)
-                                                                    }}
-                                                                    value={field.value || ""}
-                                                                >
-                                                                    <FormControl>
-                                                                        <SelectTrigger>
-                                                                            <SelectValue placeholder="Select product" />
-                                                                        </SelectTrigger>
-                                                                    </FormControl>
-                                                                    <SelectContent>
-                                                                        {inventoryProducts.map(p => (
-                                                                            <SelectItem key={p.id} value={p.id}>
-                                                                                {p.name} <span className="text-muted-foreground ml-1">({p.unit})</span>
-                                                                            </SelectItem>
-                                                                        ))}
-                                                                    </SelectContent>
-                                                                </Select>
+                                                                <Popover>
+                                                                    <PopoverTrigger asChild>
+                                                                        <FormControl>
+                                                                            <Button
+                                                                                variant="outline"
+                                                                                role="combobox"
+                                                                                className={cn(
+                                                                                    "w-full justify-between",
+                                                                                    !field.value && "text-muted-foreground"
+                                                                                )}
+                                                                            >
+                                                                                {field.value
+                                                                                    ? (() => {
+                                                                                        const p = inventoryProducts.find((ip) => ip.id === field.value);
+                                                                                        return p ? `${p.name} (${p.unit})` : "Select product";
+                                                                                    })()
+                                                                                    : "Select product"}
+                                                                                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                                                                            </Button>
+                                                                        </FormControl>
+                                                                    </PopoverTrigger>
+                                                                    <PopoverContent className="w-[300px] p-0" align="start">
+                                                                        <Command>
+                                                                            <CommandInput placeholder="Search product..." className="h-9" />
+                                                                            <CommandList>
+                                                                                <CommandEmpty>No product found.</CommandEmpty>
+                                                                                <CommandGroup>
+                                                                                    {inventoryProducts.map((p) => (
+                                                                                        <CommandItem
+                                                                                            value={p.name}
+                                                                                            key={p.id}
+                                                                                            onSelect={() => {
+                                                                                                field.onChange(p.id)
+                                                                                                onProductChange(index, p.id)
+                                                                                            }}
+                                                                                        >
+                                                                                            {p.name} <span className="text-muted-foreground ml-1">({p.unit})</span>
+                                                                                            <Check
+                                                                                                className={cn(
+                                                                                                    "ml-auto h-4 w-4",
+                                                                                                    p.id === field.value
+                                                                                                        ? "opacity-100"
+                                                                                                        : "opacity-0"
+                                                                                                )}
+                                                                                            />
+                                                                                        </CommandItem>
+                                                                                    ))}
+                                                                                </CommandGroup>
+                                                                            </CommandList>
+                                                                        </Command>
+                                                                    </PopoverContent>
+                                                                </Popover>
                                                                 <FormMessage />
                                                             </FormItem>
                                                         )}

@@ -98,14 +98,12 @@ export function DeliveryHistoryTab({
         
         acc[key].hold_value += Number(del.hold_amount || 0)
 
-        // Calculate short/extra for this specific delivery item
+        // Calculate extra units
         const ordered = Number(del.quantity_ordered || 0)
         const received = Number(del.delivered_quantity || 0)
         const unit = del.unit_type || poData?.unit_type || 'unit'
 
-        if (received < ordered) {
-            acc[key].short_units[unit] = (acc[key].short_units[unit] || 0) + (ordered - received)
-        } else if (received > ordered) {
+        if (received > ordered) {
             acc[key].extra_units[unit] = (acc[key].extra_units[unit] || 0) + (received - ordered)
         }
 
@@ -118,12 +116,15 @@ export function DeliveryHistoryTab({
             })
         }
 
-        // Sum release values from hold records (if any)
+        // Sum release values and short units from hold records
         if (del.po_hold_records) {
             const hRecords = Array.isArray(del.po_hold_records) ? del.po_hold_records : [del.po_hold_records];
             hRecords.forEach((hr: any) => {
                 if (hr.status === 'released') {
                     acc[key].release_value += Number(hr.hold_amount || 0)
+                }
+                if (hr.hold_quantity > 0) {
+                    acc[key].short_units[unit] = (acc[key].short_units[unit] || 0) + Number(hr.hold_quantity)
                 }
             })
         }

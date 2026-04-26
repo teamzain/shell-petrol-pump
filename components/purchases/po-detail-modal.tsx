@@ -131,15 +131,27 @@ export function PODetailModal({
             // Scope items to what was actually in these deliveries
             if (hasItems) {
                 displayItems = po.items.map((item: any, idx: number) => {
-                    // Find if any of our focused deliveries recorded this item
-                    const recordedInThisTrans = displayDeliveries.find((d: any) => d.po_item_index === idx);
-                    if (recordedInThisTrans) {
+                    // Find ALL deliveries in this transaction group that recorded this item
+                    const recordedDeliveries = displayDeliveries.filter((d: any) => d.po_item_index === idx);
+                    if (recordedDeliveries.length > 0) {
+                        const totalQty = recordedDeliveries.reduce((sum: number, d: any) => sum + Number(d.delivered_quantity || 0), 0);
+                        const totalAmt = recordedDeliveries.reduce((sum: number, d: any) => sum + Number(d.delivered_amount || (Math.min(Number(d.delivered_quantity), Number(item.ordered_quantity)) * Number(item.rate_per_liter))), 0);
+                        
+                        // Merge tank distributions
+                        const allTanks: any[] = [];
+                        recordedDeliveries.forEach((d: any) => {
+                            if (d.tank_distribution && Array.isArray(d.tank_distribution)) {
+                                allTanks.push(...d.tank_distribution);
+                            }
+                        });
+
+                        // Aggregate tank distributions by name if needed, but the UI already handles listing multiple tags
                         return {
                             ...item,
                             original_index: idx,
-                            delivered_quantity: recordedInThisTrans.delivered_quantity,
-                            total_amount: Number(recordedInThisTrans.delivered_amount || (Math.min(Number(recordedInThisTrans.delivered_quantity), Number(item.ordered_quantity)) * Number(item.rate_per_liter))),
-                            tank_distribution: recordedInThisTrans.tank_distribution // Copy over the array for visual rendering
+                            delivered_quantity: totalQty,
+                            total_amount: totalAmt,
+                            tank_distribution: allTanks.length > 0 ? allTanks : null
                         };
                     }
                     return {
@@ -370,6 +382,19 @@ export function PODetailModal({
                                             <div>
                                                 <p className="text-[10px] text-muted-foreground uppercase font-bold">Vehicle</p>
                                                 <p>{del.vehicle_number || "-"}</p>
+                                            </div>
+                                            <div>
+                                                <p className="text-[10px] text-muted-foreground uppercase font-bold">Rate</p>
+                                                <p className="font-mono font-bold">
+                                                    {del.is_price_synced ? (
+                                                        <span className="flex flex-col leading-tight">
+                                                            <span className="line-through text-slate-400 text-[10px]">Rs. {Number(del.original_rate).toLocaleString()}</span>
+                                                            <span className="text-emerald-600">Rs. {Number(del.rate_per_liter).toLocaleString()}</span>
+                                                        </span>
+                                                    ) : (
+                                                        `Rs. ${Number(del.rate_per_liter).toLocaleString()}`
+                                                    )}
+                                                </p>
                                             </div>
                                             <div>
                                                 <p className="text-[10px] text-muted-foreground uppercase font-bold">Driver</p>

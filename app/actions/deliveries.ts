@@ -14,6 +14,8 @@ export async function recordDelivery(formData: {
     driver_name?: string;
     notes?: string;
     tank_distribution?: { tank_id: string; tank_name?: string; quantity: number }[];
+    delivery_type?: 'short' | 'partial';
+    original_rate?: number;
 }) {
     const supabase = await createClient()
 
@@ -40,7 +42,9 @@ export async function recordDelivery(formData: {
         p_driver_name: formData.driver_name,
         p_notes: formData.notes,
         p_user_id: user.id,
-        p_tank_distribution: formData.tank_distribution || null
+        p_tank_distribution: formData.tank_distribution || null,
+        p_delivery_type: formData.delivery_type || 'short',
+        p_original_rate: formData.original_rate || null
     })
 
     if (error) throw error
@@ -89,4 +93,44 @@ export async function getDeliveries(filters?: {
     const { data, error } = await query
     if (error) throw error
     return data
+}
+
+export async function getDeliveryPaymentStatus(poId: string) {
+    const supabase = await createClient()
+
+    // 1. Fetch PO to get current estimated_total and supplier_id
+    const { data: po, error: poErr } = await supabase
+        .from("purchase_orders")
+        .select("id, estimated_total, supplier_id")
+        .eq("id", poId)
+        .single()
+        
+    if (poErr || !po) throw new Error("PO not found")
+    
+    // 2. Fetch Supplier Ledger Debits that belong to this PO
+    const { data: debits } = await supabase
+        .from("company_account_transactions")
+        .select("amount")
+        .eq("purchase_order_id", poId)
+        .eq("transaction_type", "debit")
+        
+    const totalDebited = debits?.reduce((sum, tx) => sum + Number(tx.amount), 0) || 0;
+    
+    const amountDue = Math.max(0, Number(po.estimated_total) - totalDebited);
+    
+    // 3. Get current supplier balance
+    const { data: account } = await supabase
+        .from("company_accounts")
+        .select("id, current_balance")
+        .eq("supplier_id", po.supplier_id)
+        .single()
+        
+    const currentSupplierBalance = account ? Number(account.current_balance) : 0;
+    
+    return {
+        amountDue,
+        currentSupplierBalance,
+        companyAccountId: account?.id,
+        supplierId: po.supplier_id
+    }
 }

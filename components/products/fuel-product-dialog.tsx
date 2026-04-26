@@ -18,6 +18,7 @@ import { Fuel, AlertCircle } from "lucide-react"
 import { BrandLoader } from "../ui/brand-loader"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { upsertProduct } from "@/app/actions/products"
+import { PricePropagationModal } from "./price-propagation-modal"
 
 interface FuelProductDialogProps {
   open: boolean
@@ -42,6 +43,10 @@ export function FuelProductDialog({ open, onOpenChange, product, onSuccess }: Fu
     purchase_price: "",
     selling_price: "",
   })
+  
+  const [showPropagationModal, setShowPropagationModal] = useState(false)
+  const [updatedProductId, setUpdatedProductId] = useState<string | null>(null)
+  const [newPurchasePrice, setNewPurchasePrice] = useState<number | null>(null)
 
 
   const isEditing = !!product
@@ -82,10 +87,16 @@ export function FuelProductDialog({ open, onOpenChange, product, onSuccess }: Fu
         category: "Fuel",
       }
 
-      await upsertProduct(payload, product?.id)
+      const { id } = await upsertProduct(payload, product?.id)
 
-      onSuccess()
-      onOpenChange(false)
+      if (product && parseFloat(product.purchase_price.toString()) !== purchasePrice) {
+        setUpdatedProductId(id || null)
+        setNewPurchasePrice(purchasePrice)
+        setShowPropagationModal(true)
+      } else {
+        onSuccess()
+        onOpenChange(false)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred")
     } finally {
@@ -188,6 +199,17 @@ export function FuelProductDialog({ open, onOpenChange, product, onSuccess }: Fu
           </DialogFooter>
         </form>
       </DialogContent>
+      
+      <PricePropagationModal 
+        open={showPropagationModal}
+        onOpenChange={setShowPropagationModal}
+        productId={updatedProductId}
+        newPrice={newPurchasePrice}
+        onComplete={() => {
+            onSuccess()
+            onOpenChange(false)
+        }}
+      />
     </Dialog>
   )
 }
